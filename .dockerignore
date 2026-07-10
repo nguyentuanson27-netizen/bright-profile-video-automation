@@ -1,0 +1,12 @@
+node_modules
+data
+.git
+.env
+.env.*
+!.env.example
+*.log
+*.mp4
+*-contact.jpg
+qa
+dist
+coverage

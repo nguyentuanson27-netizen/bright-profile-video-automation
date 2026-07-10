@@ -1,0 +1,35 @@
+{
+  "duration": 30,
+  "chunks": [
+    {
+      "id": "hero",
+      "start": 0,
+      "duration": 6,
+      "text": "Emiru là một trong những gương mặt nổi bật của thế giới livestream."
+    },
+    {
+      "id": "claim",
+      "start": 6,
+      "duration": 5,
+      "text": "Nhưng vì sao cô ấy có thể nổi tiếng nhanh đến vậy?"
+    },
+    {
+      "id": "vertical",
+      "start": 11,
+      "duration": 6,
+      "text": "Chỉ một đoạn video đúng thời điểm đã đưa Emiru xuất hiện trên hàng triệu dòng thời gian."
+    },
+    {
+      "id": "social",
+      "start": 17,
+      "duration": 6,
+      "text": "Phản ứng của cộng đồng lập tức bùng nổ, kéo theo hàng chục nghìn lượt chia sẻ và bình luận."
+    },
+    {
+      "id": "stats",
+      "start": 23,
+      "duration": 7,
+      "text": "Với hơn hai triệu người theo dõi và hàng chục triệu lượt xem, sức ảnh hưởng của cô không còn là hiện tượng nhất thời."
+    }
+  ]
+}

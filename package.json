@@ -1,0 +1,19 @@
+{
+  "name": "bright-creator-profile",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "render:smoke": "node scripts/render-smoke.mjs",
+    "render:project": "node scripts/render-project.mjs"
+  },
+  "dependencies": {
+    "@google-cloud/text-to-speech": "6.4.1",
+    "@remotion/bundler": "4.0.484",
+    "@remotion/renderer": "4.0.484",
+    "@remotion/transitions": "4.0.484",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "remotion": "4.0.484"
+  }
+}

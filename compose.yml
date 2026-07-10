@@ -1,0 +1,25 @@
+services:
+  bright-profile-api:
+    image: bright-profile:0.3.1
+    container_name: bright-profile-api
+    restart: unless-stopped
+    env_file:
+      - /srv/bright-profile/.env
+    environment:
+      PORT: 4180
+      DATA_DIR: /app/data
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/google-tts.json
+    volumes:
+      - /srv/bright-profile:/app/data
+      - /root/video_api/credentials/google-tts.json:/run/secrets/google-tts.json:ro
+    expose:
+      - "4180"
+    cpus: 3.0
+    mem_limit: 6g
+    networks:
+      - n8n-network
+
+networks:
+  n8n-network:
+    external: true
+    name: n8n-docker_n8n-network
