@@ -11,6 +11,19 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    env:
+      BRIGHT_IMAGE: bright-profile:sha-${{ github.sha }}
+      APP_DOMAIN: localhost
+      BRIGHT_EDGE_SUBNET: 172.30.250.0/24
+      CADDY_EDGE_IP: 172.30.250.10
+      GITHUB_ALLOWED_USERS: ci-user
+      GITHUB_OAUTH_CLIENT_ID: ci-client
+      GITHUB_OAUTH_CLIENT_SECRET_FILE: ${{ github.workspace }}/.ci-secrets/github-oauth-client-secret
+      OAUTH2_PROXY_COOKIE_SECRET_FILE: ${{ github.workspace }}/.ci-secrets/oauth2-proxy-cookie-secret
+      GOOGLE_TTS_CREDENTIALS_FILE: ${{ github.workspace }}/.ci-secrets/google-tts.json
+      OPENAI_API_KEY_FILE: ${{ github.workspace }}/.ci-secrets/openai-api-key
+      OPENAI_RESEARCH_MODEL: gpt-5-2026-08-07
+      OPENAI_GENERATION_MODEL: gpt-5-2026-08-07
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -20,3 +33,80 @@ jobs:
       - run: npm ci --strict-allow-scripts=true --no-audit --no-fund
       - run: node --test tests/unit/openai-secret-file.test.mjs tests/integration/standalone-web.test.mjs tests/integration/deployment-config.test.mjs
       - run: npm run lint
+      - name: Create local-only CI secret files
+        run: |
+          mkdir -p .ci-secrets
+          chmod 700 .ci-secrets
+          printf '%s' 'ci-openai-key' > .ci-secrets/openai-api-key
+          printf '%s' 'ci-github-client-secret' > .ci-secrets/github-oauth-client-secret
+          python3 - <<'PY'
+          from pathlib import Path
+          Path('.ci-secrets/oauth2-proxy-cookie-secret').write_bytes(b'x' * 32)
+          Path('.ci-secrets/google-tts.json').write_text('{}')
+          PY
+          chmod 600 .ci-secrets/*
+      - name: Validate resolved Compose topology
+        run: |
+          docker compose config --format json > "$RUNNER_TEMP/bright-compose.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = json.loads(Path(os.environ['RUNNER_TEMP']).joinpath('bright-compose.json').read_text())
+          services = data['services']
+          assert set(services) == {'app', 'worker', 'oauth2-proxy', 'caddy'}
+          assert services['app']['image'] == services['worker']['image'] == os.environ['BRIGHT_IMAGE']
+          assert not services['app'].get('ports')
+          assert not services['worker'].get('ports')
+          assert not services['oauth2-proxy'].get('ports')
+          assert len(services['caddy'].get('ports', [])) == 2
+          for name in ('app', 'worker'):
+              env = services[name].get('environment', {})
+              assert 'OPENAI_API_KEY' not in env
+              assert env.get('OPENAI_API_KEY_FILE') == '/run/secrets/openai_api_key'
+          assert 'openai_api_key' in data.get('secrets', {})
+          PY
+      - name: Build immutable standalone app image
+        run: docker compose build app
+      - name: Start private app and worker roles
+        run: |
+          docker compose up -d app worker
+          docker compose ps
+          for service in app worker; do
+            container="$(docker compose ps -q "$service")"
+            test -n "$container"
+            for attempt in $(seq 1 60); do
+              status="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container")"
+              if [ "$status" = healthy ]; then break; fi
+              if [ "$status" = unhealthy ]; then docker compose logs "$service"; exit 1; fi
+              sleep 2
+            done
+            test "$(docker inspect --format='{{.State.Health.Status}}' "$container")" = healthy
+            test "$(docker compose exec -T "$service" id -u)" != 0
+          done
+          test -z "$(docker compose port app 4180 2>/dev/null || true)"
+          test -z "$(docker compose port worker 4181 2>/dev/null || true)"
+          docker compose exec -T app node -e "require('node:fs').writeFileSync('/app/data/ci-shared-volume','shared')"
+          docker compose exec -T worker node -e "if(require('node:fs').readFileSync('/app/data/ci-shared-volume','utf8')!=='shared')process.exit(1)"
+      - name: Start authenticated edge and verify unauthenticated isolation
+        run: |
+          docker compose up -d
+          docker compose ps
+          test -z "$(docker compose port oauth2-proxy 4182 2>/dev/null || true)"
+          test -n "$(docker compose port caddy 443)"
+          status=000
+          for attempt in $(seq 1 60); do
+            status="$(curl -k -sS -o "$RUNNER_TEMP/edge-body" -D "$RUNNER_TEMP/edge-headers" -w '%{http_code}' https://localhost/ || true)"
+            if [ "$status" != 000 ]; then break; fi
+            sleep 2
+          done
+          test "$status" != 000
+          test "$status" != 200
+          ! grep -q 'Creator intelligence to video' "$RUNNER_TEMP/edge-body"
+      - name: Inspect final service state
+        run: |
+          docker compose ps
+          docker compose exec -T app node -e "fetch('http://127.0.0.1:4180/health/ready').then(async r=>{if(!r.ok)process.exit(1);const b=await r.json();if(!b.ok)process.exit(1)})"
+          docker compose exec -T worker node -e "fetch('http://127.0.0.1:4181/health/ready').then(async r=>{if(!r.ok)process.exit(1);const b=await r.json();if(!b.ok)process.exit(1)})"
+      - name: Tear down integration stack
+        if: always()
+        run: docker compose down -v --remove-orphans
