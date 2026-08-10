@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import {AppError} from '../../domain/errors.mjs';
+import {loadSecretValue} from '../../security/secret-file.mjs';
 import {createResearchProvider} from './index.mjs';
 
 const SNAPSHOT_MODEL = /-\d{4}-\d{2}-\d{2}$/;
@@ -16,7 +17,12 @@ const positiveInteger = (env, key, fallback, {min = 0, max = Number.MAX_SAFE_INT
 };
 
 export function loadOpenAiResearchConfig(env = process.env) {
-  const apiKey = String(env.OPENAI_API_KEY || '').trim();
+  const apiKey = loadSecretValue({
+    env,
+    valueKey: 'OPENAI_API_KEY',
+    fileKey: 'OPENAI_API_KEY_FILE',
+    errorFactory: configError,
+  });
   const model = String(env.OPENAI_RESEARCH_MODEL || '').trim();
   if (!apiKey) throw configError('OPENAI_API_KEY is required');
   if (!model || !SNAPSHOT_MODEL.test(model)) {

@@ -70,7 +70,7 @@ services:
     environment:
       PORT: 4180
       DATA_DIR: /app/data
-      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
+      OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
       OPENAI_RESEARCH_MODEL: ${OPENAI_RESEARCH_MODEL:?set OPENAI_RESEARCH_MODEL}
       OPENAI_GENERATION_MODEL: ${OPENAI_GENERATION_MODEL:?set OPENAI_GENERATION_MODEL}
       OPENAI_TIMEOUT_MS: ${OPENAI_TIMEOUT_MS:-30000}
@@ -84,6 +84,8 @@ services:
       ALLOW_PRIVATE_MEDIA_URLS: "false"
     volumes:
       - bright_data:/app/data
+    secrets:
+      - openai_api_key
     expose:
       - "4180"
     healthcheck:
@@ -104,7 +106,7 @@ services:
     environment:
       WORKER_OPS_PORT: 4181
       DATA_DIR: /app/data
-      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
+      OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
       OPENAI_RESEARCH_MODEL: ${OPENAI_RESEARCH_MODEL:?set OPENAI_RESEARCH_MODEL}
       OPENAI_GENERATION_MODEL: ${OPENAI_GENERATION_MODEL:?set OPENAI_GENERATION_MODEL}
       OPENAI_TIMEOUT_MS: ${OPENAI_TIMEOUT_MS:-30000}
@@ -125,6 +127,7 @@ services:
     volumes:
       - bright_data:/app/data
     secrets:
+      - openai_api_key
       - google_tts_credentials
     depends_on:
       app:
@@ -153,6 +156,8 @@ volumes:
   caddy_config:
 
 secrets:
+  openai_api_key:
+    file: ${OPENAI_API_KEY_FILE:?set OPENAI_API_KEY_FILE}
   github_oauth_client_secret:
     file: ${GITHUB_OAUTH_CLIENT_SECRET_FILE:?set GITHUB_OAUTH_CLIENT_SECRET_FILE}
   oauth2_proxy_cookie_secret:
