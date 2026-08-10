@@ -23,27 +23,44 @@ Only Caddy publishes host ports. `oauth2-proxy`, `app`, and `worker` stay on Com
 - A GitHub OAuth App configured with callback URL `https://<APP_DOMAIN>/oauth2/callback`.
 - An explicit comma-separated list of allowed GitHub usernames. Do not use a broad organization/domain fallback for this single-operator deployment.
 - A Google TTS service-account JSON file when voice generation is enabled.
-- An OpenAI API key stored in a host file readable only by the deployment operator.
+- An OpenAI API key stored in a host file under the private deployment secret directory.
 - An immutable application image reference: use a git-SHA tag such as `ghcr.io/<owner>/<repo>:sha-<40-char-sha>` or an image digest. Do not deploy a floating `latest` tag.
 
 ## Secret files
 
-Create a directory outside the repository and restrict access before writing credentials:
+Docker Compose file-backed secrets are bind mounts. For `file:` secret sources, Compose does not remap `uid`, `gid`, or `mode`; the source file permissions are what the non-root container process sees. Keep host access private with the parent directory, while making each mounted file readable inside the service container.
+
+Create the secret directory as `0700` and make it owned by the deployment operator that runs Docker Compose:
 
 ```bash
-sudo install -d -m 0700 /srv/bright-profile/secrets
-sudo sh -c 'umask 077; head -c 32 /dev/urandom > /srv/bright-profile/secrets/oauth2-proxy-cookie-secret'
+sudo install -d -m 0700 -o "$USER" -g "$(id -gn)" /srv/bright-profile/secrets
 ```
 
-Create these additional files with mode `0600`:
+Write credentials inside that directory with a restrictive umask, then set the secret files to `0444` after their contents are complete:
 
-```text
-/srv/bright-profile/secrets/openai-api-key
-/srv/bright-profile/secrets/github-oauth-client-secret
-/srv/bright-profile/secrets/google-tts.json
+```bash
+umask 077
+head -c 32 /dev/urandom > /srv/bright-profile/secrets/oauth2-proxy-cookie-secret
+# Create/populate the three files below without committing or echoing their values to logs:
+# /srv/bright-profile/secrets/openai-api-key
+# /srv/bright-profile/secrets/github-oauth-client-secret
+# /srv/bright-profile/secrets/google-tts.json
+chmod 0444 /srv/bright-profile/secrets/openai-api-key \
+  /srv/bright-profile/secrets/github-oauth-client-secret \
+  /srv/bright-profile/secrets/oauth2-proxy-cookie-secret \
+  /srv/bright-profile/secrets/google-tts.json
 ```
 
-Do not place secret values in `.env`. `.env` contains only non-secret configuration and file paths to the mounted secrets.
+The files are world-readable *by mode* so the different non-root container users can read their bind-mounted copy, but host users other than the deployment operator cannot traverse the `0700` parent directory. Do not relax the directory mode. Do not place secret values in `.env`; `.env` contains only non-secret configuration and file paths to mounted secrets.
+
+Before starting the stack, verify the source permissions without printing secret contents:
+
+```bash
+test "$(stat -c '%a' /srv/bright-profile/secrets)" = 700
+for secret in openai-api-key github-oauth-client-secret oauth2-proxy-cookie-secret google-tts.json; do
+  test "$(stat -c '%a' "/srv/bright-profile/secrets/$secret")" = 444
+done
+```
 
 ## Environment
 
