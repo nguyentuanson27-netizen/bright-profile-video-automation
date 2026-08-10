@@ -14,8 +14,8 @@ jobs:
     env:
       BRIGHT_IMAGE: bright-profile:sha-${{ github.sha }}
       APP_DOMAIN: localhost
-      BRIGHT_EDGE_SUBNET: 172.30.250.0/24
-      CADDY_EDGE_IP: 172.30.250.10
+      BRIGHT_EDGE_NETWORK: bright-edge-ci
+      BRIGHT_EDGE_CIDR: 172.31.250.0/29
       GITHUB_ALLOWED_USERS: ci-user
       GITHUB_OAUTH_CLIENT_ID: ci-client
       GITHUB_OAUTH_CLIENT_SECRET_FILE: ${{ github.workspace }}/.ci-secrets/github-oauth-client-secret
@@ -70,6 +70,8 @@ jobs:
           # Compose file-backed secrets are bind mounts. Keep the parent directory
           # private while allowing non-root service users to read the mounted files.
           chmod 444 .ci-secrets/*
+      - name: Create dedicated external shared-edge network
+        run: docker network create --driver bridge --subnet "$BRIGHT_EDGE_CIDR" "$BRIGHT_EDGE_NETWORK"
       - name: Validate resolved Compose topology
         run: |
           docker compose config --format json > "$RUNNER_TEMP/bright-compose.json"
@@ -78,12 +80,17 @@ jobs:
           from pathlib import Path
           data = json.loads(Path(os.environ['RUNNER_TEMP']).joinpath('bright-compose.json').read_text())
           services = data['services']
-          assert set(services) == {'app', 'worker', 'oauth2-proxy', 'caddy'}
+          assert set(services) == {'app', 'worker', 'oauth2-proxy'}
           assert services['app']['image'] == services['worker']['image'] == os.environ['BRIGHT_IMAGE']
-          assert not services['app'].get('ports')
-          assert not services['worker'].get('ports')
-          assert not services['oauth2-proxy'].get('ports')
-          assert len(services['caddy'].get('ports', [])) == 2
+          for name in services:
+              assert not services[name].get('ports')
+          assert set(services['oauth2-proxy'].get('networks', {})) == {'backend', 'edge'}
+          assert set(services['app'].get('networks', {})) == {'backend'}
+          assert set(services['worker'].get('networks', {})) == {'backend'}
+          aliases = services['oauth2-proxy']['networks']['edge'].get('aliases', [])
+          assert 'bright-standalone-oauth2-proxy' in aliases
+          assert data['networks']['edge']['external'] is True
+          assert data['networks']['edge']['name'] == os.environ['BRIGHT_EDGE_NETWORK']
           app_env = services['app'].get('environment', {})
           worker_env = services['worker'].get('environment', {})
           assert 'OPENAI_API_KEY' not in app_env
@@ -134,25 +141,28 @@ jobs:
           docker compose exec -T worker node -e "if(!require('node:fs').statSync('/run/secrets/openai_api_key').isFile())process.exit(1)"
           docker compose exec -T app node -e "require('node:fs').writeFileSync('/app/data/ci-shared-volume','shared')"
           docker compose exec -T worker node -e "if(require('node:fs').readFileSync('/app/data/ci-shared-volume','utf8')!=='shared')process.exit(1)"
-      - name: Diagnose private service startup
-        if: failure()
+      - name: Start and verify private OAuth role
         run: |
-          docker compose ps -a || true
-          docker compose logs --no-color app worker || true
-          for service in app worker; do
-            container="$(docker compose ps -aq "$service" 2>/dev/null || true)"
-            if [ -z "$container" ]; then continue; fi
-            docker inspect --format='service='"$service"' name={{.Name}} user={{.Config.User}} status={{.State.Status}} exit={{.State.ExitCode}} error={{json .State.Error}} health={{json .State.Health}} mounts={{range .Mounts}}{{.Destination}}={{.Source}}:rw={{.RW}} {{end}}' "$container" || true
+          docker compose up -d oauth2-proxy
+          container="$(docker compose ps -q oauth2-proxy)"
+          test -n "$container"
+          for attempt in $(seq 1 60); do
+            status="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container")"
+            if [ "$status" = healthy ]; then break; fi
+            if [ "$status" = unhealthy ]; then exit 1; fi
+            sleep 2
           done
-      - name: Start authenticated edge and verify unauthenticated isolation
+          test "$(docker inspect --format='{{.State.Health.Status}}' "$container")" = healthy
+          docker inspect "$container" | node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const b=JSON.parse(s)[0].HostConfig.PortBindings||{};if(Object.keys(b).length)process.exit(1)})"
+      - name: Start external shared Caddy and verify unauthenticated isolation
         run: |
-          docker compose up -d
-          docker compose ps
-          oauth_container="$(docker compose ps -q oauth2-proxy)"
-          caddy_container="$(docker compose ps -q caddy)"
-          test -n "$oauth_container"
-          test -n "$caddy_container"
-          docker inspect "$oauth_container" | node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const b=JSON.parse(s)[0].HostConfig.PortBindings||{};if(Object.keys(b).length)process.exit(1)})"
+          docker run -d --name bright-shared-caddy-ci \
+            --network "$BRIGHT_EDGE_NETWORK" \
+            -e APP_DOMAIN=localhost \
+            -p 80:80 -p 443:443 \
+            -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.11.4-alpine
+          caddy_container="$(docker inspect --format='{{.Id}}' bright-shared-caddy-ci)"
           docker inspect "$caddy_container" | node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const b=JSON.parse(s)[0].HostConfig.PortBindings||{};for(const p of ['80/tcp','443/tcp'])if(!Array.isArray(b[p])||b[p].length===0)process.exit(1)})"
           status=000
           for attempt in $(seq 1 60); do
@@ -163,6 +173,18 @@ jobs:
           test "$status" != 000
           test "$status" != 200
           ! grep -q 'Creator intelligence to video' "$RUNNER_TEMP/edge-body"
+          grep -Eqi '^location: (https://github.com/login/oauth/authorize|/oauth2/)' "$RUNNER_TEMP/edge-headers"
+      - name: Diagnose private service startup
+        if: failure()
+        run: |
+          docker compose ps -a || true
+          docker compose logs --no-color app worker oauth2-proxy || true
+          docker logs bright-shared-caddy-ci 2>/dev/null || true
+          for service in app worker oauth2-proxy; do
+            container="$(docker compose ps -aq "$service" 2>/dev/null || true)"
+            if [ -z "$container" ]; then continue; fi
+            docker inspect --format='service='"$service"' name={{.Name}} user={{.Config.User}} status={{.State.Status}} exit={{.State.ExitCode}} error={{json .State.Error}} health={{json .State.Health}} mounts={{range .Mounts}}{{.Destination}}={{.Source}}:rw={{.RW}} {{end}}' "$container" || true
+          done
       - name: Inspect final service state
         run: |
           docker compose ps
@@ -170,4 +192,7 @@ jobs:
           docker compose exec -T worker node -e "fetch('http://127.0.0.1:4181/health/ready').then(async r=>{if(!r.ok)process.exit(1);const b=await r.json();if(!b.ok)process.exit(1)})"
       - name: Tear down integration stack
         if: always()
-        run: docker compose down -v --remove-orphans
+        run: |
+          docker rm -f bright-shared-caddy-ci 2>/dev/null || true
+          docker compose down -v --remove-orphans
+          docker network rm "$BRIGHT_EDGE_NETWORK" 2>/dev/null || true
