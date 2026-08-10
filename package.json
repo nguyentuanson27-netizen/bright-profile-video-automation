@@ -6,6 +6,7 @@
   "scripts": {
     "test": "node --test",
     "lint": "eslint .",
+    "db:migrate": "node scripts/db-migrate.mjs",
     "render:smoke": "node scripts/render-smoke.mjs",
     "render:project": "node scripts/render-project.mjs"
   },
