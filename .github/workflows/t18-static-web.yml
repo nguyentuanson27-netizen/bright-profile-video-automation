@@ -86,7 +86,7 @@ jobs:
           done
           test "$(docker inspect --format='{{.State.Health.Status}}' "$container")" = healthy
           test "$(docker compose exec -T app id -u)" != 0
-          test -z "$(docker compose port app 4180 2>/dev/null || true)"
+          docker inspect "$container" | node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const b=JSON.parse(s)[0].HostConfig.PortBindings||{};if(Object.keys(b).length)process.exit(1)})"
           docker compose exec -T app node -e "fetch('http://127.0.0.1:4180/health/ready').then(async r=>{if(!r.ok)process.exit(1);const b=await r.json();if(!b.ok)process.exit(1)})"
       - name: Start and verify private worker role
         run: |
@@ -101,7 +101,7 @@ jobs:
           done
           test "$(docker inspect --format='{{.State.Health.Status}}' "$container")" = healthy
           test "$(docker compose exec -T worker id -u)" != 0
-          test -z "$(docker compose port worker 4181 2>/dev/null || true)"
+          docker inspect "$container" | node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const b=JSON.parse(s)[0].HostConfig.PortBindings||{};if(Object.keys(b).length)process.exit(1)})"
           docker compose exec -T worker node -e "fetch('http://127.0.0.1:4181/health/ready').then(async r=>{if(!r.ok)process.exit(1);const b=await r.json();if(!b.ok)process.exit(1)})"
           docker compose exec -T app node -e "require('node:fs').writeFileSync('/app/data/ci-shared-volume','shared')"
           docker compose exec -T worker node -e "if(require('node:fs').readFileSync('/app/data/ci-shared-volume','utf8')!=='shared')process.exit(1)"
@@ -119,8 +119,12 @@ jobs:
         run: |
           docker compose up -d
           docker compose ps
-          test -z "$(docker compose port oauth2-proxy 4182 2>/dev/null || true)"
-          test -n "$(docker compose port caddy 443)"
+          oauth_container="$(docker compose ps -q oauth2-proxy)"
+          caddy_container="$(docker compose ps -q caddy)"
+          test -n "$oauth_container"
+          test -n "$caddy_container"
+          docker inspect "$oauth_container" | node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const b=JSON.parse(s)[0].HostConfig.PortBindings||{};if(Object.keys(b).length)process.exit(1)})"
+          docker inspect "$caddy_container" | node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const b=JSON.parse(s)[0].HostConfig.PortBindings||{};for(const p of ['80/tcp','443/tcp'])if(!Array.isArray(b[p])||b[p].length===0)process.exit(1)})"
           status=000
           for attempt in $(seq 1 60); do
             status="$(curl -k -sS -o "$RUNNER_TEMP/edge-body" -D "$RUNNER_TEMP/edge-headers" -w '%{http_code}' https://localhost/ || true)"
