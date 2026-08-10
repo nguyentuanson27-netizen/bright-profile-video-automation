@@ -71,7 +71,8 @@ const createFakeRenderService = (state, calls = []) => createRenderExecutionServ
   },
   renderProfile: async ({outputLocation, inputProps}) => {
     calls.push('render');
-    assert.match(inputProps.audioUrl, /^file:\/\//);
+    assert.match(inputProps.audioUrl, /^http:\/\/127\.0\.0\.1:\d+\//);
+    assert.equal(inputProps.audioUrl.includes('file:'), false);
     writeFileSync(outputLocation, Buffer.from('fake-mp4'));
   },
   probeDuration: async () => 3,
