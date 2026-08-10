@@ -10,6 +10,11 @@ test('loadConfig applies conservative defaults', () => {
   assert.equal(config.dataDir, '/app/data');
   assert.equal(config.maxBodyBytes, 10 * 1024 * 1024);
   assert.equal(config.allowPrivateMediaUrls, false);
+  assert.equal(config.completedArtifactRetentionDays, 30);
+  assert.equal(config.transientArtifactRetentionDays, 7);
+  assert.equal(config.diskWarningFreePercent, 25);
+  assert.equal(config.diskHardFreePercent, 15);
+  assert.equal(config.diskHardFreeGiB, 20);
 });
 
 test('loadConfig accepts valid overrides', () => {
@@ -19,6 +24,11 @@ test('loadConfig accepts valid overrides', () => {
     DATA_DIR: '/srv/bright-profile',
     MAX_BODY_BYTES: '2048',
     ALLOW_PRIVATE_MEDIA_URLS: 'true',
+    COMPLETED_ARTIFACT_RETENTION_DAYS: '45',
+    TRANSIENT_ARTIFACT_RETENTION_DAYS: '10',
+    DISK_WARNING_FREE_PERCENT: '30',
+    DISK_HARD_FREE_PERCENT: '18',
+    DISK_HARD_FREE_GIB: '24',
   });
 
   assert.equal(config.port, 5000);
@@ -26,20 +36,28 @@ test('loadConfig accepts valid overrides', () => {
   assert.equal(config.dataDir, '/srv/bright-profile');
   assert.equal(config.maxBodyBytes, 2048);
   assert.equal(config.allowPrivateMediaUrls, true);
+  assert.equal(config.completedArtifactRetentionDays, 45);
+  assert.equal(config.transientArtifactRetentionDays, 10);
+  assert.equal(config.diskWarningFreePercent, 30);
+  assert.equal(config.diskHardFreePercent, 18);
+  assert.equal(config.diskHardFreeGiB, 24);
 });
 
 test('loadConfig rejects malformed numeric configuration without echoing the value', () => {
+  for (const key of ['PORT', 'WORKER_OPS_PORT', 'COMPLETED_ARTIFACT_RETENTION_DAYS', 'DISK_HARD_FREE_GIB']) {
+    assert.throws(
+      () => loadConfig({[key]: 'secret-looking-value'}),
+      (error) => error.name === 'ConfigError'
+        && error.message.includes(key)
+        && !error.message.includes('secret-looking-value'),
+    );
+  }
+});
+
+test('loadConfig rejects invalid disk threshold ordering', () => {
   assert.throws(
-    () => loadConfig({PORT: 'secret-looking-value'}),
-    (error) => error.name === 'ConfigError'
-      && /PORT/.test(error.message)
-      && !/secret-looking-value/.test(error.message),
-  );
-  assert.throws(
-    () => loadConfig({WORKER_OPS_PORT: 'secret-looking-value'}),
-    (error) => error.name === 'ConfigError'
-      && /WORKER_OPS_PORT/.test(error.message)
-      && !/secret-looking-value/.test(error.message),
+    () => loadConfig({DISK_WARNING_FREE_PERCENT: '10', DISK_HARD_FREE_PERCENT: '15'}),
+    (error) => error.name === 'ConfigError' && /DISK_HARD_FREE_PERCENT/.test(error.message),
   );
 });
 
