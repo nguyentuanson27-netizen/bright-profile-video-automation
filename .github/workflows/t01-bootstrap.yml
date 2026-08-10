@@ -25,6 +25,13 @@ jobs:
         run: npm test
       - name: Lint
         run: npm run lint
+      - name: Existing render smoke
+        shell: bash
+        run: |
+          test -x /usr/bin/google-chrome
+          mkdir -p data
+          REMOTION_BROWSER_EXECUTABLE=/usr/bin/google-chrome npm run render:smoke
+          test -s data/bright-profile-smoke.mp4
       - name: Commit generated lockfile
         shell: bash
         run: |
