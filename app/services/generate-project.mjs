@@ -12,7 +12,7 @@ export function createGenerationProjectService({
   revisionIdGenerator = defaultRevisionId,
   clock = () => new Date(),
 }) {
-  if (!repositories?.projects || !repositories?.sources || !repositories?.revisions) {
+  if (!repositories?.projects || !repositories?.sources || !repositories?.revisions || !repositories?.jobs) {
     throw new TypeError('generation repositories are required');
   }
   if (!projectStateStore?.enqueueGeneration || !projectStateStore?.setStatus) {
@@ -23,12 +23,25 @@ export function createGenerationProjectService({
   }
 
   return Object.freeze({
-    enqueueGeneration(projectId) {
+    enqueueGeneration(projectId, {jobId: requestedJobId} = {}) {
       const project = repositories.projects.get(projectId);
       if (!project) throw new AppError('PROJECT_NOT_FOUND', 'Project was not found', {status: 404});
+      const jobId = requestedJobId ?? jobIdGenerator();
+      if (typeof jobId !== 'string' || jobId.length === 0 || jobId.length > 256) {
+        throw new AppError('GENERATION_JOB_ID_INVALID', 'Generation job ID is invalid', {status: 500});
+      }
+
+      const existing = repositories.jobs.get(jobId);
+      if (existing) {
+        if (existing.projectId !== projectId || existing.stage !== 'generating') {
+          throw new AppError('GENERATION_JOB_CONFLICT', 'Generation job ID belongs to different work', {status: 409});
+        }
+        return {project, job: existing};
+      }
+
       const job = projectStateStore.enqueueGeneration({
         projectId,
-        jobId: jobIdGenerator(),
+        jobId,
         now: clock(),
         maxAttempts: 3,
       });
