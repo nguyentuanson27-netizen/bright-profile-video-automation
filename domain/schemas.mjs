@@ -54,7 +54,7 @@ const claimSchema = {
         required: ['status'],
       },
       then: {
-        properties: {sourceIds: {minItems: 1}},
+        properties: {sourceIds: {type: 'array', minItems: 1}},
       },
     },
   ],
