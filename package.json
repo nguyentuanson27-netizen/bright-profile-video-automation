@@ -33,6 +33,7 @@
   "allowScripts": {
     "better-sqlite3@13.0.3": true,
     "esbuild@0.28.1": true,
-    "protobufjs@7.6.5": true
+    "protobufjs@7.6.5": true,
+    "fsevents": false
   }
 }
