@@ -209,10 +209,10 @@ export function createHttpHandler({
     const started = performance.now();
     try {
       const url = new URL(req.url || '/', 'http://localhost');
-      const projectId = requestProjectId(url.pathname);
+      const correlationProjectId = requestProjectId(url.pathname);
       res.once('finish', () => observability?.log?.('http.request', {
         requestId,
-        projectId,
+        projectId: correlationProjectId,
         method: req.method,
         path: url.pathname,
         status: res.statusCode,
