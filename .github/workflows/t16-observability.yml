@@ -18,11 +18,11 @@ jobs:
           node-version: '24'
           package-manager-cache: false
       - run: npm ci --strict-allow-scripts=true --no-audit --no-fund
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: node --test tests/unit/config.test.mjs tests/integration/observability.test.mjs tests/integration/render-worker.test.mjs
       - run: node --check server.mjs
       - run: node --check worker.mjs
+      - run: npm run lint
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: npm test
       - run: npm run build
       - run: test -s dist/web/index.html
-      - run: npm run lint
