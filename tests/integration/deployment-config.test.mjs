@@ -106,3 +106,12 @@ test('file-backed Compose secrets keep the host directory private while remainin
   assert.match(workflow, /chmod 444 \.ci-secrets\/\*/);
   assert.doesNotMatch(workflow, /chmod 600 \.ci-secrets\/\*/);
 });
+
+test('runtime publication checks inspect actual host bindings instead of treating exposed ports as published', () => {
+  const workflow = read('.github/workflows/t18-static-web.yml');
+
+  assert.match(workflow, /HostConfig\.PortBindings/);
+  assert.doesNotMatch(workflow, /docker compose port app 4180/);
+  assert.doesNotMatch(workflow, /docker compose port worker 4181/);
+  assert.doesNotMatch(workflow, /docker compose port oauth2-proxy 4182/);
+});
