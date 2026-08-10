@@ -4,9 +4,13 @@ import {loadConfig} from './app/config.mjs';
 import {createHttpHandler} from './app/http/router.mjs';
 import {createApprovalService} from './app/services/approve-project.mjs';
 import {createGenerationProjectService} from './app/services/generate-project.mjs';
+import {createMediaIngestService} from './app/services/media-ingest.mjs';
+import {createRenderExecutionService} from './app/services/execute-render.mjs';
 import {createResearchProjectService} from './app/services/research-project.mjs';
+import {probeVideoDuration} from './lib/media-probe.mjs';
 import {createOpenAiGenerationProvider} from './providers/generation/openai.mjs';
 import {createOpenAiResearchProvider} from './providers/research/openai.mjs';
+import {createArtifactStore} from './storage/artifacts.mjs';
 import {createRepositories, migrateDatabase, openDatabase} from './storage/db.mjs';
 import {createProjectStateStore} from './storage/project-state.mjs';
 
@@ -22,12 +26,25 @@ const generationProvider = createOpenAiGenerationProvider();
 const researchService = createResearchProjectService({repositories, projectStateStore, researchProvider});
 const generationService = createGenerationProjectService({repositories, projectStateStore, generationProvider});
 const approvalService = createApprovalService({repositories, projectStateStore});
+const artifactStore = createArtifactStore({dataDir: config.dataDir, repositories});
+const mediaIngestService = createMediaIngestService({repositories, approvalService, artifactStore});
+const renderService = createRenderExecutionService({
+  repositories,
+  projectStateStore,
+  approvalService,
+  mediaIngestService,
+  artifactStore,
+  dataDir: config.dataDir,
+});
 
 const server = http.createServer(createHttpHandler({
   repositories,
   researchService,
   generationService,
   approvalService,
+  renderService,
+  artifactStore,
+  videoProbe: probeVideoDuration,
   maxBodyBytes: config.maxBodyBytes,
 }));
 
