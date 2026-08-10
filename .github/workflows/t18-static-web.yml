@@ -31,8 +31,27 @@ jobs:
           node-version: '24'
           package-manager-cache: false
       - run: npm ci --strict-allow-scripts=true --no-audit --no-fund
-      - run: node --test tests/unit/openai-secret-file.test.mjs tests/integration/standalone-web.test.mjs tests/integration/deployment-config.test.mjs
+      - name: Run focused T18 regression tests
+        run: node --test tests/unit/openai-secret-file.test.mjs tests/integration/standalone-web.test.mjs tests/integration/deployment-config.test.mjs
       - run: npm run lint
+      - name: Verify production entrypoint syntax
+        run: |
+          node --check server.mjs
+          node --check worker.mjs
+          node --check scripts/cleanup.mjs
+          node --check scripts/backup.mjs
+      - name: Resolve local browser and ffmpeg for full regression
+        run: |
+          browser="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          test -n "$browser"
+          ffmpeg -version >/dev/null
+          echo "REMOTION_BROWSER_EXECUTABLE=$browser" >> "$GITHUB_ENV"
+      - name: Run full regression suite
+        run: npm test
+      - name: Build production web assets
+        run: |
+          npm run build
+          test -s dist/web/index.html
       - name: Create local-only CI secret files
         run: |
           mkdir -p .ci-secrets
