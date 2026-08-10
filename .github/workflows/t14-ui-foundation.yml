@@ -19,4 +19,6 @@ jobs:
           package-manager-cache: false
       - run: npm ci --strict-allow-scripts=true --no-audit --no-fund
       - run: node --test tests/integration/research-api.test.mjs tests/integration/project-status-api.test.mjs tests/unit/web-status.test.mjs
+      - run: npm run build
+      - run: test -s dist/web/index.html
       - run: npm run lint
