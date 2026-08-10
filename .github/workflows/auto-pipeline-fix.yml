@@ -18,6 +18,7 @@ jobs:
           node-version: '24'
           package-manager-cache: false
       - run: npm ci --strict-allow-scripts=true --no-audit --no-fund
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: node --test tests/unit/worker-handlers.test.mjs tests/integration/auto-pipeline.test.mjs
       - run: npm test
       - run: npm run lint
