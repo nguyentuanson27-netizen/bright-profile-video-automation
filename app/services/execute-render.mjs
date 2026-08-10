@@ -3,14 +3,13 @@ import {spawn} from 'node:child_process';
 import {mkdir, readFile, rm, stat} from 'node:fs/promises';
 import path from 'node:path';
 import {clearInterval, setInterval} from 'node:timers';
-import {pathToFileURL} from 'node:url';
 import {AppError} from '../../domain/errors.mjs';
 import {generateTimedGoogleTts} from '../../lib/timed-google-tts.mjs';
 import {renderBrightProfile} from '../../lib/remotion-renderer.mjs';
+import {createTrustedAssetServer} from '../../worker/trusted-assets.mjs';
 
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 const RENDER_JOB_PATTERN = /^render-(media-manifest-[a-f0-9]{24})$/;
-const ARTIFACT_URL_PATTERN = /^artifact:\/\/([A-Za-z0-9._-]{1,160})$/;
 
 const defaultProbeDuration = (file) => new Promise((resolve, reject) => {
   const child = spawn('ffprobe', [
@@ -78,28 +77,14 @@ const readManifest = async ({projectId, manifestId, artifactStore}) => {
   return {artifact, value};
 };
 
-const artifactFileUrl = ({projectId, value, artifactStore}) => {
-  if (!value) return value || '';
-  const artifactMatch = String(value).match(ARTIFACT_URL_PATTERN);
-  if (artifactMatch) {
-    const artifact = artifactStore.get(projectId, artifactMatch[1]);
-    if (!artifact) throw new AppError('RENDER_ARTIFACT_MISSING', 'Render artifact is missing', {status: 409, retryable: true});
-    return pathToFileURL(artifact.absolutePath).href;
-  }
-  if (/^https?:\/\//i.test(value) || /^file:/i.test(value)) {
-    throw new AppError('RENDER_UNTRUSTED_MEDIA', 'Render manifest contains an untrusted media URL', {status: 409});
-  }
-  return value;
-};
-
-const renderInputFromManifest = ({projectId, manifest, artifactStore, audioArtifact}) => {
+const renderInputFromManifest = ({manifest, trustedAssets, audioArtifact}) => {
   const inputProps = structuredClone(manifest.renderProject);
-  inputProps.heroImage = artifactFileUrl({projectId, value: inputProps.heroImage, artifactStore});
+  inputProps.heroImage = trustedAssets.resolve(inputProps.heroImage);
   inputProps.scenes = (inputProps.scenes || []).map((scene) => ({
     ...scene,
-    mediaUrl: artifactFileUrl({projectId, value: scene.mediaUrl, artifactStore}),
+    mediaUrl: trustedAssets.resolve(scene.mediaUrl),
   }));
-  if (audioArtifact) inputProps.audioUrl = pathToFileURL(audioArtifact.absolutePath).href;
+  if (audioArtifact) inputProps.audioUrl = trustedAssets.resolve(`artifact://${audioArtifact.id}`);
   return inputProps;
 };
 
@@ -113,6 +98,7 @@ export function createRenderExecutionService({
   generateTts = generateTimedGoogleTts,
   renderProfile = renderBrightProfile,
   probeDuration = defaultProbeDuration,
+  trustedAssetServerFactory = createTrustedAssetServer,
 }) {
   if (!repositories?.projects || !repositories?.revisions || !repositories?.artifacts) {
     throw new TypeError('render repositories are required');
@@ -122,6 +108,7 @@ export function createRenderExecutionService({
   if (!mediaIngestService?.ingest) throw new TypeError('mediaIngestService is required');
   if (!artifactStore?.get || !artifactStore?.writeGenerated) throw new TypeError('artifactStore is required');
   if (!path.isAbsolute(dataDir)) throw new TypeError('render dataDir must be absolute');
+  if (typeof trustedAssetServerFactory !== 'function') throw new TypeError('trustedAssetServerFactory must be a function');
 
   const loadApprovedManifest = async (job) => {
     const match = String(job.id).match(RENDER_JOB_PATTERN);
@@ -219,18 +206,19 @@ export function createRenderExecutionService({
         existingVideo = artifactStore.get(job.projectId, videoId);
         if (!existingVideo) {
           const outputLocation = path.join(workDir, 'output.mp4');
-          const inputProps = renderInputFromManifest({
-            projectId: job.projectId,
-            manifest,
-            artifactStore,
-            audioArtifact,
-          });
-          await withHeartbeat(() => renderProfile({
-            inputProps,
-            outputLocation,
-            scale: manifest.renderProject.renderScale || 1,
-            crf: manifest.renderProject.crf || 20,
-          }), heartbeat);
+          const trustedAssets = trustedAssetServerFactory({projectId: job.projectId, artifactStore});
+          await trustedAssets.start();
+          try {
+            const inputProps = renderInputFromManifest({manifest, trustedAssets, audioArtifact});
+            await withHeartbeat(() => renderProfile({
+              inputProps,
+              outputLocation,
+              scale: manifest.renderProject.renderScale || 1,
+              crf: manifest.renderProject.crf || 20,
+            }), heartbeat);
+          } finally {
+            await trustedAssets.close();
+          }
           const info = await stat(outputLocation);
           if (!info.isFile() || info.size <= 0) {
             throw new AppError('RENDER_OUTPUT_INVALID', 'Renderer did not produce a non-empty video', {status: 500});
