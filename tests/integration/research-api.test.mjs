@@ -49,7 +49,7 @@ const startApi = async ({repositories, researchService, requestIds}) => {
   return {server, baseUrl: `http://127.0.0.1:${address.port}`};
 };
 
-test('topic project can be created, researched durably, normalized, and read after restart', async () => {
+test('topic project creation atomically queues research, normalizes sources, and persists after restart', async () => {
   const fixture = createFixture();
   let api;
   let restarted;
@@ -98,7 +98,7 @@ test('topic project can be created, researched durably, normalized, and read aft
     api = await startApi({
       repositories: fixture.repositories,
       researchService,
-      requestIds: ['request-create', 'request-research', 'request-get', 'request-sources'],
+      requestIds: ['request-create', 'request-sources'],
     });
 
     const createdResponse = await postJson(api.baseUrl, '/api/projects', {
@@ -109,15 +109,10 @@ test('topic project can be created, researched durably, normalized, and read aft
     });
     assert.equal(createdResponse.status, 201);
     const created = await createdResponse.json();
-    assert.equal(created.id, 'project-1');
-    assert.equal(created.status, 'draft');
-
-    const researchResponse = await postJson(api.baseUrl, '/api/projects/project-1/research', {});
-    assert.equal(researchResponse.status, 202);
-    const queued = await researchResponse.json();
-    assert.equal(queued.job.id, 'job-research-1');
-    assert.equal(queued.job.status, 'queued');
-    assert.equal(fixture.repositories.projects.get('project-1').status, 'researching');
+    assert.equal(created.project.id, 'project-1');
+    assert.equal(created.project.status, 'researching');
+    assert.equal(created.job.id, 'job-research-1');
+    assert.equal(created.job.status, 'queued');
 
     const runner = createJobRunner({
       jobStore: createJobStore(fixture.db),
@@ -159,7 +154,7 @@ test('topic project can be created, researched durably, normalized, and read aft
     const reopenedRepositories = createRepositories(reopenedDb);
     restarted = await startApi({
       repositories: reopenedRepositories,
-      researchService: {createProject() {}, enqueueResearch() {}},
+      researchService: {createProject() {}, createAndEnqueueResearch() {}, enqueueResearch() {}},
       requestIds: ['request-restart-get'],
     });
     const projectResponse = await fetch(`${restarted.baseUrl}/api/projects/project-1`);
