@@ -26,6 +26,12 @@ const mapJob = (row) => row ? {
   updatedAt: row.updated_at,
 } : null;
 
+const validateAttempts = (maxAttempts) => {
+  if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 20) {
+    throw new AppError('INVALID_JOB_ATTEMPTS', 'Job max attempts is invalid', {status: 500});
+  }
+};
+
 export function createProjectStateStore(db) {
   const getProject = db.prepare('SELECT id, status FROM projects WHERE id = ?');
   const updateStatus = db.prepare(`
@@ -40,20 +46,18 @@ export function createProjectStateStore(db) {
   `);
   const getJob = db.prepare('SELECT * FROM jobs WHERE id = ?');
 
-  const enqueueResearchTransaction = db.transaction(({projectId, jobId, maxAttempts, now}) => {
-    const project = getProject.get(projectId);
-    if (!project) throw new AppError('PROJECT_NOT_FOUND', 'Project was not found', {status: 404});
-    assertProjectTransition(project.status, 'researching');
-
-    const changed = updateStatus.run({
-      projectId,
-      fromStatus: project.status,
-      status: 'researching',
-      now,
-    });
+  const changeStatus = ({projectId, fromStatus, status, now}) => {
+    assertProjectTransition(fromStatus, status);
+    const changed = updateStatus.run({projectId, fromStatus, status, now});
     if (changed.changes !== 1) {
       throw new AppError('PROJECT_STATE_CONFLICT', 'Project state changed concurrently', {status: 409});
     }
+  };
+
+  const enqueueResearchTransaction = db.transaction(({projectId, jobId, maxAttempts, now}) => {
+    const project = getProject.get(projectId);
+    if (!project) throw new AppError('PROJECT_NOT_FOUND', 'Project was not found', {status: 404});
+    changeStatus({projectId, fromStatus: project.status, status: 'researching', now});
     insertJob.run({
       id: jobId,
       projectId,
@@ -64,13 +68,29 @@ export function createProjectStateStore(db) {
     return mapJob(getJob.get(jobId));
   });
 
+  const enqueueRenderTransaction = db.transaction(({projectId, jobId, initialStatus, maxAttempts, now}) => {
+    const project = getProject.get(projectId);
+    if (!project) throw new AppError('PROJECT_NOT_FOUND', 'Project was not found', {status: 404});
+    if (!['tts', 'render_queued'].includes(initialStatus)) {
+      throw new AppError('RENDER_INITIAL_STATE_INVALID', 'Render initial state is invalid', {status: 500});
+    }
+    changeStatus({projectId, fromStatus: project.status, status: 'media_ingest', now});
+    changeStatus({projectId, fromStatus: 'media_ingest', status: initialStatus, now});
+    insertJob.run({
+      id: jobId,
+      projectId,
+      stage: 'rendering',
+      maxAttempts,
+      now,
+    });
+    return mapJob(getJob.get(jobId));
+  });
+
   const revisionWorkflow = createRevisionWorkflowStore(db);
 
   return Object.freeze({
     enqueueResearch({projectId, jobId, now = new Date(), maxAttempts = 3}) {
-      if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 20) {
-        throw new AppError('INVALID_JOB_ATTEMPTS', 'Job max attempts is invalid', {status: 500});
-      }
+      validateAttempts(maxAttempts);
       return enqueueResearchTransaction.immediate({
         projectId,
         jobId,
@@ -79,19 +99,21 @@ export function createProjectStateStore(db) {
       });
     },
 
+    enqueueRender({projectId, jobId, initialStatus, now = new Date(), maxAttempts = 2}) {
+      validateAttempts(maxAttempts);
+      return enqueueRenderTransaction.immediate({
+        projectId,
+        jobId,
+        initialStatus,
+        maxAttempts,
+        now: toIso(now),
+      });
+    },
+
     setStatus({projectId, status, now = new Date()}) {
       const project = getProject.get(projectId);
       if (!project) throw new AppError('PROJECT_NOT_FOUND', 'Project was not found', {status: 404});
-      assertProjectTransition(project.status, status);
-      const result = updateStatus.run({
-        projectId,
-        fromStatus: project.status,
-        status,
-        now: toIso(now),
-      });
-      if (result.changes !== 1) {
-        throw new AppError('PROJECT_STATE_CONFLICT', 'Project state changed concurrently', {status: 409});
-      }
+      changeStatus({projectId, fromStatus: project.status, status, now: toIso(now)});
       return status;
     },
 
