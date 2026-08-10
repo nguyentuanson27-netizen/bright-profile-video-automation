@@ -11,7 +11,7 @@ const read = (file) => {
 };
 
 const serviceBlock = (compose, name) => {
-  const match = compose.match(new RegExp(`^  ${name}:\\n([\\s\\S]*?)(?=^  [A-Za-z0-9_-]+:|^networks:|^volumes:|^secrets:|\\Z)`, 'm'));
+  const match = compose.match(new RegExp(`^  ${name}:\\n([\\s\\S]*?)(?=^  [A-Za-z0-9_-]+:|^networks:|^volumes:|^secrets:|(?![\\s\\S]))`, 'm'));
   return match ? match[0] : '';
 };
 
