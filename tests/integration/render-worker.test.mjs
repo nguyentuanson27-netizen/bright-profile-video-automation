@@ -4,6 +4,7 @@ import {existsSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {AppError} from '../../domain/errors.mjs';
+import {createObservability} from '../../app/observability.mjs';
 import {createApprovalService} from '../../app/services/approve-project.mjs';
 import {createMediaIngestService} from '../../app/services/media-ingest.mjs';
 import {createRenderExecutionService} from '../../app/services/execute-render.mjs';
@@ -57,13 +58,14 @@ function fixture() {
   return {directory, dataDir, db, repositories, projectStateStore, approvalService, artifactStore, mediaIngestService};
 }
 
-const createFakeRenderService = (state, calls = []) => createRenderExecutionService({
+const createFakeRenderService = (state, calls = [], observability = null) => createRenderExecutionService({
   repositories: state.repositories,
   projectStateStore: state.projectStateStore,
   approvalService: state.approvalService,
   mediaIngestService: state.mediaIngestService,
   artifactStore: state.artifactStore,
   dataDir: state.dataDir,
+  observability,
   generateTts: async ({output}) => {
     calls.push('tts');
     writeFileSync(output, Buffer.from('fake-audio'));
@@ -106,6 +108,30 @@ test('approved revision is ingested, voiced, rendered, validated and completed b
     assert.ok(audio);
     assert.ok(video);
     assert.equal(existsSync(path.join(state.dataDir, video.relativePath)), true);
+  } finally {
+    state.db.close();
+    rmSync(state.directory, {recursive: true, force: true});
+  }
+});
+
+test('render execution records TTS and Remotion provider metrics through production boundaries', async () => {
+  const state = fixture();
+  try {
+    const observability = createObservability({queueStats: () => [], logger: () => {}});
+    const renderService = createFakeRenderService(state, [], observability);
+    await renderService.enqueue({projectId: 'project-1', revisionId: 'revision-1', maxAttempts: 2});
+    const runner = createJobRunner({
+      jobStore: createJobStore(state.db),
+      workerId: 'worker-observe-render',
+      handlers: {rendering: renderService.handleJob},
+      leaseMs: 60_000,
+      observability,
+    });
+
+    assert.equal((await runner.runOnce()).status, 'succeeded');
+    const metrics = await observability.metrics();
+    assert.match(metrics, /bright_provider_duration_seconds_count\{provider="google-tts",operation="tts",outcome="success"\} 1/);
+    assert.match(metrics, /bright_provider_duration_seconds_count\{provider="remotion",operation="render",outcome="success"\} 1/);
   } finally {
     state.db.close();
     rmSync(state.directory, {recursive: true, force: true});
