@@ -18,5 +18,5 @@ jobs:
           node-version: '24'
           package-manager-cache: false
       - run: npm ci --strict-allow-scripts=true --no-audit --no-fund
-      - run: node --test tests/integration/observability.test.mjs
+      - run: node --test tests/integration/observability.test.mjs tests/integration/render-worker.test.mjs
       - run: npm run lint
