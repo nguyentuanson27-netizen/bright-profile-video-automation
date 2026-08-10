@@ -54,6 +54,21 @@ const projectOrThrow = (repositories, projectId) => {
   return project;
 };
 
+const sourceSummary = (sources) => sources.reduce((summary, source) => {
+  summary.total += 1;
+  if (Object.hasOwn(summary, source.retrievalStatus)) summary[source.retrievalStatus] += 1;
+  return summary;
+}, {total: 0, available: 0, unavailable: 0, failed: 0});
+
+const projectReadModel = (repositories, project) => {
+  const sources = repositories.sources.listByProject(project.id);
+  return {
+    project,
+    sourceSummary: sourceSummary(sources),
+    latestJob: repositories.jobs.latestByProject(project.id),
+  };
+};
+
 const decodeId = (value, code, message) => {
   try {
     return decodeURIComponent(value);
@@ -116,7 +131,7 @@ export function createHttpHandler({
   requestIdGenerator = randomUUID,
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
 }) {
-  if (!repositories?.projects || !repositories?.sources || !repositories?.revisions) {
+  if (!repositories?.projects || !repositories?.sources || !repositories?.revisions || !repositories?.jobs) {
     throw new TypeError('HTTP repositories are required');
   }
   if (!researchService) throw new TypeError('researchService is required');
@@ -131,8 +146,24 @@ export function createHttpHandler({
         return;
       }
 
+      if (req.method === 'GET' && url.pathname === '/api/projects') {
+        const projects = repositories.projects.list({limit: 100}).map((project) => projectReadModel(repositories, project));
+        json(res, 200, {projects}, requestId);
+        return;
+      }
+
       if (req.method === 'POST' && url.pathname === '/api/projects') {
-        json(res, 201, researchService.createProject(await readJsonBody(req, maxBodyBytes)), requestId);
+        if (typeof researchService.createAndEnqueueResearch !== 'function') {
+          throw new AppError('FEATURE_NOT_READY', 'Automatic research queueing is not configured', {status: 503, retryable: true});
+        }
+        json(res, 201, researchService.createAndEnqueueResearch(await readJsonBody(req, maxBodyBytes)), requestId);
+        return;
+      }
+
+      const statusProjectId = routeProjectId(url.pathname, 'status');
+      if (req.method === 'GET' && statusProjectId) {
+        const project = projectOrThrow(repositories, statusProjectId);
+        json(res, 200, projectReadModel(repositories, project), requestId);
         return;
       }
 
