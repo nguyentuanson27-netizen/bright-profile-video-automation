@@ -76,14 +76,14 @@ const mapRevision = (row) => row ? {
   updatedAt: row.updated_at,
 } : null;
 
-const mapArtifact = (row) => ({
+const mapArtifact = (row) => row ? {
   id: row.id,
   projectId: row.project_id,
   kind: row.kind,
   relativePath: row.relative_path,
   contentHash: row.content_hash,
   createdAt: row.created_at,
-});
+} : null;
 
 const mapJob = (row) => row ? {
   id: row.id,
@@ -143,7 +143,9 @@ export function createRepositories(db) {
   const insertArtifact = db.prepare(`
     INSERT INTO artifacts (id, project_id, kind, relative_path, content_hash, created_at)
     VALUES (@id, @projectId, @kind, @relativePath, @contentHash, @now)
+    ON CONFLICT(id) DO NOTHING
   `);
+  const getArtifact = db.prepare('SELECT * FROM artifacts WHERE id = ?');
   const listArtifacts = db.prepare('SELECT * FROM artifacts WHERE project_id = ? ORDER BY created_at, id');
 
   const insertJob = db.prepare(`
@@ -248,7 +250,20 @@ export function createRepositories(db) {
       create({id, projectId, kind, relativePath, contentHash = null}) {
         const now = timestamp();
         insertArtifact.run({id, projectId, kind, relativePath, contentHash, now});
-        return {id, projectId, kind, relativePath, contentHash, createdAt: now};
+        const stored = mapArtifact(getArtifact.get(id));
+        const matches = stored
+          && stored.projectId === projectId
+          && stored.kind === kind
+          && stored.relativePath === relativePath
+          && stored.contentHash === contentHash;
+        if (!matches) {
+          throw new AppError(
+            'ARTIFACT_ID_CONFLICT',
+            'Artifact ID already exists with different immutable metadata',
+            {status: 409},
+          );
+        }
+        return stored;
       },
       listByProject(projectId) {
         return listArtifacts.all(projectId).map(mapArtifact);
