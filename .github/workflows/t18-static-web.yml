@@ -1,4 +1,4 @@
-name: T18 Static Web Verification
+name: T18 Standalone Deployment Verification
 
 on:
   push:
@@ -18,5 +18,5 @@ jobs:
           node-version: '24'
           package-manager-cache: false
       - run: npm ci --strict-allow-scripts=true --no-audit --no-fund
-      - run: node --test tests/integration/standalone-web.test.mjs
+      - run: node --test tests/integration/standalone-web.test.mjs tests/integration/deployment-config.test.mjs
       - run: npm run lint
