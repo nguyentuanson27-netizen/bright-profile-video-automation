@@ -1,7 +1,9 @@
 import {randomUUID} from 'node:crypto';
 import {createReadStream} from 'node:fs';
 import {stat} from 'node:fs/promises';
+import {performance} from 'node:perf_hooks';
 import {AppError} from '../../domain/errors.mjs';
+import {handleOperationsRoute} from '../operations.mjs';
 
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
 
@@ -106,6 +108,16 @@ const routeRevisionIds = (pathname) => {
   };
 };
 
+const requestProjectId = (pathname) => {
+  const match = pathname.match(/^\/api\/projects\/([^/]+)/);
+  if (!match) return undefined;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return undefined;
+  }
+};
+
 const serviceOrThrow = (service, name) => {
   if (!service) throw new AppError('FEATURE_NOT_READY', `${name} is not configured`, {status: 503, retryable: true});
   return service;
@@ -182,6 +194,8 @@ export function createHttpHandler({
   renderService,
   artifactStore,
   videoProbe,
+  healthService,
+  observability,
   requestIdGenerator = randomUUID,
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
 }) {
@@ -192,13 +206,20 @@ export function createHttpHandler({
 
   return async (req, res) => {
     const requestId = requestIdGenerator();
+    const started = performance.now();
     try {
       const url = new URL(req.url || '/', 'http://localhost');
+      const projectId = requestProjectId(url.pathname);
+      res.once('finish', () => observability?.log?.('http.request', {
+        requestId,
+        projectId,
+        method: req.method,
+        path: url.pathname,
+        status: res.statusCode,
+        durationMs: Math.round(Math.max(0, performance.now() - started)),
+      }));
 
-      if (req.method === 'GET' && (url.pathname === '/health/live' || url.pathname === '/health')) {
-        json(res, 200, {ok: true}, requestId);
-        return;
-      }
+      if (await handleOperationsRoute({req, res, url, healthService, observability})) return;
 
       if (req.method === 'GET' && url.pathname === '/api/projects') {
         const projects = repositories.projects.list({limit: 100}).map((project) => projectReadModel(repositories, project));
