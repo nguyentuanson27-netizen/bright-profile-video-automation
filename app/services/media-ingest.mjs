@@ -49,12 +49,14 @@ export function createMediaIngestService({
   artifactStore,
   fetchMedia = defaultFetchMedia,
   maxMediaBytes = DEFAULT_MAX_MEDIA_BYTES,
+  diskGuard = null,
 }) {
   if (!repositories?.projects || !repositories?.revisions) throw new TypeError('media ingest repositories are required');
   if (!approvalService?.assertRenderAllowed) throw new TypeError('approvalService is required');
   if (!artifactStore?.writeMedia || !artifactStore?.writeManifest) throw new TypeError('artifactStore is required');
   if (typeof fetchMedia !== 'function') throw new TypeError('fetchMedia must be a function');
   if (!Number.isSafeInteger(maxMediaBytes) || maxMediaBytes < 1) throw new TypeError('maxMediaBytes is invalid');
+  if (diskGuard && typeof diskGuard.assertExpensiveWorkAllowed !== 'function') throw new TypeError('diskGuard is invalid');
 
   const buildPlan = ({approvedRevision, renderProject = approvedRevision?.payload?.generation?.project}) => {
     if (!approvedRevision || approvedRevision.status !== 'approved') {
@@ -91,6 +93,7 @@ export function createMediaIngestService({
           const artifactId = mediaIdFor(target.url);
           let artifact = artifactStore.get(projectId, artifactId);
           if (!artifact) {
+            await diskGuard?.assertExpensiveWorkAllowed('media_ingest');
             const response = await fetchMedia(target.url, {maxMediaBytes});
             if (!response || !Buffer.isBuffer(response.body)) {
               throw new AppError('MEDIA_RESPONSE_INVALID', 'Media fetch returned an invalid body', {status: 502});
