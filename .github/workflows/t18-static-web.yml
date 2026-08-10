@@ -44,7 +44,9 @@ jobs:
           Path('.ci-secrets/oauth2-proxy-cookie-secret').write_bytes(b'x' * 32)
           Path('.ci-secrets/google-tts.json').write_text('{}')
           PY
-          chmod 600 .ci-secrets/*
+          # Compose file-backed secrets are bind mounts. Keep the parent directory
+          # private while allowing non-root service users to read the mounted files.
+          chmod 444 .ci-secrets/*
       - name: Validate resolved Compose topology
         run: |
           docker compose config --format json > "$RUNNER_TEMP/bright-compose.json"
