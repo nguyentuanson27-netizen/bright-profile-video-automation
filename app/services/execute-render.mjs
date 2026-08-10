@@ -99,6 +99,7 @@ export function createRenderExecutionService({
   renderProfile = renderBrightProfile,
   probeDuration = defaultProbeDuration,
   trustedAssetServerFactory = createTrustedAssetServer,
+  observability = null,
 }) {
   if (!repositories?.projects || !repositories?.revisions || !repositories?.artifacts) {
     throw new TypeError('render repositories are required');
@@ -109,6 +110,10 @@ export function createRenderExecutionService({
   if (!artifactStore?.get || !artifactStore?.writeGenerated) throw new TypeError('artifactStore is required');
   if (!path.isAbsolute(dataDir)) throw new TypeError('render dataDir must be absolute');
   if (typeof trustedAssetServerFactory !== 'function') throw new TypeError('trustedAssetServerFactory must be a function');
+
+  const observeProvider = ({provider, operation, run}) => observability?.observeProvider
+    ? observability.observeProvider({provider, operation, run})
+    : run();
 
   const loadApprovedManifest = async (job) => {
     const match = String(job.id).match(RENDER_JOB_PATTERN);
@@ -133,10 +138,14 @@ export function createRenderExecutionService({
     let artifact = artifactStore.get(job.projectId, id);
     if (!artifact) {
       const output = path.join(workDir, 'voice.mp3');
-      await withHeartbeat(() => generateTts({
-        manifest: {duration: manifest.renderProject.duration, chunks},
-        output,
-        workDir,
+      await withHeartbeat(() => observeProvider({
+        provider: 'google-tts',
+        operation: 'tts',
+        run: () => generateTts({
+          manifest: {duration: manifest.renderProject.duration, chunks},
+          output,
+          workDir,
+        }),
       }), heartbeat);
       const body = await readFile(output);
       if (body.length === 0) throw new AppError('TTS_OUTPUT_INVALID', 'Generated TTS audio is empty', {status: 500});
@@ -210,11 +219,15 @@ export function createRenderExecutionService({
           await trustedAssets.start();
           try {
             const inputProps = renderInputFromManifest({manifest, trustedAssets, audioArtifact});
-            await withHeartbeat(() => renderProfile({
-              inputProps,
-              outputLocation,
-              scale: manifest.renderProject.renderScale || 1,
-              crf: manifest.renderProject.crf || 20,
+            await withHeartbeat(() => observeProvider({
+              provider: 'remotion',
+              operation: 'render',
+              run: () => renderProfile({
+                inputProps,
+                outputLocation,
+                scale: manifest.renderProject.renderScale || 1,
+                crf: manifest.renderProject.crf || 20,
+              }),
             }), heartbeat);
           } finally {
             await trustedAssets.close();
