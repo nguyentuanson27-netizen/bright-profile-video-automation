@@ -16,10 +16,12 @@ import {createOpenAiResearchProvider} from './providers/research/openai.mjs';
 import {createArtifactStore} from './storage/artifacts.mjs';
 import {createRepositories, migrateDatabase, openDatabase} from './storage/db.mjs';
 import {createJobStore} from './storage/jobs.mjs';
+import {createDiskGuard} from './storage/lifecycle.mjs';
 import {createProjectStateStore} from './storage/project-state.mjs';
 import {createWorkerHandlers} from './worker/handlers.mjs';
 import {createJobRunner} from './worker/job-runner.mjs';
 
+const GIB = 1024 ** 3;
 const listen = (server, port) => new Promise((resolve, reject) => {
   const onError = (error) => {
     server.off('listening', onListening);
@@ -48,7 +50,16 @@ migrateDatabase(db);
 
 const repositories = createRepositories(db);
 const jobStore = createJobStore(db);
-const observability = createObservability({queueStats: () => jobStore.stats()});
+const diskGuard = createDiskGuard({
+  dataDir: config.dataDir,
+  warningFreePercent: config.diskWarningFreePercent,
+  hardFreePercent: config.diskHardFreePercent,
+  hardFreeBytes: config.diskHardFreeGiB * GIB,
+});
+const observability = createObservability({
+  queueStats: () => jobStore.stats(),
+  diskStatus: () => diskGuard.inspect(),
+});
 const healthService = createHealthService({db, dataDir: config.dataDir});
 const projectStateStore = createProjectStateStore(db);
 const rawResearchProvider = createOpenAiResearchProvider();
@@ -71,7 +82,7 @@ const researchService = createResearchProjectService({repositories, projectState
 const generationService = createGenerationProjectService({repositories, projectStateStore, generationProvider});
 const approvalService = createApprovalService({repositories, projectStateStore});
 const artifactStore = createArtifactStore({dataDir: config.dataDir, repositories});
-const mediaIngestService = createMediaIngestService({repositories, approvalService, artifactStore});
+const mediaIngestService = createMediaIngestService({repositories, approvalService, artifactStore, diskGuard});
 const renderService = createRenderExecutionService({
   repositories,
   projectStateStore,
@@ -80,6 +91,7 @@ const renderService = createRenderExecutionService({
   artifactStore,
   dataDir: config.dataDir,
   observability,
+  diskGuard,
 });
 const handlers = createWorkerHandlers({researchService, generationService, renderService});
 
