@@ -112,7 +112,7 @@ export function createHttpHandler({
     try {
       const url = new URL(req.url || '/', 'http://localhost');
 
-      if (req.method === 'GET' && url.pathname === '/health/live') {
+      if (req.method === 'GET' && (url.pathname === '/health/live' || url.pathname === '/health')) {
         json(res, 200, {ok: true}, requestId);
         return;
       }
