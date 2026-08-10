@@ -27,18 +27,6 @@ export function createJobRunner({
       const job = jobStore.claimNext({workerId, now: clock(), leaseMs});
       if (!job) return null;
 
-      const handler = handlers[job.stage];
-      if (typeof handler !== 'function') {
-        return jobStore.fail({
-          jobId: job.id,
-          workerId,
-          now: clock(),
-          retryable: false,
-          errorCode: 'JOB_HANDLER_NOT_FOUND',
-          errorMessage: `No handler is registered for stage ${job.stage}`.slice(0, 2000),
-        });
-      }
-
       const started = performance.now();
       observability?.log?.('job.started', {
         workerId,
@@ -47,6 +35,41 @@ export function createJobRunner({
         stage: job.stage,
         attempt: job.attempt,
       });
+
+      const failAttempt = ({failedAt, retryable, retryAt = null, errorCode, errorMessage}) => {
+        const failed = jobStore.fail({
+          jobId: job.id,
+          workerId,
+          now: failedAt,
+          retryable,
+          retryAt,
+          errorCode,
+          errorMessage,
+        });
+        const durationSeconds = Math.max(0, performance.now() - started) / 1000;
+        observability?.observeStage?.({stage: job.stage, outcome: 'error', durationSeconds});
+        observability?.log?.('job.failed', {
+          workerId,
+          projectId: job.projectId,
+          jobId: job.id,
+          stage: job.stage,
+          attempt: job.attempt,
+          outcome: 'error',
+          errorCode,
+          durationMs: Math.round(durationSeconds * 1000),
+        });
+        return failed;
+      };
+
+      const handler = handlers[job.stage];
+      if (typeof handler !== 'function') {
+        return failAttempt({
+          failedAt: clock(),
+          retryable: false,
+          errorCode: 'JOB_HANDLER_NOT_FOUND',
+          errorMessage: `No handler is registered for stage ${job.stage}`.slice(0, 2000),
+        });
+      }
 
       try {
         await handler({
@@ -70,28 +93,13 @@ export function createJobRunner({
         const failedAt = clock();
         const retryable = isRetryableError(error);
         const delayMs = retryDelayMs(job.attempt, retryOptions);
-        const failed = jobStore.fail({
-          jobId: job.id,
-          workerId,
-          now: failedAt,
+        return failAttempt({
+          failedAt,
           retryable,
           retryAt: retryable ? new Date(failedAt.getTime() + delayMs) : null,
           errorCode: safeErrorCode(error),
           errorMessage: safeErrorMessage(error),
         });
-        const durationSeconds = Math.max(0, performance.now() - started) / 1000;
-        observability?.observeStage?.({stage: job.stage, outcome: 'error', durationSeconds});
-        observability?.log?.('job.failed', {
-          workerId,
-          projectId: job.projectId,
-          jobId: job.id,
-          stage: job.stage,
-          attempt: job.attempt,
-          outcome: 'error',
-          errorCode: safeErrorCode(error),
-          durationMs: Math.round(durationSeconds * 1000),
-        });
-        return failed;
       }
     },
   });
