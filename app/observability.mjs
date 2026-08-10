@@ -26,10 +26,12 @@ const safeLogFields = (fields) => {
 
 export function createObservability({
   queueStats = () => [],
+  diskStatus = null,
   logger = (event) => console.log(JSON.stringify(event)),
   clock = () => new Date(),
 } = {}) {
   if (typeof queueStats !== 'function') throw new TypeError('queueStats must be a function');
+  if (diskStatus !== null && typeof diskStatus !== 'function') throw new TypeError('diskStatus must be a function');
   if (typeof logger !== 'function') throw new TypeError('logger must be a function');
   const registry = new Registry();
 
@@ -62,6 +64,26 @@ export function createObservability({
       this.reset();
       for (const stat of queueStats()) this.set({stage: stageLabel(stat.stage)}, Number(stat.failed) || 0);
     },
+  });
+  const diskFreeBytes = new Gauge({
+    name: 'bright_disk_free_bytes',
+    help: 'Free bytes available on the configured data filesystem.',
+    registers: [registry],
+  });
+  const diskFreeRatio = new Gauge({
+    name: 'bright_disk_free_ratio',
+    help: 'Fraction of the configured data filesystem currently free.',
+    registers: [registry],
+  });
+  const diskWarning = new Gauge({
+    name: 'bright_disk_warning',
+    help: 'Whether free disk space is below the warning threshold (1 warning, 0 healthy).',
+    registers: [registry],
+  });
+  const diskBlocked = new Gauge({
+    name: 'bright_disk_blocked',
+    help: 'Whether expensive media work is blocked by the disk guard (1 blocked, 0 allowed).',
+    registers: [registry],
   });
   const stageDuration = new Histogram({
     name: 'bright_job_stage_duration_seconds',
@@ -98,6 +120,20 @@ export function createObservability({
     return record;
   };
 
+  const refreshDiskMetrics = async () => {
+    if (!diskStatus) return;
+    const status = await diskStatus();
+    const freeBytes = Number(status?.freeBytes);
+    const freePercent = Number(status?.freePercent);
+    if (!Number.isFinite(freeBytes) || freeBytes < 0 || !Number.isFinite(freePercent) || freePercent < 0 || freePercent > 100) {
+      throw new TypeError('diskStatus returned invalid capacity values');
+    }
+    diskFreeBytes.set(freeBytes);
+    diskFreeRatio.set(freePercent / 100);
+    diskWarning.set(status?.warning === true ? 1 : 0);
+    diskBlocked.set(status?.blocked === true ? 1 : 0);
+  };
+
   return Object.freeze({
     contentType: registry.contentType,
     log,
@@ -126,7 +162,8 @@ export function createObservability({
       }
     },
 
-    metrics() {
+    async metrics() {
+      await refreshDiskMetrics();
       return registry.metrics();
     },
   });
