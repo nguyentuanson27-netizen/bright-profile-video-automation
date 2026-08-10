@@ -1,0 +1,25 @@
+name: T05 URL Safety Verification
+
+on:
+  push:
+    branches:
+      - build/standalone-production-app
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Frozen install
+        run: npm ci --strict-allow-scripts=true --no-audit --no-fund
+      - name: URL policy abuse tests
+        run: node --test tests/unit/url-policy.test.mjs
+      - name: Lint
+        run: npm run lint
