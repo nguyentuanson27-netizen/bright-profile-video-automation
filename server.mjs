@@ -2,6 +2,8 @@ import http from 'node:http';
 import path from 'node:path';
 import {loadConfig} from './app/config.mjs';
 import {createHttpHandler} from './app/http/router.mjs';
+import {createObservability} from './app/observability.mjs';
+import {createHealthService} from './app/operations.mjs';
 import {createApprovalService} from './app/services/approve-project.mjs';
 import {createGenerationProjectService} from './app/services/generate-project.mjs';
 import {createMediaIngestService} from './app/services/media-ingest.mjs';
@@ -12,6 +14,7 @@ import {createOpenAiGenerationProvider} from './providers/generation/openai.mjs'
 import {createOpenAiResearchProvider} from './providers/research/openai.mjs';
 import {createArtifactStore} from './storage/artifacts.mjs';
 import {createRepositories, migrateDatabase, openDatabase} from './storage/db.mjs';
+import {createJobStore} from './storage/jobs.mjs';
 import {createProjectStateStore} from './storage/project-state.mjs';
 
 const config = loadConfig();
@@ -20,6 +23,9 @@ const db = openDatabase({filename: databasePath});
 migrateDatabase(db);
 
 const repositories = createRepositories(db);
+const jobStore = createJobStore(db);
+const observability = createObservability({queueStats: () => jobStore.stats()});
+const healthService = createHealthService({db, dataDir: config.dataDir});
 const projectStateStore = createProjectStateStore(db);
 const researchProvider = createOpenAiResearchProvider();
 const generationProvider = createOpenAiGenerationProvider();
@@ -45,6 +51,8 @@ const server = http.createServer(createHttpHandler({
   renderService,
   artifactStore,
   videoProbe: probeVideoDuration,
+  healthService,
+  observability,
   maxBodyBytes: config.maxBodyBytes,
 }));
 
@@ -57,7 +65,7 @@ const shutdown = () => {
       if (db.open) db.close();
     } finally {
       if (error) {
-        console.error(JSON.stringify({event: 'app.shutdown_failed'}));
+        observability.log('app.shutdown_failed');
         process.exitCode = 1;
       }
     }
@@ -68,5 +76,5 @@ process.once('SIGTERM', shutdown);
 process.once('SIGINT', shutdown);
 
 server.listen(config.port, '0.0.0.0', () => {
-  console.log(JSON.stringify({event: 'app.started', port: config.port, database: 'app.sqlite'}));
+  observability.log('app.started', {status: 'ready'});
 });
