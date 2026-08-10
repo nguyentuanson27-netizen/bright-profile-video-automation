@@ -15,6 +15,8 @@ backend network: oauth2-proxy -> app
 
 Only Caddy publishes host ports. `oauth2-proxy`, `app`, and `worker` stay on Compose-private networks. The worker has no public application port; its health/metrics endpoint on `4181` is internal only.
 
+Secrets follow least privilege: GitHub OAuth secrets are mounted only into `oauth2-proxy`; OpenAI and Google TTS provider credentials are mounted only into `worker`; `app` receives no provider credential because it only validates requests, serves the UI/API, and enqueues provider work.
+
 ## Prerequisites
 
 - Docker Engine with Docker Compose v2.
@@ -115,12 +117,26 @@ The public URL must redirect an unauthenticated browser through OAuth2 Proxy rat
 
 ## Operational checks
 
-- `docker compose port app 4180` should return no published binding.
-- `docker compose port worker 4181` should return no published binding.
-- `docker compose port oauth2-proxy 4182` should return no published binding.
-- `docker compose port caddy 443` should return the public TLS binding.
+Inspect actual Docker host bindings rather than treating an `EXPOSE`/Compose `expose` entry as a published port:
+
+```bash
+for service in app worker oauth2-proxy; do
+  container="$(docker compose ps -q "$service")"
+  docker inspect --format='{{json .HostConfig.PortBindings}}' "$container"
+done
+
+caddy_container="$(docker compose ps -q caddy)"
+docker inspect --format='{{json .HostConfig.PortBindings}}' "$caddy_container"
+```
+
+For `app`, `worker`, and `oauth2-proxy`, the host-binding map must be empty. Caddy must have host bindings for `80/tcp` and `443/tcp`.
+
+Additional checks:
+
 - App and worker must both read/write the shared `bright_data` volume.
 - App and worker container users must not be UID 0.
+- The app mount list must not contain `/run/secrets/openai_api_key` or Google TTS credentials.
+- The worker mount list must contain the OpenAI and Google TTS credential files as read-only mounts.
 - Monitor app and worker `/metrics` endpoints through private monitoring access only; do not add public Caddy routes for them.
 
 See `docs/operations/storage.md` for backup/cleanup and `docs/operations/observability.md` for health and metrics behavior.
