@@ -67,7 +67,7 @@ function createApprovedFixture() {
   const approved = approvalService.approve({
     projectId: 'project-1', revisionId: 'revision-1', approvedBy: 'operator',
   });
-  return {directory, dataDir, db, repositories, approvalService, approved};
+  return {directory, dataDir, db, repositories, projectStateStore, approvalService, approved};
 }
 
 test('approved remote media is ingested once with safe generated name and provenance manifest', async () => {
@@ -129,16 +129,16 @@ test('ingest rejects unapproved revision, unsupported MIME, oversized body, and 
       fetchMedia: async () => ({statusCode: 200, contentType: 'text/html', body: Buffer.from('123456')}),
     });
 
-    repositoriesDraft(fixture.repositories, fixture.projectStateStore);
-    await assert.rejects(
-      () => service.ingest({projectId: 'project-1', revisionId: 'revision-draft'}),
-      (error) => error instanceof AppError && error.code === 'APPROVED_REVISION_REQUIRED',
-    );
-
     await assert.rejects(
       () => service.ingest({projectId: 'project-1', revisionId: 'revision-1'}),
       (error) => error instanceof AppError
         && ['MEDIA_CONTENT_TYPE_REJECTED', 'MEDIA_BODY_TOO_LARGE'].includes(error.code),
+    );
+
+    repositoriesDraft(fixture.repositories, fixture.projectStateStore);
+    await assert.rejects(
+      () => service.ingest({projectId: 'project-1', revisionId: 'revision-draft'}),
+      (error) => error instanceof AppError && error.code === 'APPROVED_REVISION_REQUIRED',
     );
 
     const approvedPayload = fixture.repositories.revisions.get('revision-1').payload;
