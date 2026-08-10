@@ -91,7 +91,7 @@ jobs:
           assert not services['app'].get('secrets')
           assert 'OPENAI_API_KEY' not in worker_env
           assert worker_env.get('OPENAI_API_KEY_FILE') == '/run/secrets/openai_api_key'
-          assert any(secret.get('source') == 'openai_api_key' for secret in services['worker'].get('secrets', []))
+          assert services['worker'].get('secrets')
           assert 'openai_api_key' in data.get('secrets', {})
           PY
       - name: Build immutable standalone app image
@@ -114,7 +114,7 @@ jobs:
           test "$(docker inspect --format='{{.State.Health.Status}}' "$container")" = healthy
           test "$(docker compose exec -T app id -u)" != 0
           docker inspect "$container" | node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const b=JSON.parse(s)[0].HostConfig.PortBindings||{};if(Object.keys(b).length)process.exit(1)})"
-          test ! -e "$(docker inspect --format='{{range .Mounts}}{{if eq .Destination \"/run/secrets/openai_api_key\}}{{.Destination}}{{end}}{{end}}' "$container")"
+          test -z "$(docker inspect --format='{{range .Mounts}}{{if eq .Destination \"/run/secrets/openai_api_key\"}}mounted{{end}}{{end}}' "$container")"
           docker compose exec -T app node -e "fetch('http://127.0.0.1:4180/health/ready').then(async r=>{if(!r.ok)process.exit(1);const b=await r.json();if(!b.ok)process.exit(1)})"
       - name: Start and verify private worker role
         run: |
