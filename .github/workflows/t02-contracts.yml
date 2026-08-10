@@ -21,5 +21,7 @@ jobs:
         run: npm ci --strict-allow-scripts=true --no-audit --no-fund
       - name: Domain contract tests
         run: node --test tests/unit/domain.test.mjs
+      - name: Full test suite
+        run: npm test
       - name: Lint
         run: npm run lint
