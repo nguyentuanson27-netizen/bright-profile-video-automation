@@ -17,6 +17,7 @@ export default [
         fetch: 'readonly',
         process: 'readonly',
         setImmediate: 'readonly',
+        setTimeout: 'readonly',
       },
     },
     rules: {

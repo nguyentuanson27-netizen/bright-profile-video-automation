@@ -24,5 +24,10 @@
   },
   "devDependencies": {
     "eslint": "10.8.0"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.1": true,
+    "esbuild@0.28.1": true,
+    "protobufjs@7.6.5": true
   }
 }

@@ -20,7 +20,7 @@ jobs:
       - name: Refresh lockfile from pinned package.json
         run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
       - name: Frozen install
-        run: npm ci --no-audit --no-fund
+        run: npm ci --strict-allow-scripts=true --no-audit --no-fund
       - name: Unit tests
         run: npm test
       - name: Lint
