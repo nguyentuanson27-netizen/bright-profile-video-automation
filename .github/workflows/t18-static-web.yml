@@ -67,26 +67,52 @@ jobs:
           PY
       - name: Build immutable standalone app image
         run: docker compose build app
-      - name: Start private app and worker roles
+      - name: Probe non-root runtime image and shared data volume
         run: |
-          docker compose up -d app worker
-          docker compose ps
-          for service in app worker; do
-            container="$(docker compose ps -q "$service")"
-            test -n "$container"
-            for attempt in $(seq 1 60); do
-              status="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container")"
-              if [ "$status" = healthy ]; then break; fi
-              if [ "$status" = unhealthy ]; then docker compose logs "$service"; exit 1; fi
-              sleep 2
-            done
-            test "$(docker inspect --format='{{.State.Health.Status}}' "$container")" = healthy
-            test "$(docker compose exec -T "$service" id -u)" != 0
+          docker run --rm --entrypoint node "$BRIGHT_IMAGE" -e "const fs=require('node:fs'); if(process.getuid()===0)process.exit(1); if(!fs.existsSync('/app/dist/web/index.html'))process.exit(1)"
+          docker compose run --rm --no-deps --entrypoint node app -e "const fs=require('node:fs'); fs.writeFileSync('/app/data/ci-volume-probe','probe'); if(fs.readFileSync('/app/data/ci-volume-probe','utf8')!=='probe')process.exit(1)"
+      - name: Start and verify private app role
+        run: |
+          docker compose up -d --no-deps app
+          container="$(docker compose ps -q app)"
+          test -n "$container"
+          for attempt in $(seq 1 60); do
+            status="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container")"
+            if [ "$status" = healthy ]; then break; fi
+            if [ "$status" = unhealthy ]; then exit 1; fi
+            sleep 2
           done
+          test "$(docker inspect --format='{{.State.Health.Status}}' "$container")" = healthy
+          test "$(docker compose exec -T app id -u)" != 0
           test -z "$(docker compose port app 4180 2>/dev/null || true)"
+          docker compose exec -T app node -e "fetch('http://127.0.0.1:4180/health/ready').then(async r=>{if(!r.ok)process.exit(1);const b=await r.json();if(!b.ok)process.exit(1)})"
+      - name: Start and verify private worker role
+        run: |
+          docker compose up -d worker
+          container="$(docker compose ps -q worker)"
+          test -n "$container"
+          for attempt in $(seq 1 60); do
+            status="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container")"
+            if [ "$status" = healthy ]; then break; fi
+            if [ "$status" = unhealthy ]; then exit 1; fi
+            sleep 2
+          done
+          test "$(docker inspect --format='{{.State.Health.Status}}' "$container")" = healthy
+          test "$(docker compose exec -T worker id -u)" != 0
           test -z "$(docker compose port worker 4181 2>/dev/null || true)"
+          docker compose exec -T worker node -e "fetch('http://127.0.0.1:4181/health/ready').then(async r=>{if(!r.ok)process.exit(1);const b=await r.json();if(!b.ok)process.exit(1)})"
           docker compose exec -T app node -e "require('node:fs').writeFileSync('/app/data/ci-shared-volume','shared')"
           docker compose exec -T worker node -e "if(require('node:fs').readFileSync('/app/data/ci-shared-volume','utf8')!=='shared')process.exit(1)"
+      - name: Diagnose private service startup
+        if: failure()
+        run: |
+          docker compose ps -a || true
+          docker compose logs --no-color app worker || true
+          for service in app worker; do
+            container="$(docker compose ps -aq "$service" 2>/dev/null || true)"
+            if [ -z "$container" ]; then continue; fi
+            docker inspect --format='service='"$service"' name={{.Name}} user={{.Config.User}} status={{.State.Status}} exit={{.State.ExitCode}} error={{json .State.Error}} health={{json .State.Health}} mounts={{range .Mounts}}{{.Destination}}={{.Source}}:rw={{.RW}} {{end}}' "$container" || true
+          done
       - name: Start authenticated edge and verify unauthenticated isolation
         run: |
           docker compose up -d
