@@ -46,14 +46,20 @@ test('compose defines authenticated standalone topology with only Caddy publishi
   assert.match(oauth, /client-secret-file|CLIENT_SECRET_FILE/);
   assert.match(oauth, /cookie-secret-file|COOKIE_SECRET_FILE/);
 
-  for (const block of [app, worker]) {
-    assert.match(block, /OPENAI_API_KEY_FILE:\s*\/run\/secrets\/openai_api_key/);
-    assert.match(block, /\n    secrets:\n[\s\S]*- openai_api_key/);
-    assert.doesNotMatch(block, /OPENAI_API_KEY:\s/);
-  }
+  assert.doesNotMatch(app, /OPENAI_API_KEY(?:_FILE)?:/);
+  assert.doesNotMatch(app, /\n    secrets:\n[\s\S]*- openai_api_key/);
+  assert.match(worker, /OPENAI_API_KEY_FILE:\s*\/run\/secrets\/openai_api_key/);
+  assert.match(worker, /\n    secrets:\n[\s\S]*- openai_api_key/);
+  assert.doesNotMatch(worker, /OPENAI_API_KEY:\s/);
 
   assert.match(compose, /^volumes:\n[\s\S]*bright_data:/m);
   assert.match(compose, /^secrets:\n[\s\S]*openai_api_key:/m);
+});
+
+test('app composition does not load OpenAI providers or require provider credentials', () => {
+  const server = read('server.mjs');
+  assert.doesNotMatch(server, /providers\/(?:research|generation)\/openai\.mjs/);
+  assert.doesNotMatch(server, /createOpenAi(?:Research|Generation)Provider/);
 });
 
 test('Caddy is the only public edge and proxies exclusively to oauth2-proxy', () => {
