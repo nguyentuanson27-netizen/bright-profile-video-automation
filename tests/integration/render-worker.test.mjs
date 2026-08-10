@@ -58,7 +58,7 @@ function fixture() {
   return {directory, dataDir, db, repositories, projectStateStore, approvalService, artifactStore, mediaIngestService};
 }
 
-const createFakeRenderService = (state, calls = [], observability = null) => createRenderExecutionService({
+const createFakeRenderService = (state, calls = [], observability = null, diskGuard = null) => createRenderExecutionService({
   repositories: state.repositories,
   projectStateStore: state.projectStateStore,
   approvalService: state.approvalService,
@@ -66,6 +66,7 @@ const createFakeRenderService = (state, calls = [], observability = null) => cre
   artifactStore: state.artifactStore,
   dataDir: state.dataDir,
   observability,
+  diskGuard,
   generateTts: async ({output}) => {
     calls.push('tts');
     writeFileSync(output, Buffer.from('fake-audio'));
@@ -132,6 +133,41 @@ test('render execution records TTS and Remotion provider metrics through product
     const metrics = await observability.metrics();
     assert.match(metrics, /bright_provider_duration_seconds_count\{provider="google-tts",operation="tts",outcome="success"\} 1/);
     assert.match(metrics, /bright_provider_duration_seconds_count\{provider="remotion",operation="render",outcome="success"\} 1/);
+  } finally {
+    state.db.close();
+    rmSync(state.directory, {recursive: true, force: true});
+  }
+});
+
+test('low disk is rechecked before TTS and again before Remotion render', async () => {
+  const state = fixture();
+  try {
+    const calls = [];
+    const stages = [];
+    const diskGuard = {
+      async assertExpensiveWorkAllowed(stage) {
+        stages.push(stage);
+        if (stage === 'rendering') {
+          throw new AppError('DISK_SPACE_LOW', 'Disk guard blocked render', {status: 507, retryable: true});
+        }
+        return {blocked: false};
+      },
+    };
+    const renderService = createFakeRenderService(state, calls, null, diskGuard);
+    await renderService.enqueue({projectId: 'project-1', revisionId: 'revision-1', maxAttempts: 1});
+    const runner = createJobRunner({
+      jobStore: createJobStore(state.db),
+      workerId: 'worker-disk-guard',
+      handlers: {rendering: renderService.handleJob},
+      leaseMs: 60_000,
+    });
+
+    const failed = await runner.runOnce();
+    assert.equal(failed.status, 'failed');
+    assert.equal(failed.errorCode, 'DISK_SPACE_LOW');
+    assert.deepEqual(stages, ['tts', 'rendering']);
+    assert.deepEqual(calls, ['tts']);
+    assert.equal(state.repositories.artifacts.listByProject('project-1').some((artifact) => artifact.kind === 'rendered-video'), false);
   } finally {
     state.db.close();
     rmSync(state.directory, {recursive: true, force: true});
