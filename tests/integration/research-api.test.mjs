@@ -10,6 +10,7 @@ import {createResearchProjectService} from '../../app/services/research-project.
 import {createResearchProvider} from '../../providers/research/index.mjs';
 import {createRepositories, migrateDatabase, openDatabase} from '../../storage/db.mjs';
 import {createJobStore} from '../../storage/jobs.mjs';
+import {createProjectStateStore} from '../../storage/project-state.mjs';
 import {createJobRunner} from '../../worker/job-runner.mjs';
 
 const listen = (server) => new Promise((resolve, reject) => {
@@ -29,7 +30,13 @@ const createFixture = () => {
   const databasePath = path.join(directory, 'app.sqlite');
   const db = openDatabase({filename: databasePath});
   migrateDatabase(db);
-  return {directory, databasePath, db, repositories: createRepositories(db)};
+  return {
+    directory,
+    databasePath,
+    db,
+    repositories: createRepositories(db),
+    projectStateStore: createProjectStateStore(db),
+  };
 };
 
 const startApi = async ({repositories, researchService, requestIds}) => {
@@ -46,6 +53,7 @@ test('topic project can be created, researched durably, normalized, and read aft
   const fixture = createFixture();
   let api;
   let restarted;
+  let reopenedDb;
   try {
     const researchProvider = createResearchProvider({
       search: async () => ({
@@ -70,6 +78,7 @@ test('topic project can be created, researched durably, normalized, and read aft
     const fetchedUrls = [];
     const researchService = createResearchProjectService({
       repositories: fixture.repositories,
+      projectStateStore: fixture.projectStateStore,
       researchProvider,
       fetchSource: async (url) => {
         fetchedUrls.push(url);
@@ -146,7 +155,7 @@ test('topic project can be created, researched durably, normalized, and read aft
     api = null;
     fixture.db.close();
 
-    const reopenedDb = openDatabase({filename: fixture.databasePath});
+    reopenedDb = openDatabase({filename: fixture.databasePath});
     const reopenedRepositories = createRepositories(reopenedDb);
     restarted = await startApi({
       repositories: reopenedRepositories,
@@ -159,10 +168,10 @@ test('topic project can be created, researched durably, normalized, and read aft
     assert.equal(persisted.id, 'project-1');
     assert.equal(persisted.status, 'research_ready');
     assert.equal(persisted.input.sourceUrls[0], 'https://operator.example/public');
-    reopenedDb.close();
   } finally {
     if (api) await close(api.server);
     if (restarted) await close(restarted.server);
+    if (reopenedDb?.open) reopenedDb.close();
     if (fixture.db.open) fixture.db.close();
     rmSync(fixture.directory, {recursive: true, force: true});
   }
@@ -174,6 +183,7 @@ test('API returns stable JSON errors with request ID for invalid project input a
   try {
     const researchService = createResearchProjectService({
       repositories: fixture.repositories,
+      projectStateStore: fixture.projectStateStore,
       researchProvider: createResearchProvider({search: async () => ({candidates: []})}),
       fetchSource: async () => { throw new Error('not used'); },
       projectIdGenerator: () => 'project-1',
