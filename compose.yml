@@ -1,25 +1,6 @@
-services:
-  caddy:
-    image: caddy:2.11.4-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    environment:
-      APP_DOMAIN: ${APP_DOMAIN:?set APP_DOMAIN}
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      oauth2-proxy:
-        condition: service_healthy
-    networks:
-      edge:
-        ipv4_address: ${CADDY_EDGE_IP:-172.30.0.10}
-    cpus: 0.5
-    mem_limit: 256m
+name: bright-standalone
 
+services:
   oauth2-proxy:
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3
     restart: unless-stopped
@@ -37,7 +18,7 @@ services:
       OAUTH2_PROXY_COOKIE_SECURE: "true"
       OAUTH2_PROXY_COOKIE_SAMESITE: lax
       OAUTH2_PROXY_REVERSE_PROXY: "true"
-      OAUTH2_PROXY_TRUSTED_PROXY_IPS: ${CADDY_EDGE_IP:-172.30.0.10}/32
+      OAUTH2_PROXY_TRUSTED_PROXY_IPS: ${BRIGHT_EDGE_CIDR:?set BRIGHT_EDGE_CIDR}
       OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
       OAUTH2_PROXY_PASS_BASIC_AUTH: "false"
       OAUTH2_PROXY_PASS_USER_HEADERS: "false"
@@ -56,8 +37,10 @@ services:
       retries: 3
       start_period: 10s
     networks:
-      - edge
-      - backend
+      edge:
+        aliases:
+          - bright-standalone-oauth2-proxy
+      backend:
     cpus: 0.5
     mem_limit: 256m
 
@@ -137,15 +120,12 @@ services:
 
 networks:
   edge:
-    ipam:
-      config:
-        - subnet: ${BRIGHT_EDGE_SUBNET:-172.30.0.0/24}
+    external: true
+    name: ${BRIGHT_EDGE_NETWORK:?set BRIGHT_EDGE_NETWORK}
   backend:
 
 volumes:
   bright_data:
-  caddy_data:
-  caddy_config:
 
 secrets:
   openai_api_key:
