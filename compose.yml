@@ -1,25 +1,161 @@
 services:
-  bright-profile-api:
-    image: bright-profile:0.3.1
-    container_name: bright-profile-api
+  caddy:
+    image: caddy:2.11.4-alpine
     restart: unless-stopped
-    env_file:
-      - /srv/bright-profile/.env
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?set APP_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      oauth2-proxy:
+        condition: service_healthy
+    networks:
+      edge:
+        ipv4_address: ${CADDY_EDGE_IP:-172.30.0.10}
+    cpus: 0.5
+    mem_limit: 256m
+
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.3
+    restart: unless-stopped
+    environment:
+      OAUTH2_PROXY_PROVIDER: github
+      OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4182
+      OAUTH2_PROXY_UPSTREAMS: http://app:4180/
+      OAUTH2_PROXY_REDIRECT_URL: https://${APP_DOMAIN:?set APP_DOMAIN}/oauth2/callback
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_GITHUB_USERS: ${GITHUB_ALLOWED_USERS:?set GITHUB_ALLOWED_USERS}
+      OAUTH2_PROXY_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:?set GITHUB_OAUTH_CLIENT_ID}
+      OAUTH2_PROXY_CLIENT_SECRET_FILE: /run/secrets/github_oauth_client_secret
+      OAUTH2_PROXY_COOKIE_SECRET_FILE: /run/secrets/oauth2_proxy_cookie_secret
+      OAUTH2_PROXY_COOKIE_NAME: __Host-bright_profile
+      OAUTH2_PROXY_COOKIE_SECURE: "true"
+      OAUTH2_PROXY_COOKIE_SAMESITE: lax
+      OAUTH2_PROXY_REVERSE_PROXY: "true"
+      OAUTH2_PROXY_TRUSTED_PROXY_IPS: ${CADDY_EDGE_IP:-172.30.0.10}/32
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      OAUTH2_PROXY_PASS_BASIC_AUTH: "false"
+      OAUTH2_PROXY_PASS_USER_HEADERS: "false"
+      OAUTH2_PROXY_PASS_AUTHORIZATION_HEADER: "false"
+      OAUTH2_PROXY_SET_AUTHORIZATION_HEADER: "false"
+    secrets:
+      - github_oauth_client_secret
+      - oauth2_proxy_cookie_secret
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/bin/oauth2-proxy", "--config-test"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - edge
+      - backend
+    cpus: 0.5
+    mem_limit: 256m
+
+  app:
+    image: ${BRIGHT_IMAGE:?set BRIGHT_IMAGE to an immutable git-SHA tag or image digest}
+    build:
+      context: .
+    restart: unless-stopped
+    command: ["node", "server.mjs"]
     environment:
       PORT: 4180
       DATA_DIR: /app/data
-      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/google-tts.json
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
+      OPENAI_RESEARCH_MODEL: ${OPENAI_RESEARCH_MODEL:?set OPENAI_RESEARCH_MODEL}
+      OPENAI_GENERATION_MODEL: ${OPENAI_GENERATION_MODEL:?set OPENAI_GENERATION_MODEL}
+      OPENAI_TIMEOUT_MS: ${OPENAI_TIMEOUT_MS:-30000}
+      OPENAI_MAX_RETRIES: ${OPENAI_MAX_RETRIES:-2}
+      OPENAI_GENERATION_MAX_OUTPUT_TOKENS: ${OPENAI_GENERATION_MAX_OUTPUT_TOKENS:-12000}
+      COMPLETED_ARTIFACT_RETENTION_DAYS: ${COMPLETED_ARTIFACT_RETENTION_DAYS:-30}
+      TRANSIENT_ARTIFACT_RETENTION_DAYS: ${TRANSIENT_ARTIFACT_RETENTION_DAYS:-7}
+      DISK_WARNING_FREE_PERCENT: ${DISK_WARNING_FREE_PERCENT:-25}
+      DISK_HARD_FREE_PERCENT: ${DISK_HARD_FREE_PERCENT:-15}
+      DISK_HARD_FREE_GIB: ${DISK_HARD_FREE_GIB:-20}
+      ALLOW_PRIVATE_MEDIA_URLS: "false"
     volumes:
-      - /srv/bright-profile:/app/data
-      - /root/video_api/credentials/google-tts.json:/run/secrets/google-tts.json:ro
+      - bright_data:/app/data
     expose:
       - "4180"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4180/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - backend
+    cpus: 1.0
+    mem_limit: 2g
+
+  worker:
+    image: ${BRIGHT_IMAGE:?set BRIGHT_IMAGE to an immutable git-SHA tag or image digest}
+    restart: unless-stopped
+    command: ["node", "worker.mjs"]
+    environment:
+      WORKER_OPS_PORT: 4181
+      DATA_DIR: /app/data
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
+      OPENAI_RESEARCH_MODEL: ${OPENAI_RESEARCH_MODEL:?set OPENAI_RESEARCH_MODEL}
+      OPENAI_GENERATION_MODEL: ${OPENAI_GENERATION_MODEL:?set OPENAI_GENERATION_MODEL}
+      OPENAI_TIMEOUT_MS: ${OPENAI_TIMEOUT_MS:-30000}
+      OPENAI_MAX_RETRIES: ${OPENAI_MAX_RETRIES:-2}
+      OPENAI_GENERATION_MAX_OUTPUT_TOKENS: ${OPENAI_GENERATION_MAX_OUTPUT_TOKENS:-12000}
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/google_tts_credentials
+      GOOGLE_TTS_LANGUAGE: ${GOOGLE_TTS_LANGUAGE:-vi-VN}
+      GOOGLE_TTS_VOICE: ${GOOGLE_TTS_VOICE:-vi-VN-Neural2-D}
+      GOOGLE_TTS_SPEAKING_RATE: ${GOOGLE_TTS_SPEAKING_RATE:-1.03}
+      TTS_MAX_SPEED: ${TTS_MAX_SPEED:-1.35}
+      TTS_END_GAP_SECONDS: ${TTS_END_GAP_SECONDS:-0.18}
+      COMPLETED_ARTIFACT_RETENTION_DAYS: ${COMPLETED_ARTIFACT_RETENTION_DAYS:-30}
+      TRANSIENT_ARTIFACT_RETENTION_DAYS: ${TRANSIENT_ARTIFACT_RETENTION_DAYS:-7}
+      DISK_WARNING_FREE_PERCENT: ${DISK_WARNING_FREE_PERCENT:-25}
+      DISK_HARD_FREE_PERCENT: ${DISK_HARD_FREE_PERCENT:-15}
+      DISK_HARD_FREE_GIB: ${DISK_HARD_FREE_GIB:-20}
+      ALLOW_PRIVATE_MEDIA_URLS: "false"
+    volumes:
+      - bright_data:/app/data
+    secrets:
+      - google_tts_credentials
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4181/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - backend
     cpus: 3.0
     mem_limit: 6g
-    networks:
-      - n8n-network
 
 networks:
-  n8n-network:
-    external: true
-    name: n8n-docker_n8n-network
+  edge:
+    ipam:
+      config:
+        - subnet: ${BRIGHT_EDGE_SUBNET:-172.30.0.0/24}
+  backend:
+
+volumes:
+  bright_data:
+  caddy_data:
+  caddy_config:
+
+secrets:
+  github_oauth_client_secret:
+    file: ${GITHUB_OAUTH_CLIENT_SECRET_FILE:?set GITHUB_OAUTH_CLIENT_SECRET_FILE}
+  oauth2_proxy_cookie_secret:
+    file: ${OAUTH2_PROXY_COOKIE_SECRET_FILE:?set OAUTH2_PROXY_COOKIE_SECRET_FILE}
+  google_tts_credentials:
+    file: ${GOOGLE_TTS_CREDENTIALS_FILE:?set GOOGLE_TTS_CREDENTIALS_FILE}
