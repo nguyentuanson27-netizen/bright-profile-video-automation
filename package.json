@@ -9,6 +9,8 @@
     "dev": "vite --config vite.config.mjs",
     "build": "vite build --config vite.config.mjs",
     "db:migrate": "node scripts/db-migrate.mjs",
+    "storage:cleanup": "node scripts/cleanup.mjs",
+    "storage:backup": "node scripts/backup.mjs",
     "render:smoke": "node scripts/render-smoke.mjs",
     "render:project": "node scripts/render-project.mjs"
   },
