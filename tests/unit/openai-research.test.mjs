@@ -143,7 +143,12 @@ test('OpenAI research config validates required env without echoing secret value
     OPENAI_RESEARCH_MODEL: 'gpt-5-2026-08-07',
     OPENAI_TIMEOUT_MS: '30000',
     OPENAI_MAX_RETRIES: '2',
-  }), config);
+  }), {
+    apiKey: 'secret-key',
+    model: 'gpt-5-2026-08-07',
+    timeoutMs: 30_000,
+    maxRetries: 2,
+  });
 
   assert.throws(
     () => loadOpenAiResearchConfig({OPENAI_API_KEY: 'secret-key'}),
