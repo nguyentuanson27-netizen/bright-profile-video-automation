@@ -2,6 +2,7 @@ import http from 'node:http';
 import path from 'node:path';
 import {loadConfig} from './app/config.mjs';
 import {createHttpHandler} from './app/http/router.mjs';
+import {createStandaloneHandler} from './app/http/standalone.mjs';
 import {createObservability} from './app/observability.mjs';
 import {createHealthService} from './app/operations.mjs';
 import {createApprovalService} from './app/services/approve-project.mjs';
@@ -55,7 +56,7 @@ const renderService = createRenderExecutionService({
   diskGuard,
 });
 
-const server = http.createServer(createHttpHandler({
+const apiHandler = createHttpHandler({
   repositories,
   researchService,
   generationService,
@@ -66,6 +67,10 @@ const server = http.createServer(createHttpHandler({
   healthService,
   observability,
   maxBodyBytes: config.maxBodyBytes,
+});
+const server = http.createServer(createStandaloneHandler({
+  apiHandler,
+  webRoot: path.resolve('dist', 'web'),
 }));
 
 let shuttingDown = false;
