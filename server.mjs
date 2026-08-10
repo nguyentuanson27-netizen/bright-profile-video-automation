@@ -15,8 +15,10 @@ import {createOpenAiResearchProvider} from './providers/research/openai.mjs';
 import {createArtifactStore} from './storage/artifacts.mjs';
 import {createRepositories, migrateDatabase, openDatabase} from './storage/db.mjs';
 import {createJobStore} from './storage/jobs.mjs';
+import {createDiskGuard} from './storage/lifecycle.mjs';
 import {createProjectStateStore} from './storage/project-state.mjs';
 
+const GIB = 1024 ** 3;
 const config = loadConfig();
 const databasePath = path.join(config.dataDir, 'app.sqlite');
 const db = openDatabase({filename: databasePath});
@@ -24,7 +26,16 @@ migrateDatabase(db);
 
 const repositories = createRepositories(db);
 const jobStore = createJobStore(db);
-const observability = createObservability({queueStats: () => jobStore.stats()});
+const diskGuard = createDiskGuard({
+  dataDir: config.dataDir,
+  warningFreePercent: config.diskWarningFreePercent,
+  hardFreePercent: config.diskHardFreePercent,
+  hardFreeBytes: config.diskHardFreeGiB * GIB,
+});
+const observability = createObservability({
+  queueStats: () => jobStore.stats(),
+  diskStatus: () => diskGuard.inspect(),
+});
 const healthService = createHealthService({db, dataDir: config.dataDir});
 const projectStateStore = createProjectStateStore(db);
 const researchProvider = createOpenAiResearchProvider();
@@ -33,7 +44,7 @@ const researchService = createResearchProjectService({repositories, projectState
 const generationService = createGenerationProjectService({repositories, projectStateStore, generationProvider});
 const approvalService = createApprovalService({repositories, projectStateStore});
 const artifactStore = createArtifactStore({dataDir: config.dataDir, repositories});
-const mediaIngestService = createMediaIngestService({repositories, approvalService, artifactStore});
+const mediaIngestService = createMediaIngestService({repositories, approvalService, artifactStore, diskGuard});
 const renderService = createRenderExecutionService({
   repositories,
   projectStateStore,
@@ -41,6 +52,7 @@ const renderService = createRenderExecutionService({
   mediaIngestService,
   artifactStore,
   dataDir: config.dataDir,
+  diskGuard,
 });
 
 const server = http.createServer(createHttpHandler({
