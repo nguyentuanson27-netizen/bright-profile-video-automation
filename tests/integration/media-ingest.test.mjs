@@ -154,6 +154,31 @@ test('ingest rejects unapproved revision, unsupported MIME, oversized body, and 
   }
 });
 
+test('interrupted media fetch leaves no partial artifact metadata or media file', async () => {
+  const fixture = createApprovedFixture();
+  try {
+    const artifactStore = createArtifactStore({dataDir: fixture.dataDir, repositories: fixture.repositories});
+    const service = createMediaIngestService({
+      repositories: fixture.repositories,
+      approvalService: fixture.approvalService,
+      artifactStore,
+      fetchMedia: async () => {
+        throw new AppError('FETCH_NETWORK_ERROR', 'Remote fetch failed', {status: 502, retryable: true});
+      },
+    });
+
+    await assert.rejects(
+      () => service.ingest({projectId: 'project-1', revisionId: 'revision-1'}),
+      (error) => error instanceof AppError && error.code === 'FETCH_NETWORK_ERROR',
+    );
+    assert.deepEqual(fixture.repositories.artifacts.listByProject('project-1'), []);
+    assert.equal(existsSync(path.join(fixture.dataDir, 'projects', 'project-1', 'media')), false);
+  } finally {
+    fixture.db.close();
+    rmSync(fixture.directory, {recursive: true, force: true});
+  }
+});
+
 function repositoriesDraft(repositories, projectStateStore) {
   const approved = repositories.revisions.get('revision-1');
   projectStateStore.setStatus({projectId: 'project-1', status: 'review_required'});
