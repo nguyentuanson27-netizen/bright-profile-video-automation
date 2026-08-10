@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test": "node --test",
+    "lint": "eslint .",
     "render:smoke": "node scripts/render-smoke.mjs",
     "render:project": "node scripts/render-project.mjs"
   },
@@ -12,8 +14,15 @@
     "@remotion/bundler": "4.0.484",
     "@remotion/renderer": "4.0.484",
     "@remotion/transitions": "4.0.484",
+    "ajv": "8.20.0",
+    "better-sqlite3": "13.0.1",
+    "openai": "6.49.0",
+    "prom-client": "15.1.3",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "remotion": "4.0.484"
+  },
+  "devDependencies": {
+    "eslint": "10.8.0"
   }
 }
