@@ -107,6 +107,7 @@ export function createRepositories(db) {
     VALUES (@id, @topic, @status, @inputJson, @now, @now)
   `);
   const getProject = db.prepare('SELECT * FROM projects WHERE id = ?');
+  const listProjects = db.prepare('SELECT * FROM projects ORDER BY updated_at DESC, id DESC LIMIT ?');
 
   const upsertSource = db.prepare(`
     INSERT INTO sources (source_id, project_id, record_json, created_at, updated_at)
@@ -154,6 +155,9 @@ export function createRepositories(db) {
     ) VALUES (@id, @projectId, @stage, @status, 0, @maxAttempts, @runAfter, @now, @now)
   `);
   const getJob = db.prepare('SELECT * FROM jobs WHERE id = ?');
+  const latestJobByProject = db.prepare(`
+    SELECT * FROM jobs WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT 1
+  `);
 
   return Object.freeze({
     projects: Object.freeze({
@@ -164,6 +168,12 @@ export function createRepositories(db) {
       },
       get(id) {
         return mapProject(getProject.get(id));
+      },
+      list({limit = 100} = {}) {
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+          throw new AppError('PROJECT_LIST_LIMIT_INVALID', 'Project list limit is invalid', {status: 400});
+        }
+        return listProjects.all(limit).map(mapProject);
       },
     }),
 
@@ -278,6 +288,9 @@ export function createRepositories(db) {
       },
       get(id) {
         return mapJob(getJob.get(id));
+      },
+      latestByProject(projectId) {
+        return mapJob(latestJobByProject.get(projectId));
       },
     }),
   });
