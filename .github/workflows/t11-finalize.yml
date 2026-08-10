@@ -1,0 +1,72 @@
+name: T11 Finalize Media Ingest
+
+on:
+  push:
+    branches:
+      - build/standalone-production-app
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-fix-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: build/standalone-production-app
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Correct T11 test setup ordering
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('tests/integration/media-ingest.test.mjs')
+          text = path.read_text()
+          text = text.replace(
+              'return {directory, dataDir, db, repositories, approvalService, approved};',
+              'return {directory, dataDir, db, repositories, projectStateStore, approvalService, approved};',
+          )
+          old = '''    repositoriesDraft(fixture.repositories, fixture.projectStateStore);
+              await assert.rejects(
+                () => service.ingest({projectId: 'project-1', revisionId: 'revision-draft'}),
+                (error) => error instanceof AppError && error.code === 'APPROVED_REVISION_REQUIRED',
+              );
+          
+              await assert.rejects(
+                () => service.ingest({projectId: 'project-1', revisionId: 'revision-1'}),
+                (error) => error instanceof AppError
+                  && ['MEDIA_CONTENT_TYPE_REJECTED', 'MEDIA_BODY_TOO_LARGE'].includes(error.code),
+              );'''
+          new = '''    await assert.rejects(
+                () => service.ingest({projectId: 'project-1', revisionId: 'revision-1'}),
+                (error) => error instanceof AppError
+                  && ['MEDIA_CONTENT_TYPE_REJECTED', 'MEDIA_BODY_TOO_LARGE'].includes(error.code),
+              );
+          
+              repositoriesDraft(fixture.repositories, fixture.projectStateStore);
+              await assert.rejects(
+                () => service.ingest({projectId: 'project-1', revisionId: 'revision-draft'}),
+                (error) => error instanceof AppError && error.code === 'APPROVED_REVISION_REQUIRED',
+              );'''
+          if old not in text:
+              raise SystemExit('Expected T11 assertion block not found')
+          path.write_text(text.replace(old, new))
+      - run: npm ci --strict-allow-scripts=true --no-audit --no-fund
+      - run: node --test tests/integration/media-ingest.test.mjs
+      - run: npm test
+      - run: npm run lint
+      - name: Commit corrected test only after green verification
+        shell: bash
+        run: |
+          if git diff --quiet -- tests/integration/media-ingest.test.mjs; then
+            echo 'T11 test already corrected'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tests/integration/media-ingest.test.mjs
+          git commit -m 'test: correct T11 media ingest setup [skip ci]'
+          git push origin HEAD:build/standalone-production-app
