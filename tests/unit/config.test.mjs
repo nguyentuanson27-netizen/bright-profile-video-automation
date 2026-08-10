@@ -6,6 +6,7 @@ test('loadConfig applies conservative defaults', () => {
   const config = loadConfig({});
 
   assert.equal(config.port, 4180);
+  assert.equal(config.workerOpsPort, 4181);
   assert.equal(config.dataDir, '/app/data');
   assert.equal(config.maxBodyBytes, 10 * 1024 * 1024);
   assert.equal(config.allowPrivateMediaUrls, false);
@@ -14,12 +15,14 @@ test('loadConfig applies conservative defaults', () => {
 test('loadConfig accepts valid overrides', () => {
   const config = loadConfig({
     PORT: '5000',
+    WORKER_OPS_PORT: '5001',
     DATA_DIR: '/srv/bright-profile',
     MAX_BODY_BYTES: '2048',
     ALLOW_PRIVATE_MEDIA_URLS: 'true',
   });
 
   assert.equal(config.port, 5000);
+  assert.equal(config.workerOpsPort, 5001);
   assert.equal(config.dataDir, '/srv/bright-profile');
   assert.equal(config.maxBodyBytes, 2048);
   assert.equal(config.allowPrivateMediaUrls, true);
@@ -30,6 +33,12 @@ test('loadConfig rejects malformed numeric configuration without echoing the val
     () => loadConfig({PORT: 'secret-looking-value'}),
     (error) => error.name === 'ConfigError'
       && /PORT/.test(error.message)
+      && !/secret-looking-value/.test(error.message),
+  );
+  assert.throws(
+    () => loadConfig({WORKER_OPS_PORT: 'secret-looking-value'}),
+    (error) => error.name === 'ConfigError'
+      && /WORKER_OPS_PORT/.test(error.message)
       && !/secret-looking-value/.test(error.message),
   );
 });
