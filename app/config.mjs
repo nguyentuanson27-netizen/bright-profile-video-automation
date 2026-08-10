@@ -36,6 +36,7 @@ const absolutePath = (env, key, fallback) => {
 export function loadConfig(env = process.env) {
   return Object.freeze({
     port: integer(env, 'PORT', 4180, {min: 1, max: 65535}),
+    workerOpsPort: integer(env, 'WORKER_OPS_PORT', 4181, {min: 1, max: 65535}),
     dataDir: absolutePath(env, 'DATA_DIR', '/app/data'),
     maxBodyBytes: integer(env, 'MAX_BODY_BYTES', 10 * 1024 * 1024, {min: 1, max: 100 * 1024 * 1024}),
     allowPrivateMediaUrls: boolean(env, 'ALLOW_PRIVATE_MEDIA_URLS', false),
