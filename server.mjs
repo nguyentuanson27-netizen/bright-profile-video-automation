@@ -2,7 +2,10 @@ import http from 'node:http';
 import path from 'node:path';
 import {loadConfig} from './app/config.mjs';
 import {createHttpHandler} from './app/http/router.mjs';
+import {createApprovalService} from './app/services/approve-project.mjs';
+import {createGenerationProjectService} from './app/services/generate-project.mjs';
 import {createResearchProjectService} from './app/services/research-project.mjs';
+import {createOpenAiGenerationProvider} from './providers/generation/openai.mjs';
 import {createOpenAiResearchProvider} from './providers/research/openai.mjs';
 import {createRepositories, migrateDatabase, openDatabase} from './storage/db.mjs';
 import {createProjectStateStore} from './storage/project-state.mjs';
@@ -15,15 +18,16 @@ migrateDatabase(db);
 const repositories = createRepositories(db);
 const projectStateStore = createProjectStateStore(db);
 const researchProvider = createOpenAiResearchProvider();
-const researchService = createResearchProjectService({
-  repositories,
-  projectStateStore,
-  researchProvider,
-});
+const generationProvider = createOpenAiGenerationProvider();
+const researchService = createResearchProjectService({repositories, projectStateStore, researchProvider});
+const generationService = createGenerationProjectService({repositories, projectStateStore, generationProvider});
+const approvalService = createApprovalService({repositories, projectStateStore});
 
 const server = http.createServer(createHttpHandler({
   repositories,
   researchService,
+  generationService,
+  approvalService,
   maxBodyBytes: config.maxBodyBytes,
 }));
 
@@ -47,9 +51,5 @@ process.once('SIGTERM', shutdown);
 process.once('SIGINT', shutdown);
 
 server.listen(config.port, '0.0.0.0', () => {
-  console.log(JSON.stringify({
-    event: 'app.started',
-    port: config.port,
-    database: 'app.sqlite',
-  }));
+  console.log(JSON.stringify({event: 'app.started', port: config.port, database: 'app.sqlite'}));
 });
