@@ -84,6 +84,27 @@ export function createArtifactStore({dataDir, repositories}) {
       });
     },
 
+    writeGenerated({projectId, id, kind, directory, extension, buffer, contentHash}) {
+      const safeId = safeSegment(id, 'Artifact ID');
+      const safeKind = safeSegment(kind, 'Artifact kind');
+      const safeDirectory = safeSegment(directory, 'Artifact directory');
+      const safeExtension = safeSegment(String(extension || '').replace(/^\./, ''), 'Artifact extension');
+      if (!Buffer.isBuffer(buffer)) throw new TypeError('artifact buffer must be a Buffer');
+      return writeImmutable({
+        projectId,
+        id: safeId,
+        kind: safeKind,
+        relativePath: path.posix.join(
+          'projects',
+          safeSegment(projectId, 'Project ID'),
+          safeDirectory,
+          `${safeId}.${safeExtension}`,
+        ),
+        buffer,
+        contentHash,
+      });
+    },
+
     writeManifest({projectId, revisionId, id, value}) {
       const body = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
       return writeImmutable({
