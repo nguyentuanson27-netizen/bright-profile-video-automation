@@ -34,6 +34,10 @@ const validateAttempts = (maxAttempts) => {
 
 export function createProjectStateStore(db) {
   const getProject = db.prepare('SELECT id, status FROM projects WHERE id = ?');
+  const insertProject = db.prepare(`
+    INSERT INTO projects (id, topic, status, input_json, created_at, updated_at)
+    VALUES (@id, @topic, 'researching', @inputJson, @now, @now)
+  `);
   const updateStatus = db.prepare(`
     UPDATE projects
     SET status = @status, updated_at = @now
@@ -53,6 +57,20 @@ export function createProjectStateStore(db) {
       throw new AppError('PROJECT_STATE_CONFLICT', 'Project state changed concurrently', {status: 409});
     }
   };
+
+  const createProjectAndEnqueueResearchTransaction = db.transaction(({
+    projectId, topic, inputJson, jobId, maxAttempts, now,
+  }) => {
+    insertProject.run({id: projectId, topic, inputJson, now});
+    insertJob.run({
+      id: jobId,
+      projectId,
+      stage: 'researching',
+      maxAttempts,
+      now,
+    });
+    return mapJob(getJob.get(jobId));
+  });
 
   const enqueueResearchTransaction = db.transaction(({projectId, jobId, maxAttempts, now}) => {
     const project = getProject.get(projectId);
@@ -89,6 +107,18 @@ export function createProjectStateStore(db) {
   const revisionWorkflow = createRevisionWorkflowStore(db);
 
   return Object.freeze({
+    createProjectAndEnqueueResearch({projectId, topic, input, jobId, now = new Date(), maxAttempts = 3}) {
+      validateAttempts(maxAttempts);
+      return createProjectAndEnqueueResearchTransaction.immediate({
+        projectId,
+        topic,
+        inputJson: JSON.stringify(input),
+        jobId,
+        maxAttempts,
+        now: toIso(now),
+      });
+    },
+
     enqueueResearch({projectId, jobId, now = new Date(), maxAttempts = 3}) {
       validateAttempts(maxAttempts);
       return enqueueResearchTransaction.immediate({
