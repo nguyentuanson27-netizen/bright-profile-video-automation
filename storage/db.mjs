@@ -120,6 +120,9 @@ export function createRepositories(db) {
   const listSources = db.prepare('SELECT record_json FROM sources WHERE project_id = ? ORDER BY source_id');
 
   const getRevision = db.prepare('SELECT * FROM revisions WHERE revision_id = ?');
+  const latestRevisionByProject = db.prepare(`
+    SELECT * FROM revisions WHERE project_id = ? ORDER BY updated_at DESC, revision_id DESC LIMIT 1
+  `);
   const insertDraft = db.prepare(`
     INSERT INTO revisions (
       revision_id, project_id, status, payload_json, payload_hash, created_at, updated_at
@@ -222,6 +225,9 @@ export function createRepositories(db) {
       },
       get(revisionId) {
         return mapRevision(getRevision.get(revisionId));
+      },
+      latestByProject(projectId) {
+        return mapRevision(latestRevisionByProject.get(projectId));
       },
       approve({projectId, revisionId, payload, approvedAt, approvedBy}) {
         const existing = getRevision.get(revisionId);
