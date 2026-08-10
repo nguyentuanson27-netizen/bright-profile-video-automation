@@ -18,6 +18,7 @@ export default [
         process: 'readonly',
         setImmediate: 'readonly',
         setTimeout: 'readonly',
+        structuredClone: 'readonly',
       },
     },
     rules: {
