@@ -18,5 +18,6 @@ jobs:
           node-version: '24'
           package-manager-cache: false
       - run: npm ci --strict-allow-scripts=true --no-audit --no-fund
-      - run: node --test tests/unit/worker-handlers.test.mjs
+      - run: node --test tests/unit/worker-handlers.test.mjs tests/integration/auto-pipeline.test.mjs
+      - run: npm test
       - run: npm run lint
