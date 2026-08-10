@@ -1,3 +1,4 @@
+import {performance} from 'node:perf_hooks';
 import {isRetryableError, retryDelayMs} from '../domain/workflow.mjs';
 
 const safeErrorCode = (error) => typeof error?.code === 'string' && error.code.length <= 128
@@ -14,6 +15,7 @@ export function createJobRunner({
   shouldStop = () => false,
   clock = () => new Date(),
   retryOptions,
+  observability = null,
 }) {
   if (!jobStore || typeof jobStore.claimNext !== 'function') throw new TypeError('jobStore is required');
   if (!handlers || typeof handlers !== 'object') throw new TypeError('handlers are required');
@@ -37,17 +39,38 @@ export function createJobRunner({
         });
       }
 
+      const started = performance.now();
+      observability?.log?.('job.started', {
+        workerId,
+        projectId: job.projectId,
+        jobId: job.id,
+        stage: job.stage,
+        attempt: job.attempt,
+      });
+
       try {
         await handler({
           job,
           heartbeat: () => jobStore.heartbeat({jobId: job.id, workerId, now: clock(), leaseMs}),
         });
-        return jobStore.complete({jobId: job.id, workerId, now: clock()});
+        const completed = jobStore.complete({jobId: job.id, workerId, now: clock()});
+        const durationSeconds = Math.max(0, performance.now() - started) / 1000;
+        observability?.observeStage?.({stage: job.stage, outcome: 'success', durationSeconds});
+        observability?.log?.('job.completed', {
+          workerId,
+          projectId: job.projectId,
+          jobId: job.id,
+          stage: job.stage,
+          attempt: job.attempt,
+          outcome: 'success',
+          durationMs: Math.round(durationSeconds * 1000),
+        });
+        return completed;
       } catch (error) {
         const failedAt = clock();
         const retryable = isRetryableError(error);
         const delayMs = retryDelayMs(job.attempt, retryOptions);
-        return jobStore.fail({
+        const failed = jobStore.fail({
           jobId: job.id,
           workerId,
           now: failedAt,
@@ -56,6 +79,19 @@ export function createJobRunner({
           errorCode: safeErrorCode(error),
           errorMessage: safeErrorMessage(error),
         });
+        const durationSeconds = Math.max(0, performance.now() - started) / 1000;
+        observability?.observeStage?.({stage: job.stage, outcome: 'error', durationSeconds});
+        observability?.log?.('job.failed', {
+          workerId,
+          projectId: job.projectId,
+          jobId: job.id,
+          stage: job.stage,
+          attempt: job.attempt,
+          outcome: 'error',
+          errorCode: safeErrorCode(error),
+          durationMs: Math.round(durationSeconds * 1000),
+        });
+        return failed;
       }
     },
   });
