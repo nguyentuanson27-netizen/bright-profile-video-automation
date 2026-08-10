@@ -1,5 +1,6 @@
 import {AppError} from '../domain/errors.mjs';
 import {assertProjectTransition} from '../domain/project.mjs';
+import {createRevisionWorkflowStore} from './revision-workflow.mjs';
 
 const toIso = (value) => {
   const date = value instanceof Date ? value : new Date(value);
@@ -63,6 +64,8 @@ export function createProjectStateStore(db) {
     return mapJob(getJob.get(jobId));
   });
 
+  const revisionWorkflow = createRevisionWorkflowStore(db);
+
   return Object.freeze({
     enqueueResearch({projectId, jobId, now = new Date(), maxAttempts = 3}) {
       if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 20) {
@@ -91,5 +94,7 @@ export function createProjectStateStore(db) {
       }
       return status;
     },
+
+    ...revisionWorkflow,
   });
 }
