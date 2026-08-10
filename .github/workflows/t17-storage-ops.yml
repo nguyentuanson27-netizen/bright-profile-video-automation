@@ -31,6 +31,9 @@ jobs:
           npm run storage:backup -- --name ci-smoke
           test -s "$DATA_DIR/backups/ci-smoke/app.sqlite"
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: test -x /usr/bin/google-chrome
       - run: npm test
+        env:
+          REMOTION_BROWSER_EXECUTABLE: /usr/bin/google-chrome
       - run: npm run build
       - run: test -s dist/web/index.html
