@@ -6,6 +6,8 @@
   "scripts": {
     "test": "node --test",
     "lint": "eslint .",
+    "dev": "vite --config vite.config.mjs",
+    "build": "vite build --config vite.config.mjs",
     "db:migrate": "node scripts/db-migrate.mjs",
     "render:smoke": "node scripts/render-smoke.mjs",
     "render:project": "node scripts/render-project.mjs"
@@ -24,7 +26,9 @@
     "remotion": "4.0.484"
   },
   "devDependencies": {
-    "eslint": "10.8.0"
+    "@vitejs/plugin-react": "6.0.4",
+    "eslint": "10.8.0",
+    "vite": "8.0.16"
   },
   "allowScripts": {
     "better-sqlite3@13.0.3": true,
