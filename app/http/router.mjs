@@ -1,4 +1,6 @@
 import {randomUUID} from 'node:crypto';
+import {createReadStream} from 'node:fs';
+import {stat} from 'node:fs/promises';
 import {AppError} from '../../domain/errors.mjs';
 
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
@@ -60,12 +62,21 @@ const sourceSummary = (sources) => sources.reduce((summary, source) => {
   return summary;
 }, {total: 0, available: 0, unavailable: 0, failed: 0});
 
+const revisionSummary = (revision) => revision ? {
+  revisionId: revision.revisionId,
+  status: revision.status,
+  payloadHash: revision.payloadHash,
+  approvedAt: revision.approvedAt,
+  approvedBy: revision.approvedBy,
+} : null;
+
 const projectReadModel = (repositories, project) => {
   const sources = repositories.sources.listByProject(project.id);
   return {
     project,
     sourceSummary: sourceSummary(sources),
     latestJob: repositories.jobs.latestByProject(project.id),
+    latestRevision: revisionSummary(repositories.revisions.latestByProject(project.id)),
   };
 };
 
@@ -123,15 +134,58 @@ const errorResponse = (error, requestId) => {
   };
 };
 
+const safeDownloadName = (projectId) => `bright-${String(projectId).replace(/[^A-Za-z0-9._-]/g, '_')}.mp4`;
+
+const sendVideo = async ({req, res, requestId, repositories, artifactStore, videoProbe, projectId}) => {
+  const project = projectOrThrow(repositories, projectId);
+  if (project.status !== 'completed') {
+    throw new AppError('VIDEO_NOT_READY', 'Rendered video is not ready', {status: 409});
+  }
+  serviceOrThrow(artifactStore, 'Artifact store');
+  serviceOrThrow(videoProbe, 'Video validation');
+
+  const artifact = repositories.artifacts.listByProject(projectId)
+    .filter((candidate) => candidate.kind === 'rendered-video')
+    .at(-1);
+  if (!artifact) throw new AppError('RENDER_OUTPUT_MISSING', 'Rendered video is missing', {status: 409});
+
+  const stored = artifactStore.get(projectId, artifact.id);
+  if (!stored) throw new AppError('RENDER_OUTPUT_MISSING', 'Rendered video is missing', {status: 409});
+  const info = await stat(stored.absolutePath).catch(() => null);
+  if (!info?.isFile() || info.size <= 0) {
+    throw new AppError('RENDER_OUTPUT_INVALID', 'Rendered video is corrupt', {status: 409});
+  }
+  const duration = await videoProbe(stored.absolutePath);
+  if (!Number.isFinite(duration) || duration <= 0) {
+    throw new AppError('RENDER_OUTPUT_INVALID', 'Rendered video is corrupt', {status: 409});
+  }
+
+  res.writeHead(200, {
+    'content-type': 'video/mp4',
+    'content-length': String(info.size),
+    'content-disposition': `attachment; filename="${safeDownloadName(projectId)}"`,
+    'x-request-id': requestId,
+    'cache-control': 'private, no-store',
+  });
+  if (req.method === 'HEAD') {
+    res.end();
+    return;
+  }
+  createReadStream(stored.absolutePath).pipe(res);
+};
+
 export function createHttpHandler({
   repositories,
   researchService,
   generationService,
   approvalService,
+  renderService,
+  artifactStore,
+  videoProbe,
   requestIdGenerator = randomUUID,
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
 }) {
-  if (!repositories?.projects || !repositories?.sources || !repositories?.revisions || !repositories?.jobs) {
+  if (!repositories?.projects || !repositories?.sources || !repositories?.revisions || !repositories?.jobs || !repositories?.artifacts) {
     throw new TypeError('HTTP repositories are required');
   }
   if (!researchService) throw new TypeError('researchService is required');
@@ -164,6 +218,12 @@ export function createHttpHandler({
       if (req.method === 'GET' && statusProjectId) {
         const project = projectOrThrow(repositories, statusProjectId);
         json(res, 200, projectReadModel(repositories, project), requestId);
+        return;
+      }
+
+      const videoProjectId = routeProjectId(url.pathname, 'video');
+      if ((req.method === 'GET' || req.method === 'HEAD') && videoProjectId) {
+        await sendVideo({req, res, requestId, repositories, artifactStore, videoProbe, projectId: videoProjectId});
         return;
       }
 
@@ -204,6 +264,16 @@ export function createHttpHandler({
         return;
       }
 
+      const renderProjectId = routeProjectId(url.pathname, 'render');
+      if (req.method === 'POST' && renderProjectId) {
+        const body = await readJsonBody(req, maxBodyBytes);
+        json(res, 202, await serviceOrThrow(renderService, 'Render service').enqueue({
+          projectId: renderProjectId,
+          revisionId: body.revisionId,
+        }), requestId);
+        return;
+      }
+
       const revisionIds = routeRevisionIds(url.pathname);
       if (req.method === 'GET' && revisionIds) {
         projectOrThrow(repositories, revisionIds.projectId);
@@ -231,7 +301,8 @@ export function createHttpHandler({
       throw new AppError('NOT_FOUND', 'Route was not found', {status: 404});
     } catch (error) {
       const response = errorResponse(error, requestId);
-      json(res, response.status, response.body, requestId);
+      if (!res.headersSent) json(res, response.status, response.body, requestId);
+      else res.destroy();
     }
   };
 }
