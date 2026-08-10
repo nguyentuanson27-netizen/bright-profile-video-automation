@@ -1,3 +1,6 @@
+# Shared-host Caddy snippet for Bright Profile Video.
+# Merge this site block into the host Caddy configuration; Bright Compose does not run Caddy.
+# The shared Caddy container must join BRIGHT_EDGE_NETWORK and resolve the alias below.
 {$APP_DOMAIN} {
   encode zstd gzip
 
@@ -9,5 +12,5 @@
     Permissions-Policy "camera=(), microphone=(), geolocation=()"
   }
 
-  reverse_proxy oauth2-proxy:4182
+  reverse_proxy bright-standalone-oauth2-proxy:4182
 }
