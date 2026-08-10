@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {mkdir, readFile, rm, stat} from 'node:fs/promises';
 import path from 'node:path';
+import {clearInterval, setInterval} from 'node:timers';
 import {pathToFileURL} from 'node:url';
 import {AppError} from '../../domain/errors.mjs';
 import {generateTimedGoogleTts} from '../../lib/timed-google-tts.mjs';
