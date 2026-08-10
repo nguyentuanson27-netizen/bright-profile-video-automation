@@ -19,4 +19,5 @@ jobs:
           package-manager-cache: false
       - run: npm ci --strict-allow-scripts=true --no-audit --no-fund
       - run: node --test tests/unit/provider-contracts.test.mjs tests/unit/provider-input.test.mjs
+      - run: npm test
       - run: npm run lint
