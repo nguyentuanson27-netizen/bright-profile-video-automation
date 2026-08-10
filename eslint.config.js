@@ -1,6 +1,6 @@
 export default [
   {
-    ignores: ['node_modules/**', 'data/**'],
+    ignores: ['node_modules/**', 'data/**', 'dist/**'],
   },
   {
     files: ['**/*.{js,mjs,jsx}'],
@@ -25,6 +25,16 @@ export default [
       'no-constant-condition': 'error',
       'no-undef': 'error',
       'no-unreachable': 'error',
+    },
+  },
+  {
+    files: ['web/**/*.{js,mjs,jsx}'],
+    languageOptions: {
+      globals: {
+        clearInterval: 'readonly',
+        document: 'readonly',
+        setInterval: 'readonly',
+      },
     },
   },
 ];
