@@ -7,15 +7,16 @@ const dataImage = async (file) =>
 
 const heroImage = await dataImage(path.resolve('assets', 'demo', 'hero.png'));
 const scenes = [
-  {id: 'hero', type: 'hero', start: 0, duration: 6, chapter: 'HỒ SƠ NHÀ SÁNG TẠO', subtitle: 'Một gương mặt đang chiếm trọn mọi dòng thời gian'},
-  {id: 'claim', type: 'claim', start: 6, duration: 5, chapter: 'VÌ SAO CÔ ẤY NỔI TIẾNG?', words: ['NỔI TIẾNG', 'CHỈ SAU', '1 ĐÊM?']},
-  {id: 'vertical', type: 'vertical', start: 11, duration: 6, chapter: 'KHOẢNH KHẮC BÙNG NỔ', heading: 'MỘT VIDEO THAY ĐỔI TẤT CẢ', subtitle: 'Chỉ sau vài giờ, đoạn clip đã xuất hiện ở khắp mọi nền tảng.'},
-  {id: 'social', type: 'social', start: 17, duration: 6, chapter: 'PHẢN ỨNG CỘNG ĐỒNG', quote: '“Tôi không nghĩ một khoảnh khắc bình thường lại có thể lan truyền nhanh đến vậy.”'},
-  {id: 'stats', type: 'stats', start: 23, duration: 7, chapter: 'SỨC ẢNH HƯỞNG', stats: [{value: '2,1M', label: 'NGƯỜI THEO DÕI'}, {value: '86M', label: 'LƯỢT XEM'}, {value: '#1', label: 'XU HƯỚNG'}]},
+  {id: 'hero', type: 'hero', start: 0, duration: 2, chapter: 'HỒ SƠ NHÀ SÁNG TẠO', subtitle: 'Một gương mặt đang chiếm trọn mọi dòng thời gian'},
+  {id: 'claim', type: 'claim', start: 2, duration: 2, chapter: 'VÌ SAO NỔI TIẾNG?', words: ['NỔI TIẾNG', 'CHỈ SAU', '1 ĐÊM?']},
+  {id: 'vertical', type: 'vertical', start: 4, duration: 2, chapter: 'KHOẢNH KHẮC BÙNG NỔ', heading: 'MỘT VIDEO THAY ĐỔI TẤT CẢ', subtitle: 'Fixture local.', mediaUrl: heroImage},
+  {id: 'source', type: 'source', start: 6, duration: 2, chapter: 'TƯ LIỆU', mediaUrl: heroImage, source: 'LOCAL FIXTURE', label: 'SOURCE'},
+  {id: 'social', type: 'social', start: 8, duration: 2, chapter: 'PHẢN ỨNG CỘNG ĐỒNG', quote: '“Controlled local smoke fixture.”'},
+  {id: 'stats', type: 'stats', start: 10, duration: 2, chapter: 'SỨC ẢNH HƯỞNG', stats: [{value: '2,1M', label: 'NGƯỜI THEO DÕI'}, {value: '86M', label: 'LƯỢT XEM'}, {value: '#1', label: 'XU HƯỚNG'}]},
 ];
 
 await renderBrightProfile({
-  inputProps: {duration: 30, creatorName: 'EMIRU', heroImage, scenes, audioUrl: ''},
+  inputProps: {duration: 12, creatorName: 'EMIRU', heroImage, scenes, audioUrl: ''},
   outputLocation: path.resolve('data', 'bright-profile-smoke.mp4'),
   scale: 2 / 3,
   crf: 21,
