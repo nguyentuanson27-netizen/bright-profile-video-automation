@@ -101,6 +101,24 @@ export function createResearchProjectService({
       });
     },
 
+    createAndEnqueueResearch(input) {
+      assertSchema('projectInput', input);
+      if (typeof projectStateStore.createProjectAndEnqueueResearch !== 'function') {
+        throw new TypeError('projectStateStore.createProjectAndEnqueueResearch is required');
+      }
+      const projectId = projectIdGenerator();
+      const jobId = jobIdGenerator();
+      const job = projectStateStore.createProjectAndEnqueueResearch({
+        projectId,
+        topic: input.topic,
+        input: structuredClone(input),
+        jobId,
+        now: clock(),
+        maxAttempts: 3,
+      });
+      return {project: repositories.projects.get(projectId), job};
+    },
+
     enqueueResearch(projectId) {
       const project = repositories.projects.get(projectId);
       if (!project) throw new AppError('PROJECT_NOT_FOUND', 'Project was not found', {status: 404});
