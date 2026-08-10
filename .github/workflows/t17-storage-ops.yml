@@ -18,5 +18,5 @@ jobs:
           node-version: '24'
           package-manager-cache: false
       - run: npm ci --strict-allow-scripts=true --no-audit --no-fund
-      - run: node --test tests/unit/config.test.mjs tests/integration/storage-ops.test.mjs tests/integration/media-ingest.test.mjs tests/integration/render-worker.test.mjs
+      - run: node --test tests/unit/config.test.mjs tests/integration/storage-ops.test.mjs tests/integration/media-ingest.test.mjs tests/integration/render-worker.test.mjs tests/integration/disk-metrics.test.mjs
       - run: npm run lint
