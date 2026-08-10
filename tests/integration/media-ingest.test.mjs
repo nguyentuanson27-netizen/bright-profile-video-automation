@@ -117,6 +117,41 @@ test('approved remote media is ingested once with safe generated name and proven
   }
 });
 
+test('low disk blocks remote media before fetch or artifact creation', async () => {
+  const fixture = createApprovedFixture();
+  try {
+    let fetchCalls = 0;
+    const stages = [];
+    const artifactStore = createArtifactStore({dataDir: fixture.dataDir, repositories: fixture.repositories});
+    const service = createMediaIngestService({
+      repositories: fixture.repositories,
+      approvalService: fixture.approvalService,
+      artifactStore,
+      diskGuard: {
+        async assertExpensiveWorkAllowed(stage) {
+          stages.push(stage);
+          throw new AppError('DISK_SPACE_LOW', 'Disk guard blocked media ingest', {status: 507, retryable: true});
+        },
+      },
+      fetchMedia: async () => {
+        fetchCalls += 1;
+        return {statusCode: 200, contentType: 'image/jpeg', body: MEDIA_BODY};
+      },
+    });
+
+    await assert.rejects(
+      () => service.ingest({projectId: 'project-1', revisionId: 'revision-1'}),
+      (error) => error instanceof AppError && error.code === 'DISK_SPACE_LOW' && error.retryable === true,
+    );
+    assert.deepEqual(stages, ['media_ingest']);
+    assert.equal(fetchCalls, 0);
+    assert.deepEqual(fixture.repositories.artifacts.listByProject('project-1'), []);
+  } finally {
+    fixture.db.close();
+    rmSync(fixture.directory, {recursive: true, force: true});
+  }
+});
+
 test('ingest rejects unapproved revision, unsupported MIME, oversized body, and unsupported media schemes', async () => {
   const fixture = createApprovedFixture();
   try {
