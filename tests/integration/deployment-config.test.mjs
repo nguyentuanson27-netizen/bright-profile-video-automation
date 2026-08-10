@@ -46,8 +46,14 @@ test('compose defines authenticated standalone topology with only Caddy publishi
   assert.match(oauth, /client-secret-file|CLIENT_SECRET_FILE/);
   assert.match(oauth, /cookie-secret-file|COOKIE_SECRET_FILE/);
 
+  for (const block of [app, worker]) {
+    assert.match(block, /OPENAI_API_KEY_FILE:\s*\/run\/secrets\/openai_api_key/);
+    assert.match(block, /\n    secrets:\n[\s\S]*- openai_api_key/);
+    assert.doesNotMatch(block, /OPENAI_API_KEY:\s/);
+  }
+
   assert.match(compose, /^volumes:\n[\s\S]*bright_data:/m);
-  assert.match(compose, /^secrets:/m);
+  assert.match(compose, /^secrets:\n[\s\S]*openai_api_key:/m);
 });
 
 test('Caddy is the only public edge and proxies exclusively to oauth2-proxy', () => {
@@ -83,5 +89,6 @@ test('deployment examples contain placeholders and immutable image-tag inputs, n
   assert.match(env, /GITHUB_OAUTH_CLIENT_SECRET_FILE=/);
   assert.match(env, /OAUTH2_PROXY_COOKIE_SECRET_FILE=/);
   assert.match(env, /GOOGLE_TTS_CREDENTIALS_FILE=/);
-  assert.match(env, /OPENAI_API_KEY=/);
+  assert.match(env, /OPENAI_API_KEY_FILE=/);
+  assert.doesNotMatch(env, /^OPENAI_API_KEY=/m);
 });
