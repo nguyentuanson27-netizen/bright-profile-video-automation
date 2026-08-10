@@ -83,6 +83,49 @@ test('worker failure emits correlated structured events and bounded queue/stage/
   }
 });
 
+test('missing worker handler still emits correlated terminal failure telemetry', async () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'bright-profile-missing-handler-'));
+  const db = openDatabase({filename: path.join(directory, 'app.sqlite')});
+  try {
+    migrateDatabase(db);
+    const repositories = createRepositories(db);
+    repositories.projects.create({id: 'project-handler', topic: 'Handler', status: 'draft', input: {topic: 'Handler'}});
+    repositories.jobs.create({
+      id: 'job-handler',
+      projectId: 'project-handler',
+      stage: 'unexpected-stage',
+      status: 'queued',
+      maxAttempts: 1,
+    });
+    const jobStore = createJobStore(db);
+    const events = [];
+    const observability = createObservability({queueStats: () => jobStore.stats(), logger: (event) => events.push(event)});
+    const runner = createJobRunner({
+      jobStore,
+      workerId: 'worker-handler',
+      handlers: {},
+      observability,
+    });
+
+    const failed = await runner.runOnce();
+    assert.equal(failed.status, 'failed');
+    const started = events.find((event) => event.event === 'job.started');
+    const failedEvent = events.find((event) => event.event === 'job.failed');
+    assert.equal(started.projectId, 'project-handler');
+    assert.equal(started.jobId, 'job-handler');
+    assert.equal(started.stage, 'unexpected-stage');
+    assert.equal(failedEvent.projectId, 'project-handler');
+    assert.equal(failedEvent.jobId, 'job-handler');
+    assert.equal(failedEvent.errorCode, 'JOB_HANDLER_NOT_FOUND');
+
+    const metrics = await observability.metrics();
+    assert.match(metrics, /bright_job_stage_duration_seconds_count\{stage="other",outcome="error"\} 1/);
+  } finally {
+    if (db.open) db.close();
+    rmSync(directory, {recursive: true, force: true});
+  }
+});
+
 test('liveness is provider-independent, readiness checks SQLite/data dir, and ops endpoints expose stable status/metrics', async () => {
   const directory = mkdtempSync(path.join(os.tmpdir(), 'bright-profile-health-'));
   const dataDir = path.join(directory, 'data');
