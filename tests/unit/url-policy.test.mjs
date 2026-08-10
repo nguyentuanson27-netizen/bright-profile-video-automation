@@ -78,6 +78,26 @@ test('DNS resolving to a private IP is rejected before transport', async () => {
   assert.equal(transportCalls, 0);
 });
 
+test('mixed public and private DNS answers fail closed', async () => {
+  let transportCalls = 0;
+  await assert.rejects(
+    () => safeFetchStream('https://mixed.test/data', {
+      lookup: fakeLookup({
+        'mixed.test': [
+          {address: PUBLIC_IP, family: 4},
+          {address: '10.0.0.8', family: 4},
+        ],
+      }),
+      requestTransport: async () => {
+        transportCalls += 1;
+        return response();
+      },
+    }),
+    (error) => error instanceof AppError && error.code === 'SSRF_BLOCKED_ADDRESS',
+  );
+  assert.equal(transportCalls, 0);
+});
+
 test('public to private redirect is revalidated and blocked', async () => {
   const calls = [];
   await assert.rejects(
@@ -139,6 +159,19 @@ test('response MIME type must match the purpose allowlist', async () => {
   );
 });
 
+test('compressed response is rejected instead of being decompressed without a bound', async () => {
+  await assert.rejects(
+    () => safeFetchStream('https://public.test/compressed', {
+      lookup: fakeLookup({'public.test': [{address: PUBLIC_IP, family: 4}]}),
+      requestTransport: async () => response({
+        headers: {'content-type': 'text/plain', 'content-encoding': 'gzip'},
+        chunks: ['compressed-bytes'],
+      }),
+    }),
+    (error) => error instanceof AppError && error.code === 'FETCH_CONTENT_ENCODING_REJECTED',
+  );
+});
+
 test('content-length above the configured bound is rejected before streaming', async () => {
   await assert.rejects(
     () => safeFetchStream('https://public.test/large', {
@@ -170,6 +203,17 @@ test('stream body is bounded even when content-length is absent', async () => {
       }
     },
     (error) => error instanceof AppError && error.code === 'FETCH_BODY_TOO_LARGE',
+  );
+});
+
+test('hanging transport is bounded by the configured total timeout', async () => {
+  await assert.rejects(
+    () => safeFetchStream('https://public.test/hang', {
+      lookup: fakeLookup({'public.test': [{address: PUBLIC_IP, family: 4}]}),
+      timeoutMs: 20,
+      requestTransport: async () => new Promise(() => {}),
+    }),
+    (error) => error instanceof AppError && error.code === 'FETCH_TIMEOUT' && error.retryable === true,
   );
 });
 
