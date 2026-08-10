@@ -18,7 +18,6 @@ const readJsonBody = (req, maxBodyBytes) => new Promise((resolve, reject) => {
   const chunks = [];
   let size = 0;
   let settled = false;
-
   const fail = (error) => {
     if (settled) return;
     settled = true;
@@ -39,10 +38,7 @@ const readJsonBody = (req, maxBodyBytes) => new Promise((resolve, reject) => {
     if (settled) return;
     settled = true;
     const text = Buffer.concat(chunks).toString('utf8');
-    if (!text.trim()) {
-      resolve({});
-      return;
-    }
+    if (!text.trim()) return resolve({});
     try {
       resolve(JSON.parse(text));
     } catch {
@@ -58,53 +54,71 @@ const projectOrThrow = (repositories, projectId) => {
   return project;
 };
 
+const decodeId = (value, code, message) => {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    throw new AppError(code, message, {status: 400});
+  }
+};
+
 const routeProjectId = (pathname, suffix = '') => {
   const pattern = suffix
     ? new RegExp(`^/api/projects/([^/]+)/${suffix}$`)
     : /^\/api\/projects\/([^/]+)$/;
   const match = pathname.match(pattern);
   if (!match) return null;
-  try {
-    return decodeURIComponent(match[1]);
-  } catch {
-    throw new AppError('INVALID_PROJECT_ID', 'Project ID is invalid', {status: 400});
-  }
+  return decodeId(match[1], 'INVALID_PROJECT_ID', 'Project ID is invalid');
+};
+
+const routeRevisionIds = (pathname) => {
+  const match = pathname.match(/^\/api\/projects\/([^/]+)\/revisions\/([^/]+)$/);
+  if (!match) return null;
+  return {
+    projectId: decodeId(match[1], 'INVALID_PROJECT_ID', 'Project ID is invalid'),
+    revisionId: decodeId(match[2], 'INVALID_REVISION_ID', 'Revision ID is invalid'),
+  };
+};
+
+const serviceOrThrow = (service, name) => {
+  if (!service) throw new AppError('FEATURE_NOT_READY', `${name} is not configured`, {status: 503, retryable: true});
+  return service;
 };
 
 const errorResponse = (error, requestId) => {
   if (error instanceof AppError) {
     return {
       status: error.status || 500,
-      body: {
-        error: {
-          code: error.code,
-          message: error.message,
-          retryable: error.retryable === true,
-          requestId,
-        },
-      },
+      body: {error: {
+        code: error.code,
+        message: error.message,
+        retryable: error.retryable === true,
+        requestId,
+      }},
     };
   }
   return {
     status: 500,
-    body: {
-      error: {
-        code: 'INTERNAL_ERROR',
-        message: 'Internal server error',
-        retryable: false,
-        requestId,
-      },
-    },
+    body: {error: {
+      code: 'INTERNAL_ERROR',
+      message: 'Internal server error',
+      retryable: false,
+      requestId,
+    }},
   };
 };
 
 export function createHttpHandler({
   repositories,
   researchService,
+  generationService,
+  approvalService,
   requestIdGenerator = randomUUID,
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
 }) {
-  if (!repositories?.projects || !repositories?.sources) throw new TypeError('HTTP repositories are required');
+  if (!repositories?.projects || !repositories?.sources || !repositories?.revisions) {
+    throw new TypeError('HTTP repositories are required');
+  }
   if (!researchService) throw new TypeError('researchService is required');
 
   return async (req, res) => {
@@ -118,8 +132,7 @@ export function createHttpHandler({
       }
 
       if (req.method === 'POST' && url.pathname === '/api/projects') {
-        const input = await readJsonBody(req, maxBodyBytes);
-        json(res, 201, researchService.createProject(input), requestId);
+        json(res, 201, researchService.createProject(await readJsonBody(req, maxBodyBytes)), requestId);
         return;
       }
 
@@ -127,6 +140,47 @@ export function createHttpHandler({
       if (req.method === 'POST' && researchProjectId) {
         await readJsonBody(req, maxBodyBytes);
         json(res, 202, researchService.enqueueResearch(researchProjectId), requestId);
+        return;
+      }
+
+      const generationProjectId = routeProjectId(url.pathname, 'generate');
+      if (req.method === 'POST' && generationProjectId) {
+        await readJsonBody(req, maxBodyBytes);
+        json(res, 202, serviceOrThrow(generationService, 'Generation service').enqueueGeneration(generationProjectId), requestId);
+        return;
+      }
+
+      const draftProjectId = routeProjectId(url.pathname, 'draft');
+      if (req.method === 'PATCH' && draftProjectId) {
+        const body = await readJsonBody(req, maxBodyBytes);
+        json(res, 200, serviceOrThrow(approvalService, 'Approval service').editDraft({
+          projectId: draftProjectId,
+          revisionId: body.revisionId,
+          generation: body.generation,
+        }), requestId);
+        return;
+      }
+
+      const approveProjectId = routeProjectId(url.pathname, 'approve');
+      if (req.method === 'POST' && approveProjectId) {
+        const body = await readJsonBody(req, maxBodyBytes);
+        json(res, 200, serviceOrThrow(approvalService, 'Approval service').approve({
+          projectId: approveProjectId,
+          revisionId: body.revisionId,
+          approvedBy: body.approvedBy,
+          claimOverrides: body.claimOverrides || [],
+        }), requestId);
+        return;
+      }
+
+      const revisionIds = routeRevisionIds(url.pathname);
+      if (req.method === 'GET' && revisionIds) {
+        projectOrThrow(repositories, revisionIds.projectId);
+        const revision = repositories.revisions.get(revisionIds.revisionId);
+        if (!revision || revision.projectId !== revisionIds.projectId) {
+          throw new AppError('REVISION_NOT_FOUND', 'Revision was not found', {status: 404});
+        }
+        json(res, 200, revision, requestId);
         return;
       }
 
