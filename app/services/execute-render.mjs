@@ -100,6 +100,7 @@ export function createRenderExecutionService({
   probeDuration = defaultProbeDuration,
   trustedAssetServerFactory = createTrustedAssetServer,
   observability = null,
+  diskGuard = null,
 }) {
   if (!repositories?.projects || !repositories?.revisions || !repositories?.artifacts) {
     throw new TypeError('render repositories are required');
@@ -110,6 +111,7 @@ export function createRenderExecutionService({
   if (!artifactStore?.get || !artifactStore?.writeGenerated) throw new TypeError('artifactStore is required');
   if (!path.isAbsolute(dataDir)) throw new TypeError('render dataDir must be absolute');
   if (typeof trustedAssetServerFactory !== 'function') throw new TypeError('trustedAssetServerFactory must be a function');
+  if (diskGuard && typeof diskGuard.assertExpensiveWorkAllowed !== 'function') throw new TypeError('diskGuard is invalid');
 
   const observeProvider = ({provider, operation, run}) => observability?.observeProvider
     ? observability.observeProvider({provider, operation, run})
@@ -137,6 +139,7 @@ export function createRenderExecutionService({
     const id = `tts-${sha256(manifest.approvedPayloadHash).slice(0, 24)}`;
     let artifact = artifactStore.get(job.projectId, id);
     if (!artifact) {
+      await diskGuard?.assertExpensiveWorkAllowed('tts');
       const output = path.join(workDir, 'voice.mp3');
       await withHeartbeat(() => observeProvider({
         provider: 'google-tts',
@@ -214,6 +217,7 @@ export function createRenderExecutionService({
 
         existingVideo = artifactStore.get(job.projectId, videoId);
         if (!existingVideo) {
+          await diskGuard?.assertExpensiveWorkAllowed('rendering');
           const outputLocation = path.join(workDir, 'output.mp4');
           const trustedAssets = trustedAssetServerFactory({projectId: job.projectId, artifactStore});
           await trustedAssets.start();
