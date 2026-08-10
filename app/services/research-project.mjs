@@ -12,6 +12,17 @@ const SOURCE_CONTENT_TYPES = [
   'application/xml',
   'text/xml',
 ];
+const RESEARCH_ALREADY_COMPLETED_STATES = new Set([
+  'research_ready',
+  'generating',
+  'review_required',
+  'approved',
+  'media_ingest',
+  'tts',
+  'render_queued',
+  'rendering',
+  'completed',
+]);
 
 const canonicalUrl = (value) => new URL(value).href;
 const sourceIdFor = (url) => `source-${createHash('sha256').update(url).digest('hex').slice(0, 24)}`;
@@ -108,6 +119,13 @@ export function createResearchProjectService({
       }
       const project = repositories.projects.get(job.projectId);
       if (!project) throw new AppError('PROJECT_NOT_FOUND', 'Project was not found', {status: 404});
+
+      if (RESEARCH_ALREADY_COMPLETED_STATES.has(project.status)) {
+        return repositories.sources.listByProject(project.id);
+      }
+      if (project.status !== 'researching') {
+        throw new AppError('RESEARCH_STATE_INVALID', 'Project is not in research state', {status: 409});
+      }
 
       const operatorUrls = Array.isArray(project.input.sourceUrls) ? project.input.sourceUrls : [];
       const discovery = await researchProvider.search({topic: project.topic, sourceUrls: operatorUrls});
