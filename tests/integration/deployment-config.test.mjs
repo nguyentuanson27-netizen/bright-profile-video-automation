@@ -15,7 +15,7 @@ const serviceBlock = (compose, name) => {
   return match ? match[0] : '';
 };
 
-test('compose defines authenticated standalone topology with only Caddy publishing ports', () => {
+test('compose defines standalone topology behind a shared external Caddy edge', () => {
   const compose = read('compose.yml');
   assert.doesNotMatch(compose, /n8n/i);
 
@@ -23,16 +23,17 @@ test('compose defines authenticated standalone topology with only Caddy publishi
   const oauth = serviceBlock(compose, 'oauth2-proxy');
   const app = serviceBlock(compose, 'app');
   const worker = serviceBlock(compose, 'worker');
-  for (const [name, block] of Object.entries({caddy, oauth, app, worker})) {
+  assert.equal(caddy, '', 'Caddy belongs to the shared host edge, not the Bright Compose project');
+  for (const [name, block] of Object.entries({oauth, app, worker})) {
     assert.notEqual(block, '', `${name} service is required`);
+    assert.doesNotMatch(block, /\n    ports:/, `${name} must not publish host ports`);
   }
 
-  assert.match(caddy, /ports:/);
-  assert.match(caddy, /"80:80"/);
-  assert.match(caddy, /"443:443"/);
-  assert.doesNotMatch(oauth, /\n    ports:/);
-  assert.doesNotMatch(app, /\n    ports:/);
-  assert.doesNotMatch(worker, /\n    ports:/);
+  assert.match(compose, /^name:\s*bright-standalone$/m);
+  assert.match(compose, /^networks:\n[\s\S]*^  edge:\n    external: true\n    name: \$\{BRIGHT_EDGE_NETWORK:\?/m);
+  assert.match(oauth, /\n    networks:\n[\s\S]*edge:\n[\s\S]*aliases:\n[\s\S]*- bright-standalone-oauth2-proxy/);
+  assert.match(oauth, /OAUTH2_PROXY_TRUSTED_PROXY_IPS:\s*\$\{BRIGHT_EDGE_CIDR:\?/);
+  assert.match(oauth, /OAUTH2_PROXY_UPSTREAMS:\s*http:\/\/app:4180\//);
 
   assert.match(app, /image: \$\{BRIGHT_IMAGE:\?/);
   assert.match(worker, /image: \$\{BRIGHT_IMAGE:\?/);
@@ -42,7 +43,6 @@ test('compose defines authenticated standalone topology with only Caddy publishi
 
   assert.match(oauth, /provider=github|OAUTH2_PROXY_PROVIDER:\s*github/);
   assert.match(oauth, /GITHUB_ALLOWED_USERS/);
-  assert.match(oauth, /trusted-proxy-ip|TRUSTED_PROXY_IP/);
   assert.match(oauth, /client-secret-file|CLIENT_SECRET_FILE/);
   assert.match(oauth, /cookie-secret-file|COOKIE_SECRET_FILE/);
 
@@ -62,11 +62,12 @@ test('app composition does not load OpenAI providers or require provider credent
   assert.doesNotMatch(server, /createOpenAi(?:Research|Generation)Provider/);
 });
 
-test('Caddy is the only public edge and proxies exclusively to oauth2-proxy', () => {
+test('shared Caddy snippet proxies only to the standalone OAuth alias without legacy API-key injection', () => {
   const caddyfile = read('Caddyfile');
   assert.match(caddyfile, /\{\$APP_DOMAIN\}/);
-  assert.match(caddyfile, /reverse_proxy\s+oauth2-proxy:4182/);
+  assert.match(caddyfile, /reverse_proxy\s+bright-standalone-oauth2-proxy:4182/);
   assert.doesNotMatch(caddyfile, /app:4180/);
+  assert.doesNotMatch(caddyfile, /X-Bright-Api-Key/i);
   assert.match(caddyfile, /Strict-Transport-Security/);
   assert.match(caddyfile, /X-Content-Type-Options/);
 });
@@ -84,12 +85,16 @@ test('Docker image uses lockfile-frozen installs, builds the web app, and runs n
   assert.match(dockerfile, /REMOTION_BROWSER_EXECUTABLE=\/usr\/bin\/chromium/);
 });
 
-test('deployment examples contain placeholders and immutable image-tag inputs, not old API token/n8n settings', () => {
+test('deployment examples describe the shared edge without old API token or n8n coupling', () => {
   const env = read('.env.example');
   assert.doesNotMatch(env, /BRIGHT_API_TOKEN/);
   assert.doesNotMatch(env, /n8n/i);
+  assert.doesNotMatch(env, /CADDY_EDGE_IP/);
+  assert.doesNotMatch(env, /BRIGHT_EDGE_SUBNET/);
   assert.match(env, /BRIGHT_IMAGE=ghcr\.io\/.*:sha-/);
-  assert.match(env, /APP_DOMAIN=/);
+  assert.match(env, /^APP_DOMAIN=/m);
+  assert.match(env, /^BRIGHT_EDGE_NETWORK=bright-edge$/m);
+  assert.match(env, /^BRIGHT_EDGE_CIDR=/m);
   assert.match(env, /GITHUB_ALLOWED_USERS=/);
   assert.match(env, /GITHUB_OAUTH_CLIENT_ID=/);
   assert.match(env, /GITHUB_OAUTH_CLIENT_SECRET_FILE=/);
@@ -113,11 +118,13 @@ test('file-backed Compose secrets keep the host directory private while remainin
   assert.doesNotMatch(workflow, /chmod 600 \.ci-secrets\/\*/);
 });
 
-test('runtime publication checks inspect actual host bindings instead of treating exposed ports as published', () => {
+test('deployment verification simulates an external shared Caddy instead of starting Caddy in Bright Compose', () => {
   const workflow = read('.github/workflows/t18-static-web.yml');
 
+  assert.match(workflow, /docker network create[^\n]*BRIGHT_EDGE_NETWORK/);
+  assert.match(workflow, /bright-shared-caddy-ci/);
+  assert.match(workflow, /--network "\$BRIGHT_EDGE_NETWORK"/);
   assert.match(workflow, /HostConfig\.PortBindings/);
-  assert.doesNotMatch(workflow, /docker compose port app 4180/);
-  assert.doesNotMatch(workflow, /docker compose port worker 4181/);
-  assert.doesNotMatch(workflow, /docker compose port oauth2-proxy 4182/);
+  assert.doesNotMatch(workflow, /docker compose ps -q caddy/);
+  assert.doesNotMatch(workflow, /docker compose up -d\s*$/m);
 });
