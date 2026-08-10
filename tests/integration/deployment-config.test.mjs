@@ -92,3 +92,17 @@ test('deployment examples contain placeholders and immutable image-tag inputs, n
   assert.match(env, /OPENAI_API_KEY_FILE=/);
   assert.doesNotMatch(env, /^OPENAI_API_KEY=/m);
 });
+
+test('file-backed Compose secrets keep the host directory private while remaining readable by non-root containers', () => {
+  const deployment = read('docs/operations/deployment.md');
+  const workflow = read('.github/workflows/t18-static-web.yml');
+
+  assert.match(deployment, /secret directory[^\n]*`0700`/i);
+  assert.match(deployment, /secret files[^\n]*`0444`/i);
+  assert.match(deployment, /non-root/i);
+  assert.doesNotMatch(deployment, /mode `0600`/i);
+
+  assert.match(workflow, /chmod 700 \.ci-secrets/);
+  assert.match(workflow, /chmod 444 \.ci-secrets\/\*/);
+  assert.doesNotMatch(workflow, /chmod 600 \.ci-secrets\/\*/);
+});
