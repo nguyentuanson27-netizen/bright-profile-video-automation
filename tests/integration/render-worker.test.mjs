@@ -57,29 +57,31 @@ function fixture() {
   return {directory, dataDir, db, repositories, projectStateStore, approvalService, artifactStore, mediaIngestService};
 }
 
+const createFakeRenderService = (state, calls = []) => createRenderExecutionService({
+  repositories: state.repositories,
+  projectStateStore: state.projectStateStore,
+  approvalService: state.approvalService,
+  mediaIngestService: state.mediaIngestService,
+  artifactStore: state.artifactStore,
+  dataDir: state.dataDir,
+  generateTts: async ({output}) => {
+    calls.push('tts');
+    writeFileSync(output, Buffer.from('fake-audio'));
+    return {output, duration: 3};
+  },
+  renderProfile: async ({outputLocation, inputProps}) => {
+    calls.push('render');
+    assert.match(inputProps.audioUrl, /^file:\/\//);
+    writeFileSync(outputLocation, Buffer.from('fake-mp4'));
+  },
+  probeDuration: async () => 3,
+});
+
 test('approved revision is ingested, voiced, rendered, validated and completed by durable worker', async () => {
   const state = fixture();
   try {
     const calls = [];
-    const renderService = createRenderExecutionService({
-      repositories: state.repositories,
-      projectStateStore: state.projectStateStore,
-      approvalService: state.approvalService,
-      mediaIngestService: state.mediaIngestService,
-      artifactStore: state.artifactStore,
-      dataDir: state.dataDir,
-      generateTts: async ({output}) => {
-        calls.push('tts');
-        writeFileSync(output, Buffer.from('fake-audio'));
-        return {output, duration: 3};
-      },
-      renderProfile: async ({outputLocation, inputProps}) => {
-        calls.push('render');
-        assert.match(inputProps.audioUrl, /^file:\/\//);
-        writeFileSync(outputLocation, Buffer.from('fake-mp4'));
-      },
-      probeDuration: async () => 3,
-    });
+    const renderService = createFakeRenderService(state, calls);
 
     const queued = await renderService.enqueue({projectId: 'project-1', revisionId: 'revision-1', maxAttempts: 2});
     assert.equal(queued.job.status, 'queued');
@@ -103,6 +105,42 @@ test('approved revision is ingested, voiced, rendered, validated and completed b
     assert.ok(audio);
     assert.ok(video);
     assert.equal(existsSync(path.join(state.dataDir, video.relativePath)), true);
+  } finally {
+    state.db.close();
+    rmSync(state.directory, {recursive: true, force: true});
+  }
+});
+
+test('expired render lease is reclaimed after worker crash without duplicate completed artifacts', async () => {
+  const state = fixture();
+  try {
+    const calls = [];
+    const renderService = createFakeRenderService(state, calls);
+    const queued = await renderService.enqueue({projectId: 'project-1', revisionId: 'revision-1', maxAttempts: 2});
+    const jobStore = createJobStore(state.db);
+    const startedAt = new Date('2026-08-10T00:00:00.000Z');
+
+    const abandoned = jobStore.claimNext({workerId: 'dead-worker', now: startedAt, leaseMs: 1_000});
+    assert.equal(abandoned.id, queued.job.id);
+    assert.equal(abandoned.attempt, 1);
+
+    const recoveredAt = new Date(startedAt.getTime() + 2_000);
+    const runner = createJobRunner({
+      jobStore,
+      workerId: 'replacement-worker',
+      handlers: {rendering: renderService.handleJob},
+      leaseMs: 60_000,
+      clock: () => recoveredAt,
+    });
+    const completedJob = await runner.runOnce();
+
+    assert.equal(completedJob.status, 'succeeded');
+    assert.equal(completedJob.attempt, 2);
+    assert.deepEqual(calls, ['tts', 'render']);
+    const artifacts = state.repositories.artifacts.listByProject('project-1');
+    assert.equal(artifacts.filter((artifact) => artifact.kind === 'tts-audio').length, 1);
+    assert.equal(artifacts.filter((artifact) => artifact.kind === 'rendered-video').length, 1);
+    assert.equal(state.repositories.projects.get('project-1').status, 'completed');
   } finally {
     state.db.close();
     rmSync(state.directory, {recursive: true, force: true});
