@@ -11,21 +11,27 @@ const CANDIDATE_KEYS = new Set([
 const SOURCE_TYPES = new Set(['search-result', 'operator-url']);
 const DISCOVERY_STATUSES = new Set(['discovered', 'unavailable']);
 
+const providerInputError = (message = 'Research provider input is invalid') => new AppError(
+  'PROVIDER_INPUT_INVALID',
+  message,
+  {status: 400},
+);
+
 const providerOutputError = () => new AppError(
   'PROVIDER_OUTPUT_INVALID',
   'Research provider returned invalid discovery data',
   {status: 502},
 );
 
-const parsePublicHttpUrl = (value) => {
+const parsePublicHttpUrl = (value, invalid = providerOutputError) => {
   let url;
   try {
     url = new URL(String(value));
   } catch {
-    throw providerOutputError();
+    throw invalid();
   }
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
-    throw providerOutputError();
+    throw invalid();
   }
   return url.href;
 };
@@ -75,21 +81,18 @@ export function normalizeResearchCandidate(candidate) {
 }
 
 const assertSearchInput = (input) => {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) {
-    throw new AppError('PROVIDER_INPUT_INVALID', 'Research provider input is invalid', {status: 400});
-  }
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw providerInputError();
   const allowed = new Set(['topic', 'sourceUrls']);
-  if (Object.keys(input).some((key) => !allowed.has(key))) {
-    throw new AppError('PROVIDER_INPUT_INVALID', 'Research provider input is invalid', {status: 400});
-  }
+  if (Object.keys(input).some((key) => !allowed.has(key))) throw providerInputError();
   if (typeof input.topic !== 'string' || input.topic.trim().length === 0 || input.topic.length > 500) {
-    throw new AppError('PROVIDER_INPUT_INVALID', 'Research provider topic is invalid', {status: 400});
+    throw providerInputError('Research provider topic is invalid');
   }
   if (input.sourceUrls !== undefined) {
     if (!Array.isArray(input.sourceUrls) || input.sourceUrls.length > 50) {
-      throw new AppError('PROVIDER_INPUT_INVALID', 'Research provider source URLs are invalid', {status: 400});
+      throw providerInputError('Research provider source URLs are invalid');
     }
-    for (const value of input.sourceUrls) parsePublicHttpUrl(value);
+    const invalidUrl = () => providerInputError('Research provider source URLs are invalid');
+    for (const value of input.sourceUrls) parsePublicHttpUrl(value, invalidUrl);
   }
 };
 
