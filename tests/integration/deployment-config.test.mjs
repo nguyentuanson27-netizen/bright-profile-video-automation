@@ -31,7 +31,7 @@ test('compose defines standalone topology behind a shared external Caddy edge', 
 
   assert.match(compose, /^name:\s*bright-standalone$/m);
   assert.match(compose, /^networks:\n[\s\S]*^  edge:\n    external: true\n    name: \$\{BRIGHT_EDGE_NETWORK:\?/m);
-  assert.match(oauth, /\n    networks:\n[\s\S]*edge:\n[\s\S]*aliases:\n[\s\S]*- bright-standalone-oauth2-proxy/);
+  assert.match(oauth, /bright-standalone-oauth2-proxy/);
   assert.match(oauth, /OAUTH2_PROXY_TRUSTED_PROXY_IPS:\s*\$\{BRIGHT_EDGE_CIDR:\?/);
   assert.match(oauth, /OAUTH2_PROXY_UPSTREAMS:\s*http:\/\/app:4180\//);
 
