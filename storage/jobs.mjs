@@ -38,6 +38,12 @@ const mapJob = (row) => row ? {
 
 export function createJobStore(db) {
   const getJob = db.prepare('SELECT * FROM jobs WHERE id = ?');
+  const jobStats = db.prepare(`
+    SELECT stage, status, COUNT(*) AS count
+    FROM jobs
+    GROUP BY stage, status
+    ORDER BY stage, status
+  `);
   const expireExhausted = db.prepare(`
     UPDATE jobs
     SET status = 'failed',
@@ -162,6 +168,19 @@ export function createJobStore(db) {
   return Object.freeze({
     get(id) {
       return mapJob(getJob.get(id));
+    },
+
+    stats() {
+      const byStage = new Map();
+      for (const row of jobStats.all()) {
+        const current = byStage.get(row.stage) || {stage: row.stage, queued: 0, active: 0, failed: 0};
+        const count = Number(row.count) || 0;
+        if (row.status === 'queued' || row.status === 'retry_wait') current.queued += count;
+        else if (row.status === 'running') current.active += count;
+        else if (row.status === 'failed') current.failed += count;
+        byStage.set(row.stage, current);
+      }
+      return [...byStage.values()];
     },
 
     claimNext({workerId, now = new Date(), leaseMs = 30_000}) {
