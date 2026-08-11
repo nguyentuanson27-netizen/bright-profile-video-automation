@@ -1,0 +1,25 @@
+FROM node:24.18.0-bookworm-slim
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
+    && npm cache clean --force
+
+COPY --chown=node:node lib/evidence ./lib/evidence
+COPY --chown=node:node mcp ./mcp
+
+USER node
+ENV NODE_ENV=production \
+    MCP_HOST=0.0.0.0 \
+    MCP_PORT=4190 \
+    MCP_ALLOWED_HOSTS=127.0.0.1,localhost \
+    MCP_MAX_BODY_BYTES=2097152 \
+    MCP_RATE_LIMIT_PER_MINUTE=60 \
+    MCP_REQUEST_TIMEOUT_MS=10000
+
+EXPOSE 4190
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD ["node", "-e", "fetch('http://127.0.0.1:4190/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+
+CMD ["node", "mcp/server.mjs"]
