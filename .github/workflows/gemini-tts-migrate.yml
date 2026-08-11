@@ -1,0 +1,170 @@
+name: Gemini TTS Migration
+
+on:
+  push:
+    branches:
+      - build/standalone-production-app
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Patch Gemini TTS production wiring
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          def replace_one(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected exactly one match, found {count}: {old!r}')
+              p.write_text(text.replace(old, new))
+
+          replace_one(
+              'app/services/execute-render.mjs',
+              "import {generateTimedGoogleTts} from '../../lib/timed-google-tts.mjs';",
+              "import {generateTimedGeminiTts} from '../../lib/timed-gemini-tts.mjs';",
+          )
+          replace_one(
+              'app/services/execute-render.mjs',
+              '  generateTts = generateTimedGoogleTts,',
+              '  generateTts = generateTimedGeminiTts,',
+          )
+          replace_one(
+              'app/services/execute-render.mjs',
+              "        provider: 'google-tts',",
+              "        provider: 'gemini',",
+          )
+
+          replace_one(
+              'compose.yml',
+              '      GEMINI_GENERATION_MAX_OUTPUT_TOKENS: ${GEMINI_GENERATION_MAX_OUTPUT_TOKENS:-12000}\n',
+              '      GEMINI_GENERATION_MAX_OUTPUT_TOKENS: ${GEMINI_GENERATION_MAX_OUTPUT_TOKENS:-12000}\n'
+              '      GEMINI_TTS_MODEL: ${GEMINI_TTS_MODEL:-gemini-3.1-flash-tts-preview}\n'
+              '      GEMINI_TTS_VOICE: ${GEMINI_TTS_VOICE:-Kore}\n'
+              '      GEMINI_TTS_TIMEOUT_MS: ${GEMINI_TTS_TIMEOUT_MS:-30000}\n',
+          )
+          replace_one(
+              'compose.yml',
+              '      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/google_tts_credentials\n'
+              '      GOOGLE_TTS_LANGUAGE: ${GOOGLE_TTS_LANGUAGE:-vi-VN}\n'
+              '      GOOGLE_TTS_VOICE: ${GOOGLE_TTS_VOICE:-vi-VN-Neural2-D}\n'
+              '      GOOGLE_TTS_SPEAKING_RATE: ${GOOGLE_TTS_SPEAKING_RATE:-1.03}\n',
+              '',
+          )
+          replace_one('compose.yml', '      - google_tts_credentials\n', '')
+          replace_one(
+              'compose.yml',
+              '  google_tts_credentials:\n    file: ${GOOGLE_TTS_CREDENTIALS_FILE:?set GOOGLE_TTS_CREDENTIALS_FILE}\n',
+              '',
+          )
+
+          replace_one('package.json', '    "@google-cloud/text-to-speech": "6.4.1",\n', '')
+
+          replace_one(
+              '.env.example',
+              'GOOGLE_TTS_CREDENTIALS_FILE=/srv/bright-profile/secrets/google-tts.json\n',
+              '',
+          )
+          replace_one(
+              '.env.example',
+              'GEMINI_GENERATION_MAX_OUTPUT_TOKENS=12000\n',
+              'GEMINI_GENERATION_MAX_OUTPUT_TOKENS=12000\n'
+              'GEMINI_TTS_MODEL=gemini-3.1-flash-tts-preview\n'
+              'GEMINI_TTS_VOICE=Kore\n'
+              'GEMINI_TTS_TIMEOUT_MS=30000\n',
+          )
+          replace_one(
+              '.env.example',
+              'GOOGLE_TTS_LANGUAGE=vi-VN\nGOOGLE_TTS_VOICE=vi-VN-Neural2-D\nGOOGLE_TTS_SPEAKING_RATE=1.03\n',
+              '',
+          )
+
+          replace_one(
+              'tests/integration/render-worker.test.mjs',
+              'provider=\\"google-tts\\",operation=\\"tts\\",outcome=\\"success\\"',
+              'provider=\\"gemini\\",operation=\\"tts\\",outcome=\\"success\\"',
+          )
+          replace_one(
+              'tests/integration/deployment-config.test.mjs',
+              '  assert.doesNotMatch(compose, /OPENAI_/);\n',
+              '  assert.doesNotMatch(compose, /OPENAI_/);\n'
+              '  assert.match(worker, /GEMINI_TTS_MODEL:\\s*\\$\\{GEMINI_TTS_MODEL:-gemini-3\\.1-flash-tts-preview\\}/);\n'
+              '  assert.match(worker, /GEMINI_TTS_VOICE:\\s*\\$\\{GEMINI_TTS_VOICE:-Kore\\}/);\n'
+              '  assert.doesNotMatch(compose, /GOOGLE_APPLICATION_CREDENTIALS|GOOGLE_TTS_|google_tts_credentials/);\n',
+          )
+          replace_one(
+              'tests/integration/deployment-config.test.mjs',
+              '  assert.match(env, /GOOGLE_TTS_CREDENTIALS_FILE=/);\n',
+              '  assert.doesNotMatch(env, /GOOGLE_TTS_|google-tts\\.json/);\n'
+              '  assert.match(env, /^GEMINI_TTS_MODEL=gemini-3\\.1-flash-tts-preview$/m);\n'
+              '  assert.match(env, /^GEMINI_TTS_VOICE=Kore$/m);\n',
+          )
+
+          replace_one(
+              '.github/workflows/t18-static-web.yml',
+              '      GOOGLE_TTS_CREDENTIALS_FILE: ${{ github.workspace }}/.ci-secrets/google-tts.json\n',
+              '',
+          )
+          replace_one(
+              '.github/workflows/t18-static-web.yml',
+              '      GEMINI_MODEL: gemini-3.5-flash-lite\n',
+              '      GEMINI_MODEL: gemini-3.5-flash-lite\n'
+              '      GEMINI_TTS_MODEL: gemini-3.1-flash-tts-preview\n'
+              '      GEMINI_TTS_VOICE: Kore\n'
+              '      GEMINI_TTS_TIMEOUT_MS: 30000\n',
+          )
+          replace_one(
+              '.github/workflows/t18-static-web.yml',
+              '        run: node --test tests/unit/gemini-research.test.mjs tests/unit/gemini-generation.test.mjs tests/unit/gemini-secret-file.test.mjs tests/integration/standalone-web.test.mjs tests/integration/deployment-config.test.mjs\n',
+              '        run: node --test tests/unit/gemini-research.test.mjs tests/unit/gemini-generation.test.mjs tests/unit/gemini-tts.test.mjs tests/unit/timed-gemini-tts.test.mjs tests/unit/gemini-secret-file.test.mjs tests/integration/gemini-tts-wiring.test.mjs tests/integration/standalone-web.test.mjs tests/integration/deployment-config.test.mjs\n',
+          )
+          replace_one(
+              '.github/workflows/t18-static-web.yml',
+              "          Path('.ci-secrets/google-tts.json').write_text('{}')\n",
+              '',
+          )
+          replace_one(
+              '.github/workflows/t18-static-web.yml',
+              "          assert worker_env.get('GEMINI_MODEL') == 'gemini-3.5-flash-lite'\n",
+              "          assert worker_env.get('GEMINI_MODEL') == 'gemini-3.5-flash-lite'\n"
+              "          assert worker_env.get('GEMINI_TTS_MODEL') == 'gemini-3.1-flash-tts-preview'\n"
+              "          assert worker_env.get('GEMINI_TTS_VOICE') == 'Kore'\n"
+              "          assert 'GOOGLE_APPLICATION_CREDENTIALS' not in worker_env\n"
+              "          assert not any(key.startswith('GOOGLE_TTS_') for key in worker_env)\n",
+          )
+
+          pkg = json.loads(Path('package.json').read_text())
+          if '@google-cloud/text-to-speech' in pkg.get('dependencies', {}):
+              raise SystemExit('Google Cloud TTS dependency was not removed')
+          PY
+          git rm lib/timed-google-tts.mjs scripts/generate-google-tts.py scripts/generate-timed-google-tts.py
+      - name: Refresh frozen lockfile without lifecycle scripts
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Verify strict frozen install
+        run: npm ci --strict-allow-scripts=true --no-audit --no-fund
+      - name: Run focused migration tests
+        run: node --test tests/unit/gemini-tts.test.mjs tests/unit/timed-gemini-tts.test.mjs tests/integration/gemini-tts-wiring.test.mjs tests/integration/render-worker.test.mjs tests/integration/deployment-config.test.mjs
+      - run: npm run lint
+      - name: Commit migration only after verification
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "feat: replace Google Cloud TTS with Gemini TTS"
+          git push origin HEAD:build/standalone-production-app
