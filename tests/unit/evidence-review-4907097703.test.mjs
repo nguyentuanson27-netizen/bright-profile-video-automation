@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {normalizeEvidence} from '../../lib/evidence/normalize-evidence.mjs';
 import {normalizeClaim, normalizeTypedValue} from '../../lib/evidence/primitives.mjs';
+import {assertEvidenceBundle} from '../../lib/evidence/schema-validator.mjs';
 
 const base = (items, extra = {}) => ({
   subject: {name: 'Emiru', aliases: ['Emily Schunk']},
@@ -65,6 +66,7 @@ test('comma grouping separators are not treated as decimal commas', () => {
   assert.deepEqual(normalizeTypedValue('2,100K', 'followers'), {value: 2_100_000, unit: 'followers'});
   assert.deepEqual(normalizeTypedValue('2,1M', 'followers'), {value: 2_100_000, unit: 'followers'});
   assert.deepEqual(normalizeTypedValue('12,5%', undefined), {value: 12.5, unit: 'percent'});
+  assert.deepEqual(normalizeTypedValue('1,2345', 'followers'), {value: '1,2345', unit: 'followers'});
 });
 
 test('source overflow is deterministic and observable instead of silently lossy', () => {
@@ -81,6 +83,7 @@ test('source overflow is deterministic and observable instead of silently lossy'
   const reversed = normalizeEvidence(base([...items].reverse()));
 
   assert.deepEqual(forward, reversed);
+  assert.doesNotThrow(() => assertEvidenceBundle(forward));
   assert.equal(forward.evidence.length, 1);
   assert.equal(forward.evidence[0].sources.length, 20);
   assert.equal(forward.evidence[0].omittedSourceCount, 5);
