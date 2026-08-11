@@ -1,0 +1,51 @@
+name: MCP Evidence Verification
+
+on:
+  push:
+    branches:
+      - build/mcp-public-research-evidence
+  pull_request:
+    branches:
+      - spec/standalone-production-app
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Bootstrap exact dependency lock
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Unit and integration tests
+        run: npm test
+      - name: Lint MCP scope
+        run: npm run lint
+      - name: Syntax checks
+        run: |
+          node --check mcp/server.mjs
+          node --check lib/evidence/primitives.mjs
+          node --check lib/evidence/normalize-evidence.mjs
+          node --check lib/evidence/schema-validator.mjs
+      - name: Verify MCP process health
+        run: |
+          npm run mcp >mcp.stdout.log 2>mcp.stderr.log &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:4190/health >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat mcp.stderr.log
+          exit 1
+      - name: Upload generated lockfile for bootstrap commit
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-package-lock
+          path: package-lock.json
+          if-no-files-found: error
