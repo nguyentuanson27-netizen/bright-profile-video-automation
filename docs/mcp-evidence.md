@@ -47,14 +47,14 @@ Conflict detection uses a deterministic comparable-fact identity rather than cat
 subject + category + metric/entity signature + unit + claim-date bucket
 ```
 
-This keeps broad categories such as `audience_metric` from grouping different entities such as Twitch followers and Instagram followers merely because their units and dates match.
+V1 compares metric/entity signatures exactly after that normalization. It deliberately does not use semantic similarity, embeddings, or an LLM for conflict identity. This conservative rule prevents broad categories such as `audience_metric` from grouping different entities such as Twitch followers and Instagram followers merely because most surrounding words, units, and dates are similar.
 
 `claimDate` has two deterministic roles:
 
 - when a typed `value` exists, differing claim dates are treated as different snapshots and are not compared as the same numeric fact;
-- when neither side has a typed value and otherwise-comparable event claims disagree only on `claimDate`, the date itself is treated as the disputed fact and the conflict uses the `event-date-disputed` bucket.
+- when neither side has a typed value, differing `claimDate` values are treated as a disputed event date only when each normalized claim explicitly contains its own year, month, and day. Otherwise the dates remain separate snapshots and do not create a conflict merely because they differ.
 
-The normalizer does not use an LLM or embeddings to derive this identity.
+A detected event-date disagreement uses the `event-date-disputed` bucket so both evidence records remain linked while retaining their original `claimDate` values.
 
 ## `maxEvidence` retention policy
 
