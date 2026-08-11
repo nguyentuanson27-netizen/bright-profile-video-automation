@@ -36,6 +36,26 @@ test('explicit numeric contradictions in claim text do not near-merge when value
   assert.equal(bundle.conflicts[0].evidenceIds.length, 2);
 });
 
+test('claimDate metadata does not consume an unrelated metric equal to the day number', () => {
+  const bundle = normalizeEvidence(base([
+    {
+      claim: 'Emiru attended 12 Twitch events during the reporting period.',
+      url: 'https://a.example/events',
+      unit: 'events',
+      claimDate: '2026-07-12',
+    },
+    {
+      claim: 'Emiru attended 14 Twitch events during the reporting period.',
+      url: 'https://b.example/events',
+      unit: 'events',
+      claimDate: '2026-07-12',
+    },
+  ]));
+
+  assert.equal(bundle.evidence.length, 2);
+  assert.equal(bundle.conflicts.length, 1);
+});
+
 test('uncategorized comparable numeric facts can still form a conflict', () => {
   const bundle = normalizeEvidence(base([
     {
