@@ -9,7 +9,7 @@ on:
       - spec/standalone-production-app
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   verify:
@@ -20,8 +20,8 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
-      - name: Bootstrap exact dependency lock
-        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Install frozen dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Unit and integration tests
         run: npm test
       - name: Lint MCP scope
@@ -43,12 +43,42 @@ jobs:
           done
           cat mcp.stderr.log
           exit 1
-      - name: Freeze generated lockfile on build branch
-        if: github.event_name == 'push'
+      - name: Render regression smoke
         run: |
-          if git diff --quiet -- package-lock.json; then exit 0; fi
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add package-lock.json
-          git commit -m 'build: freeze MCP dependency lock'
-          git push origin HEAD:build/mcp-public-research-evidence
+          browser="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          test -n "$browser"
+          REMOTION_BROWSER_EXECUTABLE="$browser" npm run render:smoke
+      - name: Validate MCP Compose boundary
+        run: |
+          docker compose -f compose.mcp.yml config --format json > "$RUNNER_TEMP/mcp-compose.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = json.loads(Path(os.environ['RUNNER_TEMP']).joinpath('mcp-compose.json').read_text())
+          service = data['services']['bright-evidence-mcp']
+          assert not service.get('volumes')
+          assert not service.get('secrets')
+          ports = service.get('ports') or []
+          assert len(ports) == 1
+          assert ports[0].get('host_ip') == '127.0.0.1'
+          assert str(ports[0].get('published')) == '4190'
+          assert str(ports[0].get('target')) == '4190'
+          PY
+      - name: Build and verify isolated MCP container
+        run: |
+          docker compose -f compose.mcp.yml up -d --build
+          container="$(docker compose -f compose.mcp.yml ps -q bright-evidence-mcp)"
+          test -n "$container"
+          for attempt in $(seq 1 60); do
+            status="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container")"
+            if [ "$status" = healthy ]; then break; fi
+            if [ "$status" = unhealthy ]; then docker compose -f compose.mcp.yml logs; exit 1; fi
+            sleep 1
+          done
+          test "$(docker inspect --format='{{.State.Health.Status}}' "$container")" = healthy
+          test "$(docker compose -f compose.mcp.yml exec -T bright-evidence-mcp id -u)" != 0
+          docker inspect "$container" | node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const c=JSON.parse(s)[0];const mounts=c.Mounts||[];if(mounts.length)process.exit(1);const b=c.HostConfig.PortBindings||{};const p=b['4190/tcp'];if(!Array.isArray(p)||p.length!==1||p[0].HostIp!=='127.0.0.1'||p[0].HostPort!=='4190')process.exit(1)})"
+          curl -fsS http://127.0.0.1:4190/health >/dev/null
+      - name: Tear down MCP container
+        if: always()
+        run: docker compose -f compose.mcp.yml down -v --remove-orphans
