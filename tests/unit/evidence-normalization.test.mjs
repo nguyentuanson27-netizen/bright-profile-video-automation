@@ -155,12 +155,30 @@ test('malformed individual items are rejected without failing valid evidence', (
   assert.equal(bundle.rejectedItems[0].index, 1);
 });
 
-test('mixed Vietnamese and English close evidence can merge when tokens align', () => {
+test('invalid evidence dates are rejected at item level', () => {
   const bundle = normalizeEvidence(base([
-    {claim: 'Emiru reached 2100000 Twitch followers in 2026.', url: 'https://a.example/one', value: 2100000, unit: 'followers', category: 'followers', claimDate: '2026-07-01'},
-    {claim: 'Emiru reached 2.1M Twitch followers in 2026.', url: 'https://b.example/two', value: '2.1M', unit: 'followers', category: 'followers', claimDate: '2026-07-01'},
+    {claim: 'Valid dated claim.', url: 'https://example.com/valid', claimDate: '2026-07-01', publishedAt: '2026-07-01T08:00:00Z'},
+    {claim: 'Impossible claim date.', url: 'https://example.com/bad-date', claimDate: '2026-02-31'},
+    {claim: 'Malformed publication date.', url: 'https://example.com/bad-published', publishedAt: 'July 1st sometime'},
   ]));
   assert.equal(bundle.evidence.length, 1);
+  assert.deepEqual(bundle.rejectedItems.map((item) => item.index), [1, 2]);
+});
+
+test('malformed researchedAt rejects the request envelope', () => {
+  assert.throws(
+    () => normalizeEvidence(base([{claim: 'Valid claim.', url: 'https://example.com/source'}], {researchedAt: 'sometime yesterday'})),
+    /researchedAt must be an ISO date or date-time/,
+  );
+});
+
+test('true Vietnamese and English same-fact claims stay separate without semantic translation', () => {
+  const bundle = normalizeEvidence(base([
+    {claim: 'Emiru reached 2100000 Twitch followers in 2026.', url: 'https://a.example/one', value: 2100000, unit: 'followers', category: 'followers', claimDate: '2026-07-01'},
+    {claim: 'Emiru đạt 2100000 người theo dõi Twitch trong năm 2026.', url: 'https://b.example/two', value: 2100000, unit: 'followers', category: 'followers', claimDate: '2026-07-01'},
+  ]));
+  assert.equal(bundle.evidence.length, 2);
+  assert.equal(bundle.conflicts.length, 0);
 });
 
 test('same input produces byte-equivalent bundle', () => {
