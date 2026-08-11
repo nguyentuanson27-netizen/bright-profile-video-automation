@@ -55,6 +55,12 @@ const start = async (env = {}) => {
   return {server, logs, url: `http://127.0.0.1:${port}/mcp`};
 };
 
+const objectSchemaBranch = (schema) => [
+  schema,
+  ...(schema?.anyOf ?? []),
+  ...(schema?.oneOf ?? []),
+].find((candidate) => candidate?.type === 'object' && candidate?.properties);
+
 test('MCP exposes one read-only normalize_evidence tool and returns structured content', async (t) => {
   const {server, url} = await start();
   t.after(() => server.close());
@@ -76,9 +82,27 @@ test('MCP exposes one read-only normalize_evidence tool and returns structured c
   const listed = await rpc(url, {jsonrpc: '2.0', id: 2, method: 'tools/list', params: {}}, headers);
   assert.equal(listed.response.status, 200);
   assert.equal(listed.body.result.tools.length, 1);
-  assert.equal(listed.body.result.tools[0].name, 'normalize_evidence');
-  assert.equal(listed.body.result.tools[0].annotations.readOnlyHint, true);
-  assert.equal(listed.body.result.tools[0].annotations.openWorldHint, false);
+  const tool = listed.body.result.tools[0];
+  assert.equal(tool.name, 'normalize_evidence');
+  assert.equal(tool.annotations.readOnlyHint, true);
+  assert.equal(tool.annotations.openWorldHint, false);
+
+  const advertisedItem = objectSchemaBranch(tool.inputSchema.properties.items.items);
+  assert.ok(advertisedItem, 'tools/list should advertise a structured evidence item branch');
+  assert.equal(advertisedItem.properties.claim.type, 'string');
+  assert.match(advertisedItem.properties.claim.description, /atomic factual claim/i);
+  assert.equal(advertisedItem.properties.url.type, 'string');
+  assert.match(advertisedItem.properties.url.description, /public http/i);
+  assert.ok(advertisedItem.properties.value, 'typed value field should be advertised');
+  assert.equal(advertisedItem.properties.unit.type, 'string');
+
+  assert.equal(tool.outputSchema.properties.evidence.items.type, 'object');
+  assert.equal(tool.outputSchema.properties.evidence.items.properties.id.type, 'string');
+  assert.equal(tool.outputSchema.properties.evidence.items.properties.sources.items.type, 'object');
+  assert.equal(tool.outputSchema.properties.conflicts.items.type, 'object');
+  assert.equal(tool.outputSchema.properties.conflicts.items.properties.evidenceIds.items.type, 'string');
+  assert.equal(tool.outputSchema.properties.rejectedItems.items.type, 'object');
+  assert.equal(tool.outputSchema.properties.rejectedItems.items.properties.index.type, 'integer');
 
   const called = await rpc(url, {
     jsonrpc: '2.0',
