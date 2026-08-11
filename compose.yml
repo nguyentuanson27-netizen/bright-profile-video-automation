@@ -46,8 +46,6 @@ services:
 
   app:
     image: ${BRIGHT_IMAGE:?set BRIGHT_IMAGE to an immutable git-SHA tag or image digest}
-    build:
-      context: .
     restart: unless-stopped
     command: ["node", "server.mjs"]
     environment:
