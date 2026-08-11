@@ -4,6 +4,8 @@ import {loadSecretValue} from '../../security/secret-file.mjs';
 import {createGenerationProvider} from './index.mjs';
 
 const DEFAULT_MODEL = 'gemini-3.5-flash-lite';
+const INCOMPLETE_STATUSES = new Set(['queued', 'in_progress', 'incomplete', 'requires_action']);
+const FAILED_STATUSES = new Set(['failed', 'cancelled', 'budget_exceeded']);
 const nullable = (schema) => ({anyOf: [schema, {type: 'null'}]});
 
 const statSchema = {
@@ -179,26 +181,30 @@ export function createGeminiGenerationProvider({client, config = loadGeminiGener
       let response;
       try {
         const gemini = await getClient();
-        response = await gemini.models.generateContent({
+        response = await gemini.interactions.create({
           model: config.model,
-          contents: createProviderInput(input),
-          config: {
-            systemInstruction: generationInstructions,
-            responseMimeType: 'application/json',
-            responseJsonSchema: GEMINI_GENERATION_SCHEMA,
-            maxOutputTokens: config.maxOutputTokens,
-            httpOptions: {timeout: config.timeoutMs},
+          system_instruction: generationInstructions,
+          input: createProviderInput(input),
+          response_format: {
+            type: 'text',
+            mime_type: 'application/json',
+            schema: GEMINI_GENERATION_SCHEMA,
           },
-        });
+          generation_config: {max_output_tokens: config.maxOutputTokens},
+          store: false,
+        }, {timeout_ms: config.timeoutMs});
       } catch (error) {
         throw classifyGeminiError(error, 'generation');
       }
 
-      if (response?.promptFeedback?.blockReason) {
-        throw new AppError('PROVIDER_REFUSAL', 'Gemini generation blocked the request', {status: 422, retryable: false});
+      if (INCOMPLETE_STATUSES.has(response?.status)) {
+        throw new AppError('PROVIDER_INCOMPLETE', 'Gemini generation response was incomplete', {status: 502, retryable: true});
+      }
+      if (FAILED_STATUSES.has(response?.status) || response?.status !== 'completed') {
+        throw new AppError('PROVIDER_FAILURE', 'Gemini generation response failed', {status: 502, retryable: false});
       }
 
-      const text = typeof response?.text === 'string' ? response.text.trim() : '';
+      const text = typeof response?.output_text === 'string' ? response.output_text.trim() : '';
       if (!text) {
         throw new AppError('PROVIDER_OUTPUT_INVALID', 'Gemini generation returned no structured output', {status: 502});
       }
