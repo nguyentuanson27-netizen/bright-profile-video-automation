@@ -131,7 +131,7 @@ test('render execution records TTS and Remotion provider metrics through product
 
     assert.equal((await runner.runOnce()).status, 'succeeded');
     const metrics = await observability.metrics();
-    assert.match(metrics, /bright_provider_duration_seconds_count\{provider="google-tts",operation="tts",outcome="success"\} 1/);
+    assert.match(metrics, /bright_provider_duration_seconds_count\{provider="gemini",operation="tts",outcome="success"\} 1/);
     assert.match(metrics, /bright_provider_duration_seconds_count\{provider="remotion",operation="render",outcome="success"\} 1/);
   } finally {
     state.db.close();

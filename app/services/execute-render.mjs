@@ -4,7 +4,7 @@ import {mkdir, readFile, rm, stat} from 'node:fs/promises';
 import path from 'node:path';
 import {clearInterval, setInterval} from 'node:timers';
 import {AppError} from '../../domain/errors.mjs';
-import {generateTimedGoogleTts} from '../../lib/timed-google-tts.mjs';
+import {generateTimedGeminiTts} from '../../lib/timed-gemini-tts.mjs';
 import {renderBrightProfile} from '../../lib/remotion-renderer.mjs';
 import {createTrustedAssetServer} from '../../worker/trusted-assets.mjs';
 
@@ -95,7 +95,7 @@ export function createRenderExecutionService({
   mediaIngestService,
   artifactStore,
   dataDir,
-  generateTts = generateTimedGoogleTts,
+  generateTts = generateTimedGeminiTts,
   renderProfile = renderBrightProfile,
   probeDuration = defaultProbeDuration,
   trustedAssetServerFactory = createTrustedAssetServer,
@@ -142,7 +142,7 @@ export function createRenderExecutionService({
       await diskGuard?.assertExpensiveWorkAllowed('tts');
       const output = path.join(workDir, 'voice.mp3');
       await withHeartbeat(() => observeProvider({
-        provider: 'google-tts',
+        provider: 'gemini',
         operation: 'tts',
         run: () => generateTts({
           manifest: {duration: manifest.renderProject.duration, chunks},

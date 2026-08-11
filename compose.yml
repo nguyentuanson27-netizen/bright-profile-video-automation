@@ -85,10 +85,9 @@ services:
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
       GEMINI_TIMEOUT_MS: ${GEMINI_TIMEOUT_MS:-30000}
       GEMINI_GENERATION_MAX_OUTPUT_TOKENS: ${GEMINI_GENERATION_MAX_OUTPUT_TOKENS:-12000}
-      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/google_tts_credentials
-      GOOGLE_TTS_LANGUAGE: ${GOOGLE_TTS_LANGUAGE:-vi-VN}
-      GOOGLE_TTS_VOICE: ${GOOGLE_TTS_VOICE:-vi-VN-Neural2-D}
-      GOOGLE_TTS_SPEAKING_RATE: ${GOOGLE_TTS_SPEAKING_RATE:-1.03}
+      GEMINI_TTS_MODEL: ${GEMINI_TTS_MODEL:-gemini-3.1-flash-tts-preview}
+      GEMINI_TTS_VOICE: ${GEMINI_TTS_VOICE:-Kore}
+      GEMINI_TTS_TIMEOUT_MS: ${GEMINI_TTS_TIMEOUT_MS:-30000}
       TTS_MAX_SPEED: ${TTS_MAX_SPEED:-1.35}
       TTS_END_GAP_SECONDS: ${TTS_END_GAP_SECONDS:-0.18}
       COMPLETED_ARTIFACT_RETENTION_DAYS: ${COMPLETED_ARTIFACT_RETENTION_DAYS:-30}
@@ -101,7 +100,6 @@ services:
       - bright_data:/app/data
     secrets:
       - gemini_api_key
-      - google_tts_credentials
     depends_on:
       app:
         condition: service_healthy
@@ -132,5 +130,3 @@ secrets:
     file: ${GITHUB_OAUTH_CLIENT_SECRET_FILE:?set GITHUB_OAUTH_CLIENT_SECRET_FILE}
   oauth2_proxy_cookie_secret:
     file: ${OAUTH2_PROXY_COOKIE_SECRET_FILE:?set OAUTH2_PROXY_COOKIE_SECRET_FILE}
-  google_tts_credentials:
-    file: ${GOOGLE_TTS_CREDENTIALS_FILE:?set GOOGLE_TTS_CREDENTIALS_FILE}

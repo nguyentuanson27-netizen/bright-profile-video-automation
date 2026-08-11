@@ -53,6 +53,9 @@ test('compose defines standalone topology behind a shared external Caddy edge', 
   assert.match(worker, /\n    secrets:\n[\s\S]*- gemini_api_key/);
   assert.doesNotMatch(worker, /GEMINI_API_KEY:\s/);
   assert.doesNotMatch(compose, /OPENAI_/);
+  assert.match(worker, /GEMINI_TTS_MODEL:\s*\$\{GEMINI_TTS_MODEL:-gemini-3\.1-flash-tts-preview\}/);
+  assert.match(worker, /GEMINI_TTS_VOICE:\s*\$\{GEMINI_TTS_VOICE:-Kore\}/);
+  assert.doesNotMatch(compose, /GOOGLE_APPLICATION_CREDENTIALS|GOOGLE_TTS_|google_tts_credentials/);
 
   assert.match(compose, /^volumes:\n[\s\S]*bright_data:/m);
   assert.match(compose, /^secrets:\n[\s\S]*gemini_api_key:/m);
@@ -110,7 +113,9 @@ test('deployment examples describe Gemini and the shared edge without old API to
   assert.match(env, /GITHUB_OAUTH_CLIENT_ID=/);
   assert.match(env, /GITHUB_OAUTH_CLIENT_SECRET_FILE=/);
   assert.match(env, /OAUTH2_PROXY_COOKIE_SECRET_FILE=/);
-  assert.match(env, /GOOGLE_TTS_CREDENTIALS_FILE=/);
+  assert.doesNotMatch(env, /GOOGLE_TTS_|google-tts\.json/);
+  assert.match(env, /^GEMINI_TTS_MODEL=gemini-3\.1-flash-tts-preview$/m);
+  assert.match(env, /^GEMINI_TTS_VOICE=Kore$/m);
   assert.match(env, /^GEMINI_API_KEY_FILE=/m);
   assert.match(env, /^GEMINI_MODEL=gemini-3\.5-flash-lite$/m);
   assert.doesNotMatch(env, /^GEMINI_API_KEY=/m);
