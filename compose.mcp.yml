@@ -14,7 +14,7 @@ services:
     ports:
       - "127.0.0.1:4190:4190"
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4190/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "require('node:http').get('http://127.0.0.1:4190/health',r=>{let b='';r.setEncoding('utf8');r.on('data',c=>b+=c);r.on('end',()=>{if(r.statusCode!==200){console.error('health status='+r.statusCode+' body='+b);process.exit(1)}})}).on('error',e=>{console.error(e.message);process.exit(1)})"]
       interval: 5s
       timeout: 3s
       retries: 3
