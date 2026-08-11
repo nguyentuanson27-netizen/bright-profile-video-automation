@@ -112,7 +112,7 @@ jobs:
           assert 'openai_api_key' not in data.get('secrets', {})
           PY
       - name: Build immutable standalone app image
-        run: docker compose build app
+        run: docker build --tag "$BRIGHT_IMAGE" .
       - name: Probe non-root runtime image and shared data volume
         run: |
           docker run --rm --entrypoint node "$BRIGHT_IMAGE" -e "const fs=require('node:fs'); if(process.getuid()===0)process.exit(1); if(!fs.existsSync('/app/dist/web/index.html'))process.exit(1)"
