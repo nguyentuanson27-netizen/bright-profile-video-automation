@@ -9,7 +9,7 @@ on:
       - spec/standalone-production-app
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   verify:
@@ -43,9 +43,12 @@ jobs:
           done
           cat mcp.stderr.log
           exit 1
-      - name: Upload generated lockfile for bootstrap commit
-        uses: actions/upload-artifact@v4
-        with:
-          name: mcp-package-lock
-          path: package-lock.json
-          if-no-files-found: error
+      - name: Freeze generated lockfile on build branch
+        if: github.event_name == 'push'
+        run: |
+          if git diff --quiet -- package-lock.json; then exit 0; fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add package-lock.json
+          git commit -m 'build: freeze MCP dependency lock'
+          git push origin HEAD:build/mcp-public-research-evidence
