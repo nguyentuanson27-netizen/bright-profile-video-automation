@@ -249,6 +249,30 @@ test('broad conflict categories do not group different metric entities', () => {
   assert.ok(bundle.evidence.every(({conflictGroupId}) => conflictGroupId === null));
 });
 
+test('similar long metric signatures still distinguish different entities', () => {
+  const bundle = normalizeEvidence(base([
+    {
+      claim: 'Emiru reached the Twitch follower audience total count metric milestone.',
+      url: 'https://a.example/twitch',
+      value: 2_100_000,
+      unit: 'followers',
+      category: 'audience_metric',
+      claimDate: '2026-07-01',
+    },
+    {
+      claim: 'Emiru reached the Instagram follower audience total count metric milestone.',
+      url: 'https://b.example/instagram',
+      value: 2_400_000,
+      unit: 'followers',
+      category: 'audience_metric',
+      claimDate: '2026-07-01',
+    },
+  ]));
+
+  assert.equal(bundle.evidence.length, 2);
+  assert.equal(bundle.conflicts.length, 0);
+});
+
 test('different event claim dates can form one conflict when the metric entity matches', () => {
   const bundle = normalizeEvidence(base([
     {
@@ -270,4 +294,24 @@ test('different event claim dates can form one conflict when the metric entity m
   assert.equal(bundle.conflicts[0].evidenceIds.length, 2);
   assert.match(bundle.conflicts[0].factKey, /acme/);
   assert.match(bundle.conflicts[0].factKey, /event-date-disputed/);
+});
+
+test('different claimDate snapshots are not event-date conflicts unless the claim asserts the date', () => {
+  const bundle = normalizeEvidence(base([
+    {
+      claim: 'Emiru was active on Twitch.',
+      url: 'https://a.example/activity',
+      category: 'activity_status',
+      claimDate: '2026-07-01',
+    },
+    {
+      claim: 'Emiru was active on Twitch.',
+      url: 'https://b.example/activity',
+      category: 'activity_status',
+      claimDate: '2026-07-02',
+    },
+  ]));
+
+  assert.equal(bundle.evidence.length, 2);
+  assert.equal(bundle.conflicts.length, 0);
 });
