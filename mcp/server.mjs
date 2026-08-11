@@ -139,11 +139,16 @@ const withTimeout = (promise, timeoutMs) => new Promise((resolve, reject) => {
   );
 });
 
-const makeRateLimiter = ({limit, windowMs = 60_000}) => {
+export const makeRateLimiter = ({limit, windowMs = 60_000, maxBuckets = 4_096}) => {
   const buckets = new Map();
   return (key, now = Date.now()) => {
+    for (const [bucketKey, bucket] of buckets) {
+      if (bucket.resetAt <= now) buckets.delete(bucketKey);
+    }
+
     const current = buckets.get(key);
-    if (!current || current.resetAt <= now) {
+    if (!current) {
+      if (buckets.size >= maxBuckets) return false;
       buckets.set(key, {count: 1, resetAt: now + windowMs});
       return true;
     }
