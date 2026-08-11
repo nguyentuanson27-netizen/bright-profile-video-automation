@@ -81,12 +81,10 @@ services:
     environment:
       WORKER_OPS_PORT: 4181
       DATA_DIR: /app/data
-      OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
-      OPENAI_RESEARCH_MODEL: ${OPENAI_RESEARCH_MODEL:?set OPENAI_RESEARCH_MODEL}
-      OPENAI_GENERATION_MODEL: ${OPENAI_GENERATION_MODEL:?set OPENAI_GENERATION_MODEL}
-      OPENAI_TIMEOUT_MS: ${OPENAI_TIMEOUT_MS:-30000}
-      OPENAI_MAX_RETRIES: ${OPENAI_MAX_RETRIES:-2}
-      OPENAI_GENERATION_MAX_OUTPUT_TOKENS: ${OPENAI_GENERATION_MAX_OUTPUT_TOKENS:-12000}
+      GEMINI_API_KEY_FILE: /run/secrets/gemini_api_key
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      GEMINI_TIMEOUT_MS: ${GEMINI_TIMEOUT_MS:-30000}
+      GEMINI_GENERATION_MAX_OUTPUT_TOKENS: ${GEMINI_GENERATION_MAX_OUTPUT_TOKENS:-12000}
       GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/google_tts_credentials
       GOOGLE_TTS_LANGUAGE: ${GOOGLE_TTS_LANGUAGE:-vi-VN}
       GOOGLE_TTS_VOICE: ${GOOGLE_TTS_VOICE:-vi-VN-Neural2-D}
@@ -102,7 +100,7 @@ services:
     volumes:
       - bright_data:/app/data
     secrets:
-      - openai_api_key
+      - gemini_api_key
       - google_tts_credentials
     depends_on:
       app:
@@ -128,8 +126,8 @@ volumes:
   bright_data:
 
 secrets:
-  openai_api_key:
-    file: ${OPENAI_API_KEY_FILE:?set OPENAI_API_KEY_FILE}
+  gemini_api_key:
+    file: ${GEMINI_API_KEY_FILE:?set GEMINI_API_KEY_FILE}
   github_oauth_client_secret:
     file: ${GITHUB_OAUTH_CLIENT_SECRET_FILE:?set GITHUB_OAUTH_CLIENT_SECRET_FILE}
   oauth2_proxy_cookie_secret:
