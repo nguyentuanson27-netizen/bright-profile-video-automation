@@ -55,11 +55,18 @@ const start = async (env = {}) => {
   return {server, logs, url: `http://127.0.0.1:${port}/mcp`};
 };
 
-const objectSchemaBranch = (schema) => [
+const resolveLocalSchema = (root, schema) => {
+  if (!schema?.$ref?.startsWith('#/$defs/')) return schema;
+  return root.$defs?.[schema.$ref.slice('#/$defs/'.length)];
+};
+
+const objectSchemaBranch = (root, schema) => [
   schema,
   ...(schema?.anyOf ?? []),
   ...(schema?.oneOf ?? []),
-].find((candidate) => candidate?.type === 'object' && candidate?.properties);
+]
+  .map((candidate) => resolveLocalSchema(root, candidate))
+  .find((candidate) => candidate?.type === 'object' && candidate?.properties);
 
 test('MCP exposes one read-only normalize_evidence tool and returns structured content', async (t) => {
   const {server, url} = await start();
@@ -87,7 +94,7 @@ test('MCP exposes one read-only normalize_evidence tool and returns structured c
   assert.equal(tool.annotations.readOnlyHint, true);
   assert.equal(tool.annotations.openWorldHint, false);
 
-  const advertisedItem = objectSchemaBranch(tool.inputSchema.properties.items.items);
+  const advertisedItem = objectSchemaBranch(tool.inputSchema, tool.inputSchema.properties.items.items);
   assert.ok(advertisedItem, 'tools/list should advertise a structured evidence item branch');
   assert.equal(advertisedItem.properties.claim.type, 'string');
   assert.match(advertisedItem.properties.claim.description, /atomic factual claim/i);
