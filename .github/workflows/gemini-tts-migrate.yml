@@ -23,6 +23,7 @@ jobs:
       - name: Patch Gemini TTS production wiring
         run: |
           python3 scripts/migrate-gemini-tts.py
+          git checkout -- .github/workflows/t18-static-web.yml
           git rm lib/timed-google-tts.mjs scripts/generate-google-tts.py scripts/generate-timed-google-tts.py scripts/migrate-gemini-tts.py
       - name: Refresh frozen lockfile without lifecycle scripts
         run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
