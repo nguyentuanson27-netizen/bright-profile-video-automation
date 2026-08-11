@@ -46,20 +46,30 @@ test('compose defines standalone topology behind a shared external Caddy edge', 
   assert.match(oauth, /client-secret-file|CLIENT_SECRET_FILE/);
   assert.match(oauth, /cookie-secret-file|COOKIE_SECRET_FILE/);
 
-  assert.doesNotMatch(app, /OPENAI_API_KEY(?:_FILE)?:/);
-  assert.doesNotMatch(app, /\n    secrets:\n[\s\S]*- openai_api_key/);
-  assert.match(worker, /OPENAI_API_KEY_FILE:\s*\/run\/secrets\/openai_api_key/);
-  assert.match(worker, /\n    secrets:\n[\s\S]*- openai_api_key/);
-  assert.doesNotMatch(worker, /OPENAI_API_KEY:\s/);
+  assert.doesNotMatch(app, /GEMINI_API_KEY(?:_FILE)?:/);
+  assert.doesNotMatch(app, /\n    secrets:\n[\s\S]*- gemini_api_key/);
+  assert.match(worker, /GEMINI_API_KEY_FILE:\s*\/run\/secrets\/gemini_api_key/);
+  assert.match(worker, /GEMINI_MODEL:\s*\$\{GEMINI_MODEL:-gemini-3\.5-flash-lite\}/);
+  assert.match(worker, /\n    secrets:\n[\s\S]*- gemini_api_key/);
+  assert.doesNotMatch(worker, /GEMINI_API_KEY:\s/);
+  assert.doesNotMatch(compose, /OPENAI_/);
 
   assert.match(compose, /^volumes:\n[\s\S]*bright_data:/m);
-  assert.match(compose, /^secrets:\n[\s\S]*openai_api_key:/m);
+  assert.match(compose, /^secrets:\n[\s\S]*gemini_api_key:/m);
 });
 
-test('app composition does not load OpenAI providers or require provider credentials', () => {
+test('app composition does not load model providers or require provider credentials', () => {
   const server = read('server.mjs');
-  assert.doesNotMatch(server, /providers\/(?:research|generation)\/openai\.mjs/);
-  assert.doesNotMatch(server, /createOpenAi(?:Research|Generation)Provider/);
+  assert.doesNotMatch(server, /providers\/(?:research|generation)\/(?:openai|gemini)\.mjs/);
+  assert.doesNotMatch(server, /create(?:OpenAi|Gemini)(?:Research|Generation)Provider/);
+});
+
+test('worker composition uses Gemini and has no OpenAI provider wiring', () => {
+  const worker = read('worker.mjs');
+  assert.match(worker, /providers\/research\/gemini\.mjs/);
+  assert.match(worker, /providers\/generation\/gemini\.mjs/);
+  assert.match(worker, /provider:\s*'gemini'/);
+  assert.doesNotMatch(worker, /OpenAi|provider:\s*'openai'/);
 });
 
 test('shared Caddy snippet proxies only to the standalone OAuth alias without legacy API-key injection', () => {
@@ -85,10 +95,11 @@ test('Docker image uses lockfile-frozen installs, builds the web app, and runs n
   assert.match(dockerfile, /REMOTION_BROWSER_EXECUTABLE=\/usr\/bin\/chromium/);
 });
 
-test('deployment examples describe the shared edge without old API token or n8n coupling', () => {
+test('deployment examples describe Gemini and the shared edge without old API token or n8n coupling', () => {
   const env = read('.env.example');
   assert.doesNotMatch(env, /BRIGHT_API_TOKEN/);
   assert.doesNotMatch(env, /n8n/i);
+  assert.doesNotMatch(env, /OPENAI_/);
   assert.doesNotMatch(env, /CADDY_EDGE_IP/);
   assert.doesNotMatch(env, /BRIGHT_EDGE_SUBNET/);
   assert.match(env, /BRIGHT_IMAGE=ghcr\.io\/.*:sha-/);
@@ -100,8 +111,9 @@ test('deployment examples describe the shared edge without old API token or n8n 
   assert.match(env, /GITHUB_OAUTH_CLIENT_SECRET_FILE=/);
   assert.match(env, /OAUTH2_PROXY_COOKIE_SECRET_FILE=/);
   assert.match(env, /GOOGLE_TTS_CREDENTIALS_FILE=/);
-  assert.match(env, /OPENAI_API_KEY_FILE=/);
-  assert.doesNotMatch(env, /^OPENAI_API_KEY=/m);
+  assert.match(env, /^GEMINI_API_KEY_FILE=/m);
+  assert.match(env, /^GEMINI_MODEL=gemini-3\.5-flash-lite$/m);
+  assert.doesNotMatch(env, /^GEMINI_API_KEY=/m);
 });
 
 test('file-backed Compose secrets keep the host directory private while remaining readable by non-root containers', () => {
