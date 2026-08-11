@@ -103,7 +103,23 @@ test('Gemini generation keeps shared provenance validation after structured outp
   );
 });
 
-test('Gemini generation rejects malformed/empty output and maps provider errors safely', async () => {
+test('Gemini generation rejects every non-final incomplete state even if partial structured output exists', async () => {
+  for (const status of ['queued', 'in_progress', 'incomplete', 'requires_action']) {
+    const partial = completed(generation);
+    partial.status = status;
+    const provider = createGeminiGenerationProvider({
+      client: fakeClient(async () => partial),
+      config,
+    });
+    await assert.rejects(
+      () => provider.generate({topic: 'Creator', sources: [source]}),
+      (error) => error instanceof AppError && error.code === 'PROVIDER_INCOMPLETE' && error.retryable === true,
+      `status ${status} must not persist partial generation`,
+    );
+  }
+});
+
+test('Gemini generation rejects malformed output and maps provider errors safely', async () => {
   const malformed = createGeminiGenerationProvider({
     client: fakeClient(async () => completed('{bad json')),
     config,
@@ -111,15 +127,6 @@ test('Gemini generation rejects malformed/empty output and maps provider errors 
   await assert.rejects(
     () => malformed.generate({topic: 'Creator', sources: [source]}),
     (error) => error instanceof AppError && error.code === 'PROVIDER_OUTPUT_INVALID',
-  );
-
-  const incomplete = createGeminiGenerationProvider({
-    client: fakeClient(async () => ({id: 'i', status: 'queued', steps: []})),
-    config,
-  });
-  await assert.rejects(
-    () => incomplete.generate({topic: 'Creator', sources: [source]}),
-    (error) => error instanceof AppError && error.code === 'PROVIDER_INCOMPLETE' && error.retryable === true,
   );
 
   for (const [providerError, code, retryable] of [
