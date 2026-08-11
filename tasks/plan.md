@@ -1,552 +1,564 @@
-# Implementation Plan: Standalone Bright Profile Production App
+# Plan — ChatGPT Research → MCP Normalize + Deduplicate Evidence
 
-**Source spec:** `docs/specs/standalone-production-app.md`  
-**Spec approval:** Approved by the user before `/plan` on 2026-08-10  
-**Target branch for planning artifacts:** `spec/standalone-production-app`  
-**Implementation status:** Not started
+**Status:** Proposed; awaiting human approval before `/build`  
+**Approved MCP spec:** `specs/001-chatgpt-mcp-evidence/spec.md` on `spec/mcp-public-research-evidence`  
+**Implementation base:** `spec/standalone-production-app` at `b92e0b6973b4f22c93fa2e489fbe6e56107c3e31`  
+**Planned implementation branch:** `build/mcp-public-research-evidence`
 
-## Goal
+## 1. Planning decisions
 
-Replace n8n orchestration with a production-ready, single-VPS standalone internal app that supports:
+### Base branch is intentionally the old spec branch
 
-```text
-creator/topic + optional public URLs
-  -> research
-  -> normalized sources + provenance
-  -> structured script/scene/voiceover draft
-  -> human review/edit
-  -> explicit approval snapshot
-  -> media ingest
-  -> Google TTS
-  -> Remotion render
-  -> MP4 download
-```
+Per user direction, implementation starts from `spec/standalone-production-app`, not from `build/standalone-production-app`.
 
-The existing Remotion composition and timed Google TTS remain the execution core. The work should add durable orchestration, operator UI, provider adapters, security boundaries, and production operations around that core rather than rewrite it.
+This is an intentional trade-off:
 
----
+- the base contains the original Remotion/render API baseline and the standalone production spec;
+- it does **not** contain the later durable SQLite worker, operator UI, Gemini provider layer, OAuth ingress, observability, CI, or production deployment work from `build/standalone-production-app`;
+- therefore this MCP milestone must not assume any of those later modules exist;
+- later integration of MCP evidence with the newer standalone app will require an explicit merge/rebase/integration milestone.
 
-## Architecture Decisions Locked for Implementation
+The MCP milestone stays narrow so this branch choice does not trigger a reimplementation of the standalone production app.
 
-### 1. HTTP/application runtime
+### V1 product scope
 
-Keep Node.js ESM and the existing `node:http` approach. Add one small project-owned router/error layer instead of introducing Express/Fastify in the first milestone.
+V1 implements one MCP tool: `normalize_evidence`.
 
-Rationale:
-- the app is low-concurrency and internal;
-- the repository already uses `node:http`;
-- the required API is finite and resource-oriented;
-- avoiding a web framework keeps the dependency surface small;
-- JSON/body/schema validation remains explicit at trust boundaries.
+It is:
 
-### 2. Validation
+- pure/read-only;
+- deterministic for identical input + normalizer version;
+- no durable database writes;
+- no web fetching inside MCP;
+- no model/API call inside MCP;
+- no shell execution;
+- no arbitrary filesystem access;
+- independent from the existing render API.
 
-Use shared JSON Schema documents for operator API payloads, provider outputs, approved revisions, and render manifests. Use Ajv as the runtime validator, pinned in `package-lock.json`.
+ChatGPT performs public-source research and semantic extraction. Bright MCP performs deterministic validation, normalization, deduplication, conflict grouping, and scoring, then returns an `EvidenceBundle`.
 
-The same generation-output JSON Schema should be passed to the LLM provider's structured-output API and validated again locally after the response is received. Provider compliance is not treated as a security boundary.
+### Spec lineage
 
-### 3. Durable state and queue
+The approved MCP spec currently lives on `spec/mcp-public-research-evidence`, while implementation starts from the older standalone spec branch. Before behavioral implementation, copy the approved MCP spec into the implementation branch without changing its approved requirements.
 
-Use SQLite through `better-sqlite3`, with the dependency pinned to the verified stable release selected during build. At plan time the latest verified upstream release is `13.0.3` and declares Node `>=22` support.
+### Test/tooling baseline
 
-Use:
-- WAL mode;
-- foreign keys;
-- bounded busy timeout;
-- explicit numbered migrations;
-- short transactional writes;
-- atomic job claim/update transactions;
-- lease timestamps for stale-worker recovery.
+The selected base currently has only `render:smoke` and `render:project` scripts and no test/lint/MCP dependencies. The first implementation slice must establish the minimum test/lint/dependency foundation needed for safe incremental work rather than relying on tooling from the newer standalone build branch.
 
-Do not use Node 24's built-in `node:sqlite` for this milestone because the current Node 24 documentation still labels it Release Candidate rather than stable.
+### MCP SDK and transport
 
-### 4. Job execution model
+At `/build` start, verify the current official OpenAI and Model Context Protocol documentation before choosing/pinning SDK APIs because MCP transport and ChatGPT app behavior are version-sensitive.
 
-One `app` process and one `worker` process use the same SQLite/data volume.
+Target shape remains:
 
-The worker:
-- polls for runnable durable stages;
-- atomically claims one stage with a lease;
-- renews the lease during long work;
-- records attempt/stage/error data;
-- stops claiming new work on graceful shutdown;
-- recovers expired leases after restart;
-- runs only one Remotion render at a time by default.
+- official MCP SDK;
+- stateless Streamable HTTP where supported by the verified SDK/docs;
+- a separate `mcp/server.mjs` process;
+- no import dependency from existing `server.mjs` into MCP;
+- private/internal deployment first, preferably through the supported Secure MCP Tunnel path rather than a new public ingress.
 
-Research/generation may execute before approval. Media ingest, TTS, and render require an immutable approved revision.
+### Deployment isolation
 
-### 5. Research provider
+Do not retrofit the legacy `compose.yml` n8n network as the MCP transport. Add an isolated MCP deployment artifact such as `compose.mcp.yml` so the MCP service has no n8n runtime dependency.
 
-Initial provider: **OpenAI Responses API web search tool**, accessed through the official OpenAI JavaScript SDK.
+### Renderer compatibility
 
-Research behavior:
-- OpenAI web search is discovery only;
-- retain URLs surfaced by web-search call source metadata/citations;
-- operator-provided URLs enter the same normalized source pipeline;
-- the application-owned safe fetcher retrieves publicly reachable source content where allowed;
-- inaccessible sources are stored with an unavailable/failed status;
-- search/provider text is untrusted and cannot create privileged actions.
+Because the old spec branch is the base, the regression contract is the existing render/API baseline on that branch:
 
-The production model ID is configuration, not a floating `latest` alias. Before production, pin an explicit model snapshot after the provider eval smoke passes.
+- existing render scripts remain functional;
+- existing `server.mjs` behavior is not rewritten for MCP;
+- MCP absence must not affect rendering;
+- MCP code must not import Remotion/Google TTS unless a concrete boundary requires it, which is not expected in v1.
 
-### 6. Generation provider
-
-Initial provider: **OpenAI Responses API structured output**.
-
-Generation behavior:
-- generation receives only normalized source records/approved operator context, not unrestricted browsing capability;
-- request a strict JSON-schema output containing claims, source IDs, script, voiceover chunks, and Remotion scene plan;
-- reject output when local schema validation fails;
-- reject supported claims referencing unknown source IDs;
-- classify incomplete/timeout/rate-limit/provider errors into stable retryable/non-retryable application errors;
-- bound retries, output tokens, and request duration;
-- never log full prompts/responses by default.
-
-The official OpenAI JS SDK is pinned in the lockfile. At plan time, the latest verified release is `7.4.0` (2026-08-03); `/build` must re-check official docs/release notes before installing if the repository has moved forward.
-
-### 7. Public URL and media fetch policy
-
-Implement one application-owned HTTP(S) fetch module with manual redirect handling using Node core HTTP/HTTPS primitives.
-
-Security properties:
-- protocol allowlist: HTTP/HTTPS only;
-- resolve hostname before connection;
-- reject private/reserved/link-local/loopback/cloud-metadata destinations;
-- validate each redirect destination again;
-- bounded redirects/timeouts/body sizes;
-- send `Accept-Encoding: identity` to avoid unbounded decompression paths in the MVP;
-- never forward application/provider auth headers to fetched URLs;
-- per-purpose MIME allowlists;
-- safe generated local filenames.
-
-The same policy is used by research URL retrieval and media ingest.
-
-### 8. Frontend
-
-Use existing React 19.1.0 with **Vite** and plain JavaScript.
-
-Keep routing dependency-free for MVP using simple hash routes:
-- `#/projects`
-- `#/projects/:id`
-- `#/projects/:id/review`
-
-The built SPA is served by the app process. No Next.js, SSR framework, global state library, or component framework is required.
-
-### 9. Operator authentication / TLS
-
-Production ingress:
+## 2. Dependency graph
 
 ```text
-Internet / operator browser
-        |
-      Caddy
-        |
-  oauth2-proxy
-   (GitHub OAuth)
-        |
-       app
-        |
-   private Compose network
-        |
-      worker
+old standalone spec branch base
+          |
+          v
+T00 copy approved MCP spec into lineage
+          |
+          v
+T01 test/lint/dependency foundation
+          |
+          v
+T02 schemas + validation
+          |
+          v
+T03 normalization primitives
+          |
+          v
+T04 fingerprints + exact dedupe
+          |
+          +-------------------+
+          v                   v
+T05 near-dedupe          T06 conflicts + scoring
+          \                   /
+           \                 /
+            v               v
+              T07 EvidenceBundle
+                     |
+                     v
+              T08 MCP tool/server
+                     |
+                     v
+              T09 hardening/limits
+                     |
+                     v
+              T10 isolated deployment
+                     |
+                     v
+              T11 CI + regression
+                     |
+                     v
+              T12 live ChatGPT acceptance
+                     |
+                     v
+              T13 final review/ship gate
 ```
 
-Initial production components:
-- Caddy `2.11.4` (latest verified at plan time) for TLS/reverse proxy;
-- oauth2-proxy `7.15.3` (latest verified at plan time) using GitHub OAuth;
-- restrict login to an explicit `GITHUB_ALLOWED_USERS` allowlist for the internal team;
-- only Caddy publishes host ports 80/443;
-- oauth2-proxy, app, and worker stay private;
-- worker publishes no port;
-- app accepts trusted identity headers only from the private proxy path;
-- unsafe browser mutations require same-origin validation; CORS is not opened for arbitrary origins.
-
-If no real hostname/DNS/OAuth callback can be configured yet, local implementation may run without the gateway, but the production readiness gate remains blocked.
-
-### 10. Metrics/logging
-
-- Structured JSON logs to stdout/stderr; no extra logging framework initially.
-- Generate/propagate `requestId`, `projectId`, `jobId`, stage, attempt, and duration fields.
-- Prometheus-format `/metrics` endpoint using a small pinned metrics dependency (`prom-client`) unless implementation proves a no-dependency exposition is simpler and equally testable.
-- `/health/live` is process-only.
-- `/health/ready` checks SQLite/data-dir readiness without making expensive live provider calls.
-
-### 11. Retention and disk defaults
-
-Defaults are configurable environment settings:
-- completed heavy artifacts/final MP4: 30 days;
-- failed/cancelled/unapproved transient artifacts: 7 days;
-- project metadata, source metadata, and approved revision manifests: retained until explicit project deletion/administrative cleanup;
-- warning threshold: less than 25% free disk;
-- hard guard: do not start new media-ingest/TTS/render work when free disk is below either 15% or 20 GiB, whichever threshold is more conservative for the host.
-
-Cleanup never removes active job files or the current approved revision manifest.
-
-### 12. Testing/tooling
-
-- Unit/integration runner: Node built-in `node:test`.
-- Lint: ESLint with repository ESM/JS conventions.
-- Browser/UI tests: lightweight component/API integration where possible; the milestone does not add a heavy browser E2E framework unless manual/browser verification proves insufficient.
-- CI provider calls use deterministic fakes; live OpenAI calls are manual/gated.
-- Keep a real low-cost Remotion/Chromium/FFmpeg smoke render.
+T05 and T06 may proceed in parallel after T04. All later tasks are sequential.
 
 ---
 
-## Dependency Graph
+## Task T00 — Bring approved MCP spec into implementation lineage
 
-```text
-T01 Tooling/test foundation
- |
- +--> T02 Domain contracts/schemas
-       |
-       +--> T03 SQLite store/migrations
-       |     |
-       |     +--> T04 Durable job leasing/recovery
-       |     |      |
-       |     |      +------------------------------+
-       |     |                                     |
-       |     +--> T09 Research API slice           |
-       |                                            |
-       +--> T05 Safe URL/fetch policy               |
-       |     |                                      |
-       |     +--> T06 Provider contracts/fakes      |
-       |           |
-       |           +--> T07 OpenAI research adapter |
-       |           +--> T08 OpenAI generation adapter
-       |                    |                       |
-       +--------------------+--> T09 Research slice |
-                                |
-                                +--> T10 Generate/review/approve
-                                      |
-                                      +--> T11 Media ingest
-                                            |
-                                            +--> T12 Render worker
-                                                  |
-                                                  +--> T13 Renderer hardening
+**Description:** Start `build/mcp-public-research-evidence` from `spec/standalone-production-app` and copy the already-approved MCP spec into the branch so implementation and review can reference requirements without depending on another branch.
 
-T09 -----------------------> T14 UI create/status
-T10 + T12 + T14 -----------> T15 UI review/completed
-T04 + T12 -----------------> T16 Observability
-T03 + T11 + T12 -----------> T17 Retention/backup/disk guard
-T13 + T15 + T16 + T17 -----> T18 Production Compose/auth
-T18 -----------------------> T19 CI/release/E2E/rollback gate
-```
+**Acceptance criteria:**
+- [ ] Build branch merge-base is `spec/standalone-production-app` commit `b92e0b6...` or its descendant.
+- [ ] `specs/001-chatgpt-mcp-evidence/spec.md` exists on the build branch with no semantic requirement changes.
+- [ ] No source/render behavior changes in this task.
+
+**Verification:**
+- [ ] Compare branch/ref metadata against the base.
+- [ ] Diff copied spec against the approved spec branch.
+
+**Dependencies:** None
+
+**Files likely touched:**
+- `specs/001-chatgpt-mcp-evidence/spec.md`
+
+**Estimated scope:** Small (1 file)
 
 ---
 
-## Vertical Slices and Ordering
+## Task T01 — Establish test, lint, and MCP dependency foundation
 
-### Slice A — Foundation and hardest invariants
+**Description:** Add only the tooling required to develop and verify deterministic evidence logic and MCP integration from this older baseline. Do not pull in the standalone app's SQLite/UI/provider dependencies.
 
-Tasks T01-T05.
+**Acceptance criteria:**
+- [ ] `npm test` runs Node's built-in test runner.
+- [ ] `npm run lint` runs a pinned ESLint configuration.
+- [ ] Official MCP SDK and JSON-schema validation dependency are pinned in `package.json`/lockfile after current official-doc verification.
+- [ ] Existing `render:smoke` and `render:project` scripts remain present.
+- [ ] Dependency provenance/install scripts are reviewed before accepting lockfile changes.
 
-Prove first:
-- behavior can be regression-tested;
-- workflow states are explicit;
-- SQLite persistence/migrations work;
-- durable jobs survive a simulated worker restart;
-- all future remote fetching has one SSRF-safe boundary.
+**Verification:**
+- [ ] `npm ci`
+- [ ] `npm test`
+- [ ] `npm run lint`
+- [ ] `npm run render:smoke` when Chromium/FFmpeg runtime is available; otherwise mark this smoke pending, not passed.
 
-This is risk-first because the current in-memory queue and remote-URL behavior are the largest production blockers.
+**Dependencies:** T00
 
-**Checkpoint A:** stop if durable leasing/recovery or safe redirect/DNS policy cannot be demonstrated with tests.
+**Files likely touched:**
+- `package.json`
+- `package-lock.json`
+- `eslint.config.js`
+- `tests/unit/tooling.test.mjs`
 
-### Slice B — Topic to research/draft without UI
-
-Tasks T06-T10.
-
-Deliver an API-driven path:
-
-```text
-POST project
- -> research
- -> stored normalized sources
- -> generation
- -> persisted review-required draft
- -> approval gate
-```
-
-Provider interfaces are tested with fakes first. Live OpenAI adapters are thin and independently replaceable.
-
-**Checkpoint B:** prove claim provenance, invalid-source rejection, structured-output validation, and approval invalidation before building media/render/UI on top.
-
-### Slice C — Approved revision to deterministic MP4
-
-Tasks T11-T13.
-
-Deliver:
-
-```text
-approved revision
- -> safe local media ingest
- -> timed Google TTS
- -> Remotion render
- -> validated output.mp4
-```
-
-Renderer changes stay scoped to trusted-local asset behavior and removal of normal-path `disableWebSecurity: true`.
-
-**Checkpoint C:** a controlled approved fixture renders correctly using only trusted local/application-controlled media.
-
-### Slice D — Standalone operator experience
-
-Tasks T14-T15.
-
-Deliver the browser workflow without raw JSON editing:
-- create project;
-- monitor stages/errors;
-- inspect sources/claims;
-- edit draft;
-- approve;
-- render/retry/cancel where safe;
-- download completed MP4.
-
-**Checkpoint D:** keyboard walkthrough and API/UI smoke of the full human approval workflow.
-
-### Slice E — Production operations
-
-Tasks T16-T19.
-
-Add:
-- structured logs/metrics/health;
-- disk guard, retention, backup;
-- Caddy + GitHub OAuth gateway;
-- n8n-free Compose topology;
-- CI quality gates;
-- deploy/rollback docs;
-- controlled restart/recovery E2E verification.
-
-**Final checkpoint:** project-wide Definition of Done plus the spec's 15 success criteria.
+**Estimated scope:** Medium (4 files)
 
 ---
 
-## Parallelization Opportunities
+## Task T02 — Define Evidence input/output schemas and validator
 
-After T02 is merged:
-- T03 SQLite store and T05 URL policy can proceed independently.
+**Description:** Encode the approved request envelope, candidate item, retained evidence, source, conflict and `EvidenceBundle` contracts. Separate envelope-fatal validation from safe item-level rejection.
 
-After T06 is merged:
-- T07 research provider and T08 generation provider can proceed independently because they share only the provider contract.
+**Acceptance criteria:**
+- [ ] Valid approved examples pass.
+- [ ] Limits are encoded: max 200 candidates, claim max 2000 chars, excerpt max 1500 chars, absolute HTTP(S) URL.
+- [ ] Malformed envelope returns stable structured validation error.
+- [ ] Safe item-level defects can become `rejectedItems[]` without crashing the whole transform.
+- [ ] Unknown fields do not affect fingerprints.
 
-After T09/T10 contracts stabilize:
-- T14 UI create/status can proceed while T11/T12 render execution is being built.
+**Verification:**
+- [ ] RED → GREEN: `node --test tests/unit/evidence-schema.test.mjs`
+- [ ] `npm run lint`
 
-After T12:
-- T16 observability and T17 retention/backup can proceed independently with coordination on job/state fields.
+**Dependencies:** T01
 
-Must remain sequential:
-- migrations before code requiring migrated tables;
-- approval snapshot before media/TTS/render;
-- media ingest before renderer security hardening is considered complete;
-- production Compose/auth before final deployment E2E.
+**Files likely touched:**
+- `mcp/schemas/evidence-input.schema.json`
+- `mcp/schemas/evidence-bundle.schema.json`
+- `lib/evidence/validate.mjs`
+- `tests/unit/evidence-schema.test.mjs`
 
----
-
-## API Contract Refinement
-
-Keep the spec's observable operations, grouped under one project resource. Proposed implementation endpoints:
-
-```text
-POST   /api/projects
-GET    /api/projects
-GET    /api/projects/:id
-POST   /api/projects/:id/research
-POST   /api/projects/:id/generate
-PATCH  /api/projects/:id/draft
-POST   /api/projects/:id/approve
-POST   /api/projects/:id/render
-POST   /api/projects/:id/retry
-POST   /api/projects/:id/cancel
-GET    /api/projects/:id/sources
-GET    /api/projects/:id/artifacts/output
-GET    /health/live
-GET    /health/ready
-GET    /metrics
-```
-
-State-changing endpoints:
-- validate JSON body with shared schemas;
-- reject invalid transitions with stable `409` application errors;
-- reject unauthorized/untrusted proxy paths in production;
-- use the approved immutable revision ID for render requests.
-
-No endpoint allows arbitrary local filesystem paths, arbitrary shell commands, raw provider tool selection, or unvalidated URL fetches.
+**Estimated scope:** Medium (4 files)
 
 ---
 
-## Storage Model Direction
+## Task T03 — Implement conservative URL/text/value normalization
 
-Initial schema should separate mutable drafts from immutable approved snapshots.
+**Description:** Add deterministic normalization primitives used only for comparison/fingerprinting. Preserve human-readable originals and never paraphrase with a model.
 
-Expected tables/concepts:
+**Acceptance criteria:**
+- [ ] URL canonicalization removes fragments/default ports/known tracking parameters and sorts query parameters without deleting resource-identity parameters.
+- [ ] Text comparison uses Unicode NFKC, whitespace/punctuation normalization and canonical subject aliases while preserving meaningful digits/signs/units.
+- [ ] Explicit forms such as `2.1M` and `2.1 million` normalize consistently.
+- [ ] Ambiguous currency/date/value input is not guessed.
+- [ ] Vietnamese/English fixtures for the same explicit fact can normalize compatible numeric/date forms without language-model semantics.
 
-```text
-schema_migrations
-projects
-sources
-project_sources
-revisions
-revision_claims
-revision_source_refs
-jobs
-job_attempts
-artifacts
-```
+**Verification:**
+- [ ] RED → GREEN: `node --test tests/unit/evidence-normalization.test.mjs`
+- [ ] `npm run lint`
 
-Important invariants:
-- one project may have many draft/approved revisions;
-- approved revision payload/hash is immutable;
-- jobs refer to a project and, where required, an approved revision;
-- job claim is atomic and lease-based;
-- source IDs are application-owned and stable;
-- artifacts have safe relative paths and provenance metadata;
-- DB never stores secrets or provider auth tokens.
+**Dependencies:** T02
 
-Use additive migrations first. No destructive migration is needed for the first standalone milestone because the current file-backed state is not treated as a production database contract.
+**Files likely touched:**
+- `lib/evidence/canonical-url.mjs`
+- `lib/evidence/normalize-text.mjs`
+- `lib/evidence/normalize-value.mjs`
+- `tests/unit/evidence-normalization.test.mjs`
+
+**Estimated scope:** Medium (4 files)
 
 ---
 
-## Security Threat Boundaries
+## Task T04 — Fingerprints and exact deduplication
 
-### Boundary 1: Browser/operator -> app
+**Description:** Build stable SHA-256 fingerprints from normalized evidence identity and merge only exact duplicates while preserving all distinct canonical sources.
 
-Controls:
-- GitHub OAuth via oauth2-proxy;
-- private upstream network;
-- JSON schema validation;
-- same-origin mutation checks;
-- body limits;
-- stable sanitized errors.
+**Acceptance criteria:**
+- [ ] Fingerprint material follows the approved spec and is independent of unknown fields/source ordering.
+- [ ] Same normalized claim + equivalent canonical URL deduplicates.
+- [ ] Repeated identical input is idempotent.
+- [ ] Distinct canonical URLs supporting the same exact fact are preserved in `sources[]`.
+- [ ] Metadata merge is deterministic.
 
-### Boundary 2: Public URL/search result -> safe fetcher
+**Verification:**
+- [ ] RED → GREEN: `node --test tests/unit/evidence-exact-dedupe.test.mjs`
+- [ ] `npm run lint`
 
-Controls:
-- canonical SSRF policy;
-- DNS/IP validation;
-- redirect revalidation;
-- response size/MIME/time bounds;
-- no secret forwarding.
+**Dependencies:** T03
 
-### Boundary 3: Public content -> OpenAI generation
+**Files likely touched:**
+- `lib/evidence/fingerprint.mjs`
+- `lib/evidence/deduplicate.mjs`
+- `tests/unit/evidence-exact-dedupe.test.mjs`
 
-Controls:
-- delimit/structure source records as data;
-- no provider/tool permissions derived from source text;
-- token/input limits;
-- source IDs assigned by application.
-
-### Boundary 4: Model output -> application
-
-Controls:
-- strict JSON schema requested;
-- local Ajv validation;
-- source-ID referential validation;
-- scene/timeline/render bounds;
-- no model-selected URLs fetched without safe-fetch validation.
-
-### Boundary 5: Approved revision -> worker/renderer
-
-Controls:
-- immutable revision hash/ID;
-- approved media pre-ingested locally;
-- safe artifact paths;
-- render concurrency/resource limits;
-- no arbitrary remote URLs in normal render path.
+**Estimated scope:** Medium (3 files)
 
 ---
 
-## Verification Strategy
+## Task T05 — Guarded deterministic near-deduplication
 
-During implementation, every behavioral task uses RED -> GREEN -> REFACTOR with focused Node tests.
+**Description:** Add blocking rules plus deterministic token-set similarity for paraphrase-like duplicates without embeddings or model calls.
 
-Required evidence by final gate:
+**Acceptance criteria:**
+- [ ] Candidate pairs require compatible subject/category/date/value context before similarity evaluation.
+- [ ] Default near-duplicate threshold is configurable with the approved default.
+- [ ] Explicitly different numeric values outside tolerance never merge.
+- [ ] Materially different dates never merge.
+- [ ] Positive vs negated claims never merge.
+- [ ] Source similarity alone never causes a merge.
 
-```text
-npm ci
-npm run lint
-npm test
-npm run build
-npm run smoke:render
-npm run smoke:api
-docker compose config
-docker compose build
-```
+**Verification:**
+- [ ] RED → GREEN: `node --test tests/unit/evidence-near-dedupe.test.mjs`
+- [ ] `npm run lint`
 
-Production/staging verification additionally demonstrates:
-- login via configured GitHub allowlist;
-- create -> research -> generate -> review -> approve -> render -> download;
-- restart worker while a durable stage is claimed and observe lease recovery;
-- restart app without losing project state;
-- SSRF tests for loopback/private IP/redirect-to-private targets;
-- no normal render dependency on arbitrary remote URLs;
-- low-disk guard blocks expensive new work;
-- backup command produces a restorable SQLite/manifest backup;
-- liveness/readiness/metrics/logs are observable;
-- rollback to previous immutable image tag succeeds or is rehearsed with exact commands.
+**Dependencies:** T04
 
-Live OpenAI provider checks are manual/gated and must never be required for deterministic PR CI.
+**Files likely touched:**
+- `lib/evidence/similarity.mjs`
+- `lib/evidence/deduplicate.mjs`
+- `tests/unit/evidence-near-dedupe.test.mjs`
+
+**Estimated scope:** Medium (3 files)
 
 ---
 
-## Main Risks and Mitigations
+## Task T06 — Conflict grouping and deterministic quality/confidence
 
-### Web/social availability
+**Description:** Keep contradictory evidence separate, group comparable conflicts, and compute ranking/confidence hints without treating repetition as truth probability.
 
-Risk: public TikTok/Facebook/Instagram/Threads/X pages are not reliably fetchable by generic HTTP clients.
+**Acceptance criteria:**
+- [ ] Same comparable fact with incompatible values creates a conflict group instead of merging/deleting evidence.
+- [ ] Conflict IDs/fact keys are deterministic for identical normalized input.
+- [ ] `qualityScore` is deterministic and bounded 0–1.
+- [ ] Confidence uses evidence structure/source relationships and is downgraded by unresolved material conflict.
+- [ ] Syndicated repetitions do not inflate confidence as independent confirmations.
 
-Mitigation: use web-search discovery, preserve unavailable status, allow operator-provided URLs, never bypass access controls, and require human review. The milestone does not promise that every listed platform page can always be downloaded.
+**Verification:**
+- [ ] RED → GREEN: `node --test tests/unit/evidence-conflicts-score.test.mjs`
+- [ ] `npm run lint`
 
-### Provider variability/cost
+**Dependencies:** T04
 
-Risk: LLM/search output and pricing/limits change.
+**Files likely touched:**
+- `lib/evidence/conflicts.mjs`
+- `lib/evidence/score-evidence.mjs`
+- `tests/unit/evidence-conflicts-score.test.mjs`
 
-Mitigation: provider interfaces, explicit model configuration, production snapshot pinning, bounded retries/tokens, deterministic fake-provider tests, and a small manual provider eval before release.
-
-### SQLite contention
-
-Risk: app and worker share a single file DB.
-
-Mitigation: short transactions, WAL, busy timeout, single render worker, no large blobs in SQLite, and indexes on runnable-job queries. If measured contention becomes unacceptable, changing to PostgreSQL/Redis remains an explicit future architecture decision rather than premature MVP complexity.
-
-### Resource exhaustion
-
-Risk: Chromium/FFmpeg/media can exhaust CPU/RAM/disk.
-
-Mitigation: separate worker, concurrency 1, Compose limits, bounded duration/scenes/media, disk guard, artifact retention, and stage metrics.
-
-### Auth configuration drift
-
-Risk: GitHub OAuth callback/allowlist/TLS configuration can be misconfigured.
-
-Mitigation: pinned gateway images, `oauth2-proxy --config-test` where applicable, Compose config validation, private upstreams, explicit `.env.example`, and deployment smoke login.
+**Estimated scope:** Medium (3 files)
 
 ---
 
-## Scope Guardrails
+### Checkpoint A — Deterministic evidence core
 
-Do not add during this milestone unless separately approved:
-- PostgreSQL, Redis, Kubernetes, object storage;
-- multi-tenant accounts/roles/billing;
-- private/authenticated social scraping;
-- automatic posting to social networks;
-- generalized workflow engine;
-- a new Remotion design system or large scene rewrite;
-- multiple render workers/hosts;
-- speculative plugin architecture beyond the two provider boundaries already required.
+- [ ] T02–T06 focused tests pass.
+- [ ] `npm test` passes.
+- [ ] `npm run lint` passes.
+- [ ] No network/model/database dependency is needed by evidence-core tests.
 
 ---
 
-## Final Definition of Done Gate
+## Task T07 — Compose the versioned EvidenceBundle transform
 
-Before declaring `/build` complete, verify both task acceptance criteria and the project-wide Definition of Done:
+**Description:** Create the deterministic application function that executes validation → normalization → exact/near dedupe → conflicts → scoring and returns the approved bundle/stats/rejections.
 
-- correctness: requested behavior and error paths work at runtime;
-- tests: new behavior is regression-covered and relevant suites pass;
-- quality: no unrelated refactor/dead debug code;
-- integration: app/worker/SQLite/artifact/provider/render paths work together;
-- documentation: README, env, operations, API behavior, and rollback reflect current truth;
-- security: auth, SSRF, provider/model validation, secret handling, dependency audit are reviewed;
-- observability: critical job stages have logs/metrics/health evidence;
-- ship readiness: reproducible image, migration/backup, smoke, and rollback evidence exist.
+**Acceptance criteria:**
+- [ ] Output includes `schemaVersion`, `normalizerVersion`, subject, researchedAt, stats, evidence, conflicts and rejectedItems.
+- [ ] IDs and ordering are stable for identical semantic input where the spec requires determinism.
+- [ ] Stats exactly reconcile accepted/merged/conflict/rejected counts.
+- [ ] Required fixtures from the spec are represented.
+- [ ] No network/model/storage side effect.
 
-Implementation must stop and surface evidence if any required gate cannot be verified rather than marking the work complete by assumption.
+**Verification:**
+- [ ] RED → GREEN: `node --test tests/unit/evidence-bundle.test.mjs`
+- [ ] Re-run deterministic test twice against identical fixture.
+
+**Dependencies:** T05, T06
+
+**Files likely touched:**
+- `lib/evidence/normalize-evidence.mjs`
+- `tests/unit/evidence-bundle.test.mjs`
+- `examples/evidence-input.json`
+- `examples/evidence-bundle.json`
+
+**Estimated scope:** Medium (4 files)
+
+---
+
+## Task T08 — Expose `normalize_evidence` through a separate MCP process
+
+**Description:** Add a minimal MCP server that exposes exactly one pure/read-only tool and delegates to the deterministic transform. Keep MCP completely independent from the existing render HTTP server.
+
+**Acceptance criteria:**
+- [ ] Current official MCP/OpenAI docs are re-checked before coding transport APIs.
+- [ ] Exactly one application tool is exposed: `normalize_evidence`.
+- [ ] Tool annotations/description make read-only/pure behavior explicit where supported.
+- [ ] Tool result contains machine-readable `EvidenceBundle` plus concise summary text.
+- [ ] Existing `server.mjs` does not import MCP modules.
+- [ ] No OpenAI/Gemini/Google TTS call occurs inside the MCP process.
+
+**Verification:**
+- [ ] RED → GREEN: `node --test tests/integration/mcp-normalize.test.mjs`
+- [ ] MCP initialize/list-tools/call-tool integration path succeeds locally.
+- [ ] Existing render API process still starts independently.
+
+**Dependencies:** T07
+
+**Files likely touched:**
+- `mcp/server.mjs`
+- `mcp/tools/normalize-evidence.mjs`
+- `tests/integration/mcp-normalize.test.mjs`
+- `package.json`
+
+**Estimated scope:** Medium (4 files)
+
+---
+
+## Task T09 — Harden MCP input and runtime boundary
+
+**Description:** Enforce v1 abuse bounds and safe logging around the remote tool boundary. Source/claim text remains inert data.
+
+**Acceptance criteria:**
+- [ ] 2 MB request cap, 200 candidate cap and 10-second processing budget are enforced at the appropriate boundary.
+- [ ] Malformed/oversized calls return structured non-secret errors.
+- [ ] Request IDs are logged; full excerpts/request bodies/auth headers are not logged.
+- [ ] Rate limiting is bounded and configurable for internal use.
+- [ ] Host/origin/DNS-rebinding protections follow verified MCP HTTP server guidance.
+- [ ] Prompt-injection-looking text is normalized as inert content and cannot change tool permissions/behavior.
+- [ ] No arbitrary URL fetch, file access, shell action or model call is introduced.
+
+**Verification:**
+- [ ] RED → GREEN: `node --test tests/integration/mcp-security.test.mjs`
+- [ ] `npm run lint`
+
+**Dependencies:** T08
+
+**Files likely touched:**
+- `mcp/server.mjs`
+- `mcp/security.mjs`
+- `tests/integration/mcp-security.test.mjs`
+
+**Estimated scope:** Medium (3 files)
+
+---
+
+## Task T10 — Add isolated MCP container/deployment path
+
+**Description:** Package MCP without adopting the legacy n8n Compose topology.
+
+**Acceptance criteria:**
+- [ ] MCP runtime starts independently from render API.
+- [ ] MCP deployment has no n8n network dependency.
+- [ ] MCP receives no Google TTS/provider credential because v1 does not need one.
+- [ ] MCP mounts no render job/data directory unless a concrete runtime need is proven.
+- [ ] If a tunnel client reaches a host port, it binds only to loopback/private interface per verified deployment guidance.
+- [ ] Health/readiness probe exists.
+- [ ] Rollback is stopping/removing MCP without touching renderer state.
+
+**Verification:**
+- [ ] `docker compose -f compose.mcp.yml config` or final equivalent.
+- [ ] Container health probe succeeds.
+- [ ] Inspect mounts/env/network to confirm isolation.
+
+**Dependencies:** T09
+
+**Files likely touched:**
+- `Dockerfile`
+- `compose.mcp.yml`
+- `.env.example`
+- `docs/mcp-deployment.md`
+
+**Estimated scope:** Medium (4 files)
+
+---
+
+## Task T11 — Add focused CI and baseline regression gates
+
+**Description:** Because the chosen base does not contain the newer standalone CI workflow, add focused MCP CI plus regression checks for the old render baseline. Do not recreate the entire standalone production CI stack.
+
+**Acceptance criteria:**
+- [ ] Frozen install runs before tests.
+- [ ] Unit/integration MCP tests and lint run in CI.
+- [ ] MCP container/config smoke runs where Docker is available.
+- [ ] CI verifies no provider secret/data mount is required for MCP.
+- [ ] Existing render smoke is included when CI runtime supports Chromium/FFmpeg.
+- [ ] CI failure blocks the MCP branch verification result.
+
+**Verification:**
+- [ ] GitHub Actions run on `build/mcp-public-research-evidence` completes successfully after implementation.
+- [ ] Locally available equivalent commands are recorded with actual outcomes.
+
+**Dependencies:** T10
+
+**Files likely touched:**
+- `.github/workflows/mcp-evidence.yml`
+- `package.json`
+- `Dockerfile` only if CI exposes a packaging defect
+
+**Estimated scope:** Medium (2–3 files)
+
+---
+
+### Checkpoint B — Repository/runtime verification
+
+- [ ] `npm ci`
+- [ ] `npm test`
+- [ ] `npm run lint`
+- [ ] `npm run render:smoke` where runtime dependencies are available
+- [ ] MCP container/config checks pass
+- [ ] GitHub Actions MCP workflow is green
+
+---
+
+## Task T12 — Real ChatGPT acceptance through supported MCP connection
+
+**Description:** Verify the actual user flow: connect ChatGPT to the deployed/private MCP service and call `normalize_evidence` with representative public-source evidence.
+
+**Acceptance criteria:**
+- [ ] ChatGPT developer/custom-app setup discovers the MCP server and `normalize_evidence`.
+- [ ] Normal chat can call the tool and receive structured `EvidenceBundle` output.
+- [ ] Deep Research read/fetch-compatible usage is verified where target workspace supports it.
+- [ ] A representative duplicate pair merges while conflicting numeric evidence remains separate.
+- [ ] Repeating identical input under the same normalizer version produces semantically identical output.
+- [ ] Final tool-schema changes are followed by app refresh/re-scan.
+- [ ] No private conversation content/secrets are committed as smoke-test evidence.
+
+**Verification:**
+- [ ] Actual ChatGPT → MCP call observed.
+- [ ] Tool result inspected against Spec AC-1 through AC-8.
+
+**Dependencies:** T11
+
+**Files likely touched:**
+- `docs/mcp-deployment.md` only for verified setup/runbook corrections
+
+**Estimated scope:** Small (0–1 file plus external verification)
+
+---
+
+## Task T13 — Final review and ship gate
+
+**Description:** Perform correctness → security → architecture → simplicity → performance review and verify project Definition of Done before proposing merge/ship.
+
+**Acceptance criteria:**
+- [ ] Explicit verification evidence exists for Spec AC-1 through AC-10.
+- [ ] Existing renderer/API baseline works without MCP.
+- [ ] MCP contains no model call, web fetch, DB write, shell action, destructive tool or n8n dependency in v1.
+- [ ] Security review covers untrusted evidence, protocol boundary, dependency supply chain, logging, rate limits and deployment exposure.
+- [ ] Full applicable tests/lint/render/Docker/CI checks have actual recorded results.
+- [ ] Final review verdict is **Approve** before ship.
+- [ ] Project-wide Definition of Done is checked; unmet items are reported rather than waived silently.
+
+**Verification:**
+- [ ] `/review` evidence recorded.
+- [ ] `/ship` only after the above gates pass.
+
+**Dependencies:** T12
+
+**Files likely touched:**
+- docs/tests only for issues found during review; no speculative refactor
+
+**Estimated scope:** Small unless review finds defects
+
+---
+
+## 3. Primary risks and mitigations
+
+### Risk: chosen base omits newer standalone implementation
+**Impact:** MCP work will not automatically contain the durable worker/UI/CI/security architecture already built elsewhere.  
+**Mitigation:** keep MCP v1 isolated; do not reimplement standalone features; schedule explicit integration after MCP v1.
+
+### Risk: branch divergence/integration conflicts later
+**Impact:** later integration into `build/standalone-production-app` may conflict in `package.json`, lockfile, Dockerfile, env and CI.  
+**Mitigation:** keep changes modular under `mcp/` + `lib/evidence/`, touch shared root files minimally, and document every shared-file change.
+
+### Risk: deterministic near-dedupe merges distinct claims
+**Mitigation:** strict blocking rules; numeric/date/negation protections; conflict preservation; fixtures for false-positive cases.
+
+### Risk: MCP/ChatGPT transport APIs change
+**Mitigation:** source-driven development against current official OpenAI/MCP docs at T01/T08/T10; pin exact dependency versions and lockfile.
+
+### Risk: remote MCP becomes an unnecessary attack surface
+**Mitigation:** private/tunnel-first deployment, narrow single tool, bounded request size/time/rate, no secrets/data mounts, no agentic side effects.
+
+### Risk: evidence score is mistaken for truth probability
+**Mitigation:** document score as deterministic ranking hint, preserve conflicts, and prevent syndicated repetition from inflating confidence.
+
+## 4. Deferred work
+
+- persistent EvidenceBundle database;
+- importing EvidenceBundle into standalone SQLite/project state;
+- replacing/deprecating Gemini research in the newer standalone branch;
+- write-capable MCP actions;
+- OpenAI API calls from MCP;
+- embeddings/vector database;
+- MCP web crawler/search engine;
+- public plugin/app distribution;
+- auto-publishing video;
+- reimplementation of the standalone production app on this old base branch.
+
+## 5. Plan readiness gate
+
+The plan is ready for `/build` when:
+
+- the old-spec-branch base trade-off is accepted;
+- T00–T13 are the agreed implementation order;
+- no task assumes files/features from `build/standalone-production-app`;
+- each behavioral task has focused verification;
+- real ChatGPT acceptance remains a mandatory gate, not an inferred capability.
