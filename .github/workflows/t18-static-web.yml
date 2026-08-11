@@ -20,9 +20,11 @@ jobs:
       GITHUB_OAUTH_CLIENT_ID: ci-client
       GITHUB_OAUTH_CLIENT_SECRET_FILE: ${{ github.workspace }}/.ci-secrets/github-oauth-client-secret
       OAUTH2_PROXY_COOKIE_SECRET_FILE: ${{ github.workspace }}/.ci-secrets/oauth2-proxy-cookie-secret
-      GOOGLE_TTS_CREDENTIALS_FILE: ${{ github.workspace }}/.ci-secrets/google-tts.json
       GEMINI_API_KEY_FILE: ${{ github.workspace }}/.ci-secrets/gemini-api-key
       GEMINI_MODEL: gemini-3.5-flash-lite
+      GEMINI_TTS_MODEL: gemini-3.1-flash-tts-preview
+      GEMINI_TTS_VOICE: Kore
+      GEMINI_TTS_TIMEOUT_MS: 30000
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -33,7 +35,7 @@ jobs:
       - name: Verify Google GenAI SDK runtime construction
         run: node -e "import('@google/genai').then(({GoogleGenAI})=>{const c=new GoogleGenAI({apiKey:'ci-key'});if(!c.interactions)process.exit(1)})"
       - name: Run focused T18 regression tests
-        run: node --test tests/unit/gemini-research.test.mjs tests/unit/gemini-generation.test.mjs tests/unit/gemini-secret-file.test.mjs tests/integration/standalone-web.test.mjs tests/integration/deployment-config.test.mjs
+        run: node --test tests/unit/gemini-research.test.mjs tests/unit/gemini-generation.test.mjs tests/unit/gemini-tts.test.mjs tests/unit/timed-gemini-tts.test.mjs tests/unit/gemini-secret-file.test.mjs tests/integration/gemini-tts-wiring.test.mjs tests/integration/standalone-web.test.mjs tests/integration/deployment-config.test.mjs
       - run: npm run lint
       - name: Verify production entrypoint syntax
         run: |
@@ -66,7 +68,6 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           Path('.ci-secrets/oauth2-proxy-cookie-secret').write_bytes(b'x' * 32)
-          Path('.ci-secrets/google-tts.json').write_text('{}')
           PY
           chmod 444 .ci-secrets/*
       - name: Create dedicated external shared-edge network
@@ -98,8 +99,15 @@ jobs:
           assert 'GEMINI_API_KEY' not in worker_env
           assert worker_env.get('GEMINI_API_KEY_FILE') == '/run/secrets/gemini_api_key'
           assert worker_env.get('GEMINI_MODEL') == 'gemini-3.5-flash-lite'
-          assert services['worker'].get('secrets')
+          assert worker_env.get('GEMINI_TTS_MODEL') == 'gemini-3.1-flash-tts-preview'
+          assert worker_env.get('GEMINI_TTS_VOICE') == 'Kore'
+          assert worker_env.get('GEMINI_TTS_TIMEOUT_MS') == '30000'
+          assert 'GOOGLE_APPLICATION_CREDENTIALS' not in worker_env
+          assert not any(key.startswith('GOOGLE_TTS_') for key in worker_env)
+          worker_secrets = services['worker'].get('secrets') or []
+          assert worker_secrets
           assert 'gemini_api_key' in data.get('secrets', {})
+          assert 'google_tts_credentials' not in data.get('secrets', {})
           assert 'openai_api_key' not in data.get('secrets', {})
           PY
       - name: Build immutable standalone app image
@@ -139,7 +147,7 @@ jobs:
           test "$(docker compose exec -T worker id -u)" != 0
           docker inspect "$container" | node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const b=JSON.parse(s)[0].HostConfig.PortBindings||{};if(Object.keys(b).length)process.exit(1)})"
           docker compose exec -T worker node -e "fetch('http://127.0.0.1:4181/health/ready').then(async r=>{if(!r.ok)process.exit(1);const b=await r.json();if(!b.ok)process.exit(1)})"
-          docker compose exec -T worker node -e "if(!require('node:fs').statSync('/run/secrets/gemini_api_key').isFile())process.exit(1)"
+          docker compose exec -T worker node -e "const fs=require('node:fs');if(!fs.statSync('/run/secrets/gemini_api_key').isFile())process.exit(1);if(fs.existsSync('/run/secrets/google_tts_credentials'))process.exit(1)"
           docker compose exec -T app node -e "require('node:fs').writeFileSync('/app/data/ci-shared-volume','shared')"
           docker compose exec -T worker node -e "if(require('node:fs').readFileSync('/app/data/ci-shared-volume','utf8')!=='shared')process.exit(1)"
       - name: Start and verify private OAuth role
