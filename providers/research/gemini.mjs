@@ -3,8 +3,6 @@ import {loadSecretValue} from '../../security/secret-file.mjs';
 import {createResearchProvider} from './index.mjs';
 
 const DEFAULT_MODEL = 'gemini-3.5-flash-lite';
-const INCOMPLETE_STATUSES = new Set(['queued', 'in_progress', 'incomplete', 'requires_action']);
-const FAILED_STATUSES = new Set(['failed', 'cancelled', 'budget_exceeded']);
 
 const configError = (message) => new AppError('GEMINI_CONFIG_INVALID', message, {status: 500});
 
@@ -36,13 +34,13 @@ export function loadGeminiResearchConfig(env = process.env) {
 
 const classifyGeminiError = (error, operation) => {
   const status = Number(error?.status);
-  if (error?.name === 'RequestTimeoutError' || error?.name === 'AbortError') {
+  if (error?.name === 'RequestTimeoutError') {
     return new AppError('PROVIDER_TIMEOUT', `Gemini ${operation} request timed out`, {status: 504, retryable: true});
   }
   if (status === 429) {
     return new AppError('PROVIDER_RATE_LIMITED', `Gemini ${operation} rate limit reached`, {status: 429, retryable: true});
   }
-  if (status >= 500 || error?.name === 'NetworkError') {
+  if (status >= 500 || error?.name === 'ConnectionError') {
     return new AppError('PROVIDER_TEMPORARY_FAILURE', `Gemini ${operation} is temporarily unavailable`, {status: 502, retryable: true});
   }
   return new AppError('PROVIDER_FAILURE', `Gemini ${operation} request failed`, {status: 502, retryable: false});
@@ -61,30 +59,21 @@ const platformFor = (value) => {
   }
 };
 
-const collectCitations = (interaction) => {
+const collectGroundedSources = (response) => {
   const byUrl = new Map();
-  for (const step of Array.isArray(interaction?.steps) ? interaction.steps : []) {
-    if (step?.type !== 'model_output') continue;
-    for (const content of Array.isArray(step.content) ? step.content : []) {
-      if (content?.type !== 'text') continue;
-      for (const annotation of Array.isArray(content.annotations) ? content.annotations : []) {
-        if (annotation?.type !== 'url_citation' || typeof annotation.url !== 'string' || !annotation.url) continue;
-        if (byUrl.has(annotation.url)) continue;
-        const title = String(annotation.title || '').slice(0, 1000);
-        const citation = {
-          title,
-          startIndex: Number.isSafeInteger(annotation.start_index) ? annotation.start_index : 0,
-          endIndex: Number.isSafeInteger(annotation.end_index) ? annotation.end_index : 0,
-        };
-        byUrl.set(annotation.url, {
-          url: annotation.url,
-          platform: platformFor(annotation.url),
-          ...(title ? {title} : {}),
-          sourceType: 'search-result',
-          discoveryStatus: 'discovered',
-          citation,
-        });
-      }
+  for (const candidate of Array.isArray(response?.candidates) ? response.candidates : []) {
+    const chunks = candidate?.groundingMetadata?.groundingChunks;
+    for (const chunk of Array.isArray(chunks) ? chunks : []) {
+      const url = chunk?.web?.uri;
+      if (typeof url !== 'string' || !url || byUrl.has(url)) continue;
+      const title = String(chunk.web?.title || '').slice(0, 1000);
+      byUrl.set(url, {
+        url,
+        platform: platformFor(url),
+        ...(title ? {title} : {}),
+        sourceType: 'search-result',
+        discoveryStatus: 'discovered',
+      });
     }
   }
   return [...byUrl.values()];
@@ -114,24 +103,23 @@ export function createGeminiResearchProvider({client, config = loadGeminiResearc
       let response;
       try {
         const gemini = await getClient();
-        response = await gemini.interactions.create({
+        response = await gemini.models.generateContent({
           model: config.model,
-          tools: [{type: 'google_search'}],
-          input: buildDiscoveryPrompt({topic, sourceUrls}),
-          store: false,
-        }, {timeout_ms: config.timeoutMs});
+          contents: buildDiscoveryPrompt({topic, sourceUrls}),
+          config: {
+            tools: [{googleSearch: {}}],
+            httpOptions: {timeout: config.timeoutMs},
+          },
+        });
       } catch (error) {
         throw classifyGeminiError(error, 'research');
       }
 
-      if (INCOMPLETE_STATUSES.has(response?.status)) {
-        throw new AppError('PROVIDER_INCOMPLETE', 'Gemini research response was incomplete', {status: 502, retryable: true});
-      }
-      if (FAILED_STATUSES.has(response?.status) || response?.status !== 'completed') {
-        throw new AppError('PROVIDER_FAILURE', 'Gemini research response failed', {status: 502, retryable: false});
+      if (response?.promptFeedback?.blockReason) {
+        throw new AppError('PROVIDER_REFUSAL', 'Gemini research blocked the request', {status: 422, retryable: false});
       }
 
-      const candidates = collectCitations(response);
+      const candidates = collectGroundedSources(response);
       if (candidates.length === 0) {
         throw new AppError('PROVIDER_NO_RESULTS', 'Gemini research returned no public sources', {status: 502, retryable: false});
       }
