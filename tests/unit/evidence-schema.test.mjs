@@ -21,8 +21,10 @@ test('rejects unknown root fields', () => {
   });
 });
 
-test('allows malformed item objects through envelope for item-level rejection', () => {
-  assert.doesNotThrow(() => assertEvidenceEnvelope({...valid, items: [{claim: 'x'}]}));
-  const bundle = normalizeEvidence({...valid, items: [{claim: 'x'}]});
-  assert.equal(bundle.rejectedItems.length, 1);
+test('allows malformed items through envelope for item-level rejection', () => {
+  const input = {...valid, items: [{claim: 'x'}, null]};
+  assert.doesNotThrow(() => assertEvidenceEnvelope(input));
+  const bundle = normalizeEvidence(input);
+  assert.equal(bundle.rejectedItems.length, 2);
+  assert.deepEqual(bundle.rejectedItems.map((item) => item.index), [0, 1]);
 });
