@@ -11,8 +11,8 @@ import {createGenerationProjectService} from './app/services/generate-project.mj
 import {createMediaIngestService} from './app/services/media-ingest.mjs';
 import {createRenderExecutionService} from './app/services/execute-render.mjs';
 import {createResearchProjectService} from './app/services/research-project.mjs';
-import {createOpenAiGenerationProvider} from './providers/generation/openai.mjs';
-import {createOpenAiResearchProvider} from './providers/research/openai.mjs';
+import {createGeminiGenerationProvider} from './providers/generation/gemini.mjs';
+import {createGeminiResearchProvider} from './providers/research/gemini.mjs';
 import {createArtifactStore} from './storage/artifacts.mjs';
 import {createRepositories, migrateDatabase, openDatabase} from './storage/db.mjs';
 import {createJobStore} from './storage/jobs.mjs';
@@ -62,18 +62,18 @@ const observability = createObservability({
 });
 const healthService = createHealthService({db, dataDir: config.dataDir});
 const projectStateStore = createProjectStateStore(db);
-const rawResearchProvider = createOpenAiResearchProvider();
-const rawGenerationProvider = createOpenAiGenerationProvider();
+const rawResearchProvider = createGeminiResearchProvider();
+const rawGenerationProvider = createGeminiGenerationProvider();
 const researchProvider = Object.freeze({
   search: (input) => observability.observeProvider({
-    provider: 'openai',
+    provider: 'gemini',
     operation: 'research',
     run: () => rawResearchProvider.search(input),
   }),
 });
 const generationProvider = Object.freeze({
   generate: (input) => observability.observeProvider({
-    provider: 'openai',
+    provider: 'gemini',
     operation: 'generation',
     run: () => rawGenerationProvider.generate(input),
   }),
