@@ -72,16 +72,23 @@ test('Gemini research uses Interactions Google Search and returns deduplicated c
   assert.equal('sourceId' in result.candidates[0], false);
 });
 
-test('Gemini research maps incomplete/no-results/provider failures to stable non-leaking errors', async () => {
-  const incomplete = createGeminiResearchProvider({
-    client: fakeClient(async () => ({id: 'i', status: 'in_progress', steps: []})),
-    config,
-  });
-  await assert.rejects(
-    () => incomplete.search({topic: 'Creator'}),
-    (error) => error instanceof AppError && error.code === 'PROVIDER_INCOMPLETE' && error.retryable === true,
-  );
+test('Gemini research rejects every non-final incomplete state even if partial citations exist', async () => {
+  for (const status of ['queued', 'in_progress', 'incomplete', 'requires_action']) {
+    const partial = completedSearch([{url: 'https://example.com/partial', title: 'Partial'}]);
+    partial.status = status;
+    const provider = createGeminiResearchProvider({
+      client: fakeClient(async () => partial),
+      config,
+    });
+    await assert.rejects(
+      () => provider.search({topic: 'Creator'}),
+      (error) => error instanceof AppError && error.code === 'PROVIDER_INCOMPLETE' && error.retryable === true,
+      `status ${status} must not persist partial research`,
+    );
+  }
+});
 
+test('Gemini research maps no-results/provider failures to stable non-leaking errors', async () => {
   const empty = createGeminiResearchProvider({
     client: fakeClient(async () => ({id: 'i', status: 'completed', steps: []})),
     config,
