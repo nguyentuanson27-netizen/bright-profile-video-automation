@@ -3,6 +3,8 @@ import {loadSecretValue} from '../../security/secret-file.mjs';
 import {createResearchProvider} from './index.mjs';
 
 const DEFAULT_MODEL = 'gemini-3.5-flash-lite';
+const INCOMPLETE_STATUSES = new Set(['queued', 'in_progress', 'incomplete', 'requires_action']);
+const FAILED_STATUSES = new Set(['failed', 'cancelled', 'budget_exceeded']);
 
 const configError = (message) => new AppError('GEMINI_CONFIG_INVALID', message, {status: 500});
 
@@ -122,10 +124,10 @@ export function createGeminiResearchProvider({client, config = loadGeminiResearc
         throw classifyGeminiError(error, 'research');
       }
 
-      if (response?.status === 'queued' || response?.status === 'in_progress') {
+      if (INCOMPLETE_STATUSES.has(response?.status)) {
         throw new AppError('PROVIDER_INCOMPLETE', 'Gemini research response was incomplete', {status: 502, retryable: true});
       }
-      if (response?.status === 'failed' || response?.status === 'cancelled' || response?.status === 'budget_exceeded') {
+      if (FAILED_STATUSES.has(response?.status) || response?.status !== 'completed') {
         throw new AppError('PROVIDER_FAILURE', 'Gemini research response failed', {status: 502, retryable: false});
       }
 
