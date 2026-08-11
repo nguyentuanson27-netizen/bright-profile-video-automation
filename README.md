@@ -8,7 +8,7 @@ The current pipeline is:
 2. Queue public-source research in the durable SQLite worker.
 3. Automatically chain successful research into structured script/scene generation with Gemini.
 4. Stop at `review_required` for human review and approval.
-5. After approval, ingest remote media into trusted local artifacts, generate Google TTS, and render with Remotion.
+5. After approval, ingest remote media into trusted local artifacts, generate timed voiceover with Gemini TTS, and render with Remotion.
 6. Validate and download the completed MP4 from the operator UI.
 
 The app is designed for a single internal operator/team. Public web and social content is treated as untrusted input and stored with provenance before it can influence generation or rendering.
@@ -72,12 +72,13 @@ node scripts/render-project.mjs examples/sample-project.json data/output.mp4
 
 ## Providers
 
-- Research and structured generation: Gemini via `@google/genai`, default model `gemini-3.5-flash-lite`.
+- Research and structured generation: Gemini via pinned `@google/genai`, default model `gemini-3.5-flash-lite`.
 - Research discovery uses Google Search grounding; discovered URLs are still fetched and normalized by the application's SSRF-safe source boundary before generation.
 - Generation has no browsing tools and must pass the application's local schema/provenance validation before a review revision is persisted.
-- Voice generation uses Google Cloud Text-to-Speech.
+- Voice generation: Gemini TTS Preview, default model `gemini-3.1-flash-tts-preview` and voice `Kore`.
+- Gemini TTS audio is handled as 24 kHz mono PCM and fitted into approved voiceover slots with FFmpeg before Remotion rendering.
 
-Provider credentials are worker-only in production and use file-backed Compose secrets. The app/API container does not receive Gemini or Google TTS credentials.
+The same file-backed Gemini API key is mounted only into the worker for research, generation, and TTS. The app/API container receives no provider credential. Because the selected TTS model is Preview, production readiness requires a live TTS smoke in addition to deterministic CI fakes.
 
 ## Rendering
 
