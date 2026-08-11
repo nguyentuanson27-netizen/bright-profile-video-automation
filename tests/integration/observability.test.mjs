@@ -59,21 +59,21 @@ test('worker failure emits correlated structured events and bounded queue/stage/
 
     await assert.rejects(
       () => observability.observeProvider({
-        provider: 'openai',
+        provider: 'gemini',
         operation: 'research',
         run: async () => { throw new Error('provider-secret-response'); },
       }),
       /provider-secret-response/,
     );
-    await observability.observeProvider({provider: 'openai', operation: 'generation', run: async () => 'ok'});
+    await observability.observeProvider({provider: 'gemini', operation: 'generation', run: async () => 'ok'});
 
     const metrics = await observability.metrics();
     assert.match(metrics, /bright_queue_depth\{stage="researching"\} 0/);
     assert.match(metrics, /bright_active_jobs\{stage="researching"\} 0/);
     assert.match(metrics, /bright_failed_jobs\{stage="researching"\} 1/);
     assert.match(metrics, /bright_job_stage_duration_seconds_count\{stage="researching",outcome="error"\} 1/);
-    assert.match(metrics, /bright_provider_errors_total\{provider="openai",operation="research"\} 1/);
-    assert.match(metrics, /bright_provider_duration_seconds_count\{provider="openai",operation="generation",outcome="success"\} 1/);
+    assert.match(metrics, /bright_provider_errors_total\{provider="gemini",operation="research"\} 1/);
+    assert.match(metrics, /bright_provider_duration_seconds_count\{provider="gemini",operation="generation",outcome="success"\} 1/);
     assert.equal(metrics.includes('project-observe'), false);
     assert.equal(metrics.includes('job-observe'), false);
     assert.equal(metrics.includes('provider-secret-response'), false);
