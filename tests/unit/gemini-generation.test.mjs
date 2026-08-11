@@ -41,13 +41,10 @@ const generation = {
   },
 };
 
-const fakeClient = (implementation) => ({interactions: {create: implementation}});
-
-const completed = (payload) => ({
-  id: 'interaction-1',
-  status: 'completed',
-  output_text: typeof payload === 'string' ? payload : JSON.stringify(payload),
-  steps: [],
+const fakeClient = (implementation) => ({models: {generateContent: implementation}});
+const responseWith = (payload) => ({
+  text: typeof payload === 'string' ? payload : JSON.stringify(payload),
+  candidates: [{finishReason: 'STOP'}],
 });
 
 const hasKeyword = (value, keyword) => {
@@ -56,14 +53,12 @@ const hasKeyword = (value, keyword) => {
   return Object.values(value).some((child) => hasKeyword(child, keyword));
 };
 
-test('Gemini generation uses Interactions structured JSON with no browsing tools', async () => {
+test('Gemini generation uses generateContent structured JSON with no browsing tools', async () => {
   let request;
-  let options;
   const provider = createGeminiGenerationProvider({
-    client: fakeClient(async (body, requestOptions) => {
+    client: fakeClient(async (body) => {
       request = body;
-      options = requestOptions;
-      return completed(generation);
+      return responseWith(generation);
     }),
     config,
   });
@@ -71,20 +66,19 @@ test('Gemini generation uses Interactions structured JSON with no browsing tools
   const result = await provider.generate({topic: 'Creator', sources: [source], duration: 6, language: 'vi-VN'});
 
   assert.equal(request.model, 'gemini-3.5-flash-lite');
-  assert.equal(request.tools, undefined);
-  assert.equal(request.store, false);
-  assert.equal(request.generation_config.max_output_tokens, 12_000);
-  assert.deepEqual(request.response_format, {
-    type: 'text',
-    mime_type: 'application/json',
-    schema: GEMINI_GENERATION_SCHEMA,
-  });
+  assert.equal(request.config.tools, undefined);
+  assert.equal(request.config.maxOutputTokens, 12_000);
+  assert.equal(request.config.responseMimeType, 'application/json');
+  assert.deepEqual(request.config.responseJsonSchema, GEMINI_GENERATION_SCHEMA);
+  assert.deepEqual(request.config.httpOptions, {timeout: 30_000});
+  assert.equal(request.config.temperature, undefined);
+  assert.equal(request.config.topP, undefined);
+  assert.equal(request.config.topK, undefined);
   assert.equal(hasKeyword(GEMINI_GENERATION_SCHEMA, 'if'), false);
   assert.equal(hasKeyword(GEMINI_GENERATION_SCHEMA, 'then'), false);
-  assert.match(request.system_instruction, /untrusted/i);
-  assert.match(request.system_instruction, /sourceId/i);
-  assert.equal(options.timeout_ms, 30_000);
-  const providerInput = JSON.parse(request.input);
+  assert.match(request.config.systemInstruction, /untrusted/i);
+  assert.match(request.config.systemInstruction, /sourceId/i);
+  const providerInput = JSON.parse(request.contents);
   assert.equal(providerInput.sources[0].sourceId, 'source-1');
   assert.deepEqual(result, generation);
 });
@@ -93,7 +87,7 @@ test('Gemini generation keeps shared provenance validation after structured outp
   const invalid = structuredClone(generation);
   invalid.claims[0].sourceIds = ['invented-source'];
   const provider = createGeminiGenerationProvider({
-    client: fakeClient(async () => completed(invalid)),
+    client: fakeClient(async () => responseWith(invalid)),
     config,
   });
 
@@ -103,34 +97,36 @@ test('Gemini generation keeps shared provenance validation after structured outp
   );
 });
 
-test('Gemini generation rejects every non-final incomplete state even if partial structured output exists', async () => {
-  for (const status of ['queued', 'in_progress', 'incomplete', 'requires_action']) {
-    const partial = completed(generation);
-    partial.status = status;
+test('Gemini generation rejects blocked, empty and malformed output', async () => {
+  const blocked = createGeminiGenerationProvider({
+    client: fakeClient(async () => ({
+      text: '',
+      promptFeedback: {blockReason: 'SAFETY'},
+      candidates: [],
+    })),
+    config,
+  });
+  await assert.rejects(
+    () => blocked.generate({topic: 'Creator', sources: [source]}),
+    (error) => error instanceof AppError && error.code === 'PROVIDER_REFUSAL' && error.retryable === false,
+  );
+
+  for (const payload of ['', '{bad json']) {
     const provider = createGeminiGenerationProvider({
-      client: fakeClient(async () => partial),
+      client: fakeClient(async () => responseWith(payload)),
       config,
     });
     await assert.rejects(
       () => provider.generate({topic: 'Creator', sources: [source]}),
-      (error) => error instanceof AppError && error.code === 'PROVIDER_INCOMPLETE' && error.retryable === true,
-      `status ${status} must not persist partial generation`,
+      (error) => error instanceof AppError && error.code === 'PROVIDER_OUTPUT_INVALID',
     );
   }
 });
 
-test('Gemini generation rejects malformed output and maps provider errors safely', async () => {
-  const malformed = createGeminiGenerationProvider({
-    client: fakeClient(async () => completed('{bad json')),
-    config,
-  });
-  await assert.rejects(
-    () => malformed.generate({topic: 'Creator', sources: [source]}),
-    (error) => error instanceof AppError && error.code === 'PROVIDER_OUTPUT_INVALID',
-  );
-
+test('Gemini generation maps timeout, connection, rate-limit and provider errors safely', async () => {
   for (const [providerError, code, retryable] of [
     [Object.assign(new Error('sensitive timeout'), {name: 'RequestTimeoutError'}), 'PROVIDER_TIMEOUT', true],
+    [Object.assign(new Error('sensitive connection'), {name: 'ConnectionError'}), 'PROVIDER_TEMPORARY_FAILURE', true],
     [Object.assign(new Error('sensitive rate'), {status: 429}), 'PROVIDER_RATE_LIMITED', true],
     [Object.assign(new Error('sensitive server'), {status: 502}), 'PROVIDER_TEMPORARY_FAILURE', true],
     [Object.assign(new Error('sensitive bad request'), {status: 400}), 'PROVIDER_FAILURE', false],
