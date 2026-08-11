@@ -2,48 +2,21 @@ import {randomUUID} from 'node:crypto';
 import {createServer} from 'node:http';
 import {Readable} from 'node:stream';
 import {fileURLToPath} from 'node:url';
-import {createMcpHandler, McpServer} from '@modelcontextprotocol/server';
-import * as z from 'zod/v4';
+import {createMcpHandler, fromJsonSchema, McpServer} from '@modelcontextprotocol/server';
 import {normalizeEvidence} from '../lib/evidence/normalize-evidence.mjs';
-import {assertEvidenceBundle, assertEvidenceEnvelope} from '../lib/evidence/schema-validator.mjs';
+import {
+  assertEvidenceBundle,
+  assertEvidenceEnvelope,
+  evidenceBundleSchema,
+  evidenceInputSchema,
+} from '../lib/evidence/schema-validator.mjs';
 
 const DEFAULT_PORT = 4190;
 const DEFAULT_MAX_BODY_BYTES = 2 * 1024 * 1024;
 const DEFAULT_RATE_LIMIT = 60;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
-
-const inputSchema = z.object({
-  subject: z.object({
-    name: z.string().min(1).max(200),
-    aliases: z.array(z.string().min(1).max(200)).max(50).optional(),
-  }),
-  researchQuery: z.string().max(2000).optional(),
-  researchedAt: z.string().max(64).optional(),
-  items: z.array(z.unknown()).min(1).max(200),
-  options: z.object({
-    maxEvidence: z.number().int().min(1).max(200).optional(),
-    nearDuplicateThreshold: z.number().min(0.5).max(0.99).optional(),
-  }).optional(),
-});
-
-const outputSchema = z.object({
-  schemaVersion: z.string(),
-  normalizerVersion: z.string(),
-  subject: z.object({name: z.string(), aliases: z.array(z.string()).optional()}),
-  researchQuery: z.string().optional(),
-  researchedAt: z.string(),
-  stats: z.object({
-    inputItems: z.number().int(),
-    retainedEvidence: z.number().int(),
-    exactDuplicatesRemoved: z.number().int(),
-    nearDuplicatesMerged: z.number().int(),
-    conflictGroups: z.number().int(),
-    rejectedItems: z.number().int(),
-  }),
-  evidence: z.array(z.unknown()),
-  conflicts: z.array(z.unknown()),
-  rejectedItems: z.array(z.unknown()),
-});
+const inputSchema = fromJsonSchema(evidenceInputSchema);
+const outputSchema = fromJsonSchema(evidenceBundleSchema);
 
 const formatToolSummary = (bundle) => [
   `Normalized ${bundle.stats.inputItems} candidates into ${bundle.stats.retainedEvidence} evidence records.`,
