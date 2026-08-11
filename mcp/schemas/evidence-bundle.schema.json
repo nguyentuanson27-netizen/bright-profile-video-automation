@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bright.local/schemas/evidence-bundle.schema.json",
+  "title": "Bright EvidenceBundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "normalizerVersion", "subject", "researchedAt", "stats", "evidence", "conflicts", "rejectedItems"],
+  "properties": {
+    "schemaVersion": {"const": "1.0"},
+    "normalizerVersion": {"type": "string"},
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string"},
+        "aliases": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "researchQuery": {"type": "string"},
+    "researchedAt": {"type": "string"},
+    "stats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inputItems", "retainedEvidence", "exactDuplicatesRemoved", "nearDuplicatesMerged", "conflictGroups", "rejectedItems"],
+      "properties": {
+        "inputItems": {"type": "integer", "minimum": 0},
+        "retainedEvidence": {"type": "integer", "minimum": 0},
+        "exactDuplicatesRemoved": {"type": "integer", "minimum": 0},
+        "nearDuplicatesMerged": {"type": "integer", "minimum": 0},
+        "conflictGroups": {"type": "integer", "minimum": 0},
+        "rejectedItems": {"type": "integer", "minimum": 0}
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "claim", "claimNormalized", "fingerprint", "qualityScore", "confidence", "conflictGroupId", "sources"],
+        "properties": {
+          "id": {"type": "string"},
+          "claim": {"type": "string"},
+          "claimNormalized": {"type": "string"},
+          "category": {"type": "string"},
+          "claimDate": {"type": "string"},
+          "value": {"type": ["string", "number", "boolean"]},
+          "unit": {"type": "string"},
+          "fingerprint": {"type": "string", "pattern": "^sha256:"},
+          "qualityScore": {"type": "number", "minimum": 0, "maximum": 1},
+          "confidence": {"enum": ["high", "medium", "low"]},
+          "conflictGroupId": {"type": ["string", "null"]},
+          "sources": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 20,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["url", "canonicalUrl"],
+              "properties": {
+                "url": {"type": "string"},
+                "canonicalUrl": {"type": "string"},
+                "title": {"type": "string"},
+                "publisher": {"type": "string"},
+                "author": {"type": "string"},
+                "publishedAt": {"type": "string"},
+                "excerpt": {"type": "string"},
+                "sourceType": {"type": "string"},
+                "sourceRelationship": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "conflicts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "factKey", "evidenceIds", "status"],
+        "properties": {
+          "id": {"type": "string"},
+          "factKey": {"type": "string"},
+          "evidenceIds": {"type": "array", "minItems": 2, "items": {"type": "string"}},
+          "status": {"const": "unresolved"}
+        }
+      }
+    },
+    "rejectedItems": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["index", "reasons"],
+        "properties": {
+          "index": {"type": "integer", "minimum": 0},
+          "reasons": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}
