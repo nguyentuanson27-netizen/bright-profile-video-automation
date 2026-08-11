@@ -116,7 +116,7 @@ test('Gemini research config uses file/env secret and stable Gemini model withou
     GEMINI_API_KEY: 'secret-key',
     GEMINI_MODEL: 'gemini-3.5-flash-lite',
     GEMINI_TIMEOUT_MS: '30000',
-  }), config);
+  }), {...config, apiKey: 'secret-key'});
 
   assert.throws(
     () => loadGeminiResearchConfig({GEMINI_MODEL: 'gemini-3.5-flash-lite'}),
