@@ -2,7 +2,7 @@ import {performance} from 'node:perf_hooks';
 import {Counter, Gauge, Histogram, Registry} from 'prom-client';
 
 const KNOWN_STAGES = new Set(['researching', 'generating', 'rendering']);
-const KNOWN_PROVIDERS = new Set(['openai', 'google-tts', 'remotion']);
+const KNOWN_PROVIDERS = new Set(['gemini', 'remotion']);
 const KNOWN_OPERATIONS = new Set(['research', 'generation', 'tts', 'render']);
 const LOG_FIELDS = new Set([
   'requestId', 'projectId', 'jobId', 'stage', 'method', 'path', 'status', 'attempt',
