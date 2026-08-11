@@ -31,7 +31,7 @@ jobs:
           package-manager-cache: false
       - run: npm ci --strict-allow-scripts=true --no-audit --no-fund
       - name: Verify Google GenAI SDK runtime construction
-        run: node -e "import('@google/genai').then(({GoogleGenAI})=>{const c=new GoogleGenAI({apiKey:'ci-key'});if(!c.models)process.exit(1)})"
+        run: node -e "import('@google/genai').then(({GoogleGenAI})=>{const c=new GoogleGenAI({apiKey:'ci-key'});if(!c.interactions)process.exit(1)})"
       - name: Run focused T18 regression tests
         run: node --test tests/unit/gemini-research.test.mjs tests/unit/gemini-generation.test.mjs tests/unit/gemini-secret-file.test.mjs tests/integration/standalone-web.test.mjs tests/integration/deployment-config.test.mjs
       - run: npm run lint
@@ -68,8 +68,6 @@ jobs:
           Path('.ci-secrets/oauth2-proxy-cookie-secret').write_bytes(b'x' * 32)
           Path('.ci-secrets/google-tts.json').write_text('{}')
           PY
-          # Compose file-backed secrets are bind mounts. Keep the parent directory
-          # private while allowing non-root service users to read the mounted files.
           chmod 444 .ci-secrets/*
       - name: Create dedicated external shared-edge network
         run: docker network create --driver bridge --subnet "$BRIGHT_EDGE_CIDR" "$BRIGHT_EDGE_NETWORK"
