@@ -33,6 +33,7 @@
     "vite": "8.0.16"
   },
   "allowScripts": {
+    "@google/genai@2.14.0": true,
     "better-sqlite3@13.0.3": true,
     "esbuild@0.28.1": true,
     "protobufjs@7.6.5": true,
