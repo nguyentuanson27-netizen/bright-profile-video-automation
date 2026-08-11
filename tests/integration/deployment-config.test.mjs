@@ -125,8 +125,8 @@ test('file-backed Compose secrets keep the host directory private while remainin
   const deployment = read('docs/operations/deployment.md');
   const workflow = read('.github/workflows/t18-static-web.yml');
 
-  assert.match(deployment, /secret directory[^\n]*`0700`/i);
-  assert.match(deployment, /secret files[^\n]*`0444`/i);
+  assert.match(deployment, /install -d -m 0700[^\n]*\/srv\/bright-profile\/secrets/);
+  assert.match(deployment, /chmod 0444[\s\S]*gemini-api-key[\s\S]*github-oauth-client-secret[\s\S]*oauth2-proxy-cookie-secret/);
   assert.match(deployment, /non-root/i);
   assert.doesNotMatch(deployment, /mode `0600`/i);
 
