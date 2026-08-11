@@ -2,50 +2,65 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://bright.local/schemas/evidence-input.schema.json",
   "title": "Bright Evidence Normalize Input",
+  "description": "Deterministic normalization request for caller-provided public-source evidence.",
   "type": "object",
   "additionalProperties": false,
   "required": ["subject", "items"],
   "properties": {
     "subject": {
       "type": "object",
+      "description": "Canonical research subject used for alias normalization and evidence identity.",
       "additionalProperties": false,
       "required": ["name"],
       "properties": {
-        "name": {"type": "string", "minLength": 1, "maxLength": 200},
-        "aliases": {"type": "array", "maxItems": 50, "items": {"type": "string", "minLength": 1, "maxLength": 200}}
+        "name": {"type": "string", "minLength": 1, "maxLength": 200, "description": "Canonical subject name."},
+        "aliases": {"type": "array", "maxItems": 50, "description": "Known subject aliases that should normalize to the canonical subject.", "items": {"type": "string", "minLength": 1, "maxLength": 200}}
       }
     },
-    "researchQuery": {"type": "string", "maxLength": 2000},
-    "researchedAt": {"type": "string", "maxLength": 64},
-    "items": {"type": "array", "minItems": 1, "maxItems": 200, "items": {}},
+    "researchQuery": {"type": "string", "maxLength": 2000, "description": "Optional research query or scope that produced these candidates."},
+    "researchedAt": {"type": "string", "maxLength": 64, "description": "Optional ISO date/date-time when the research was performed."},
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 200,
+      "description": "Candidate evidence items. The structured branch documents the expected item contract; the permissive fallback keeps malformed individual items batch-safe so they can be returned in rejectedItems instead of rejecting the whole call.",
+      "items": {
+        "anyOf": [
+          {"$ref": "#/$defs/evidenceItem"},
+          {}
+        ]
+      }
+    },
     "options": {
       "type": "object",
+      "description": "Deterministic normalizer options.",
       "additionalProperties": false,
       "properties": {
-        "maxEvidence": {"type": "integer", "minimum": 1, "maximum": 200},
-        "nearDuplicateThreshold": {"type": "number", "minimum": 0.5, "maximum": 0.99}
+        "maxEvidence": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Target retained-evidence cap. Unresolved conflict groups may exceed this cap rather than being silently truncated."},
+        "nearDuplicateThreshold": {"type": "number", "minimum": 0.5, "maximum": 0.99, "description": "Token-set similarity threshold for guarded deterministic near-duplicate merging."}
       }
     }
   },
   "$defs": {
     "evidenceItem": {
       "type": "object",
+      "description": "One atomic factual assertion with a public source URL and optional provenance/typed fact metadata.",
       "additionalProperties": true,
       "required": ["claim", "url"],
       "properties": {
-        "claim": {"type": "string", "minLength": 3, "maxLength": 2000},
-        "url": {"type": "string", "maxLength": 4096, "pattern": "^https?://"},
-        "title": {"type": "string", "maxLength": 1000},
-        "publisher": {"type": "string", "maxLength": 500},
-        "author": {"type": "string", "maxLength": 500},
-        "publishedAt": {"type": "string", "maxLength": 64},
-        "excerpt": {"type": "string", "maxLength": 1500},
-        "category": {"type": "string", "maxLength": 128},
-        "sourceType": {"type": "string", "maxLength": 64},
-        "sourceRelationship": {"type": "string", "maxLength": 64},
-        "claimDate": {"type": "string", "maxLength": 64},
-        "value": {"type": ["string", "number", "boolean"]},
-        "unit": {"type": "string", "maxLength": 128}
+        "claim": {"type": "string", "minLength": 3, "maxLength": 2000, "description": "Atomic factual claim supported by the source."},
+        "url": {"type": "string", "maxLength": 4096, "pattern": "^https?://", "description": "Public http(s) source URL supporting the claim."},
+        "title": {"type": "string", "maxLength": 1000, "description": "Source page or document title."},
+        "publisher": {"type": "string", "maxLength": 500, "description": "Publisher or source organization."},
+        "author": {"type": "string", "maxLength": 500, "description": "Named source author when available."},
+        "publishedAt": {"type": "string", "maxLength": 64, "description": "ISO date/date-time when the source was published."},
+        "excerpt": {"type": "string", "maxLength": 1500, "description": "Short source excerpt directly supporting the claim."},
+        "category": {"type": "string", "maxLength": 128, "description": "Fact category used for guarded dedupe and conflict comparison."},
+        "sourceType": {"type": "string", "maxLength": 64, "description": "Source-type hint such as official, primary, news, analytics, social, or aggregator."},
+        "sourceRelationship": {"type": "string", "maxLength": 64, "description": "Optional deterministic relationship hint such as independent, syndicated, primary, or quotes_primary."},
+        "claimDate": {"type": "string", "maxLength": 64, "description": "ISO date/date-time the factual claim refers to; for event facts this may itself be the disputed value."},
+        "value": {"type": ["string", "number", "boolean"], "description": "Optional explicit typed value extracted from the claim."},
+        "unit": {"type": "string", "maxLength": 128, "description": "Optional unit associated with value, such as followers, subscribers, views, or percent."}
       }
     }
   }
