@@ -27,6 +27,8 @@ MCP_RATE_LIMIT_PER_MINUTE=60
 MCP_REQUEST_TIMEOUT_MS=10000
 ```
 
+Non-finite or non-positive numeric safety settings fall back to their documented defaults. In particular, an invalid `MCP_MAX_BODY_BYTES` value cannot disable the default 2 MB request-body boundary.
+
 Production should keep the process on loopback/private networking. ChatGPT does not connect directly to localhost; for a private deployment use OpenAI Secure MCP Tunnel or an authenticated remote HTTPS MCP endpoint. Do not expose this process on `0.0.0.0` merely to make local testing work.
 
 ## ChatGPT tool contract
@@ -35,19 +37,44 @@ Production should keep the process on loopback/private networking. ChatGPT does 
 
 The MCP `tools/list` contract is generated from the same checked-in JSON Schemas used by runtime Ajv validation. The advertised input schema includes the known evidence-item fields, types, limits, and descriptions. Its item schema also has a permissive fallback so one malformed candidate can still reach item-level validation and be returned under `rejectedItems` instead of causing the whole MCP call to fail. The advertised output schema exposes the structured shapes for `evidence`, `conflicts`, and `rejectedItems` rather than unknown arrays.
 
-The result contains both a short text summary and structured `EvidenceBundle` content. Deduplication preserves distinct canonical source URLs. Numeric/date guards prevent materially different facts from being merged; conflicts remain separate and are linked through unresolved conflict groups.
+The result contains both a short text summary and structured `EvidenceBundle` content. Numeric/date guards prevent materially different facts from being merged; conflicts remain separate and are linked through unresolved conflict groups.
 
 Public source text is inert data. Instruction-looking claim/excerpt text has no permissions and is never executed.
 
+## Text and numeric normalization
+
+Subject names and aliases are replaced only at Unicode letter/number token boundaries. Short aliases therefore do not rewrite substrings inside unrelated words such as `announcement`, `listed`, `live`, or `LinkedIn`.
+
+Numeric normalization is conservative about separators:
+
+- comma groups of three digits are treated as grouping separators (`2,100` → `2100`, `2,100K` → `2100000`);
+- one or two digits after a single comma may be treated as a decimal comma (`2,1M` → `2100000`, `12,5%` → `12.5 percent`);
+- strings that do not match a supported unambiguous form stay textual rather than being forced into a number.
+
+## Source preservation and overflow
+
+Distinct canonical sources are preserved through deduplication before the output cap is applied. The `EvidenceBundle` output allows at most 20 `sources[]` entries per retained evidence record.
+
+When more than 20 distinct canonical source URLs support one evidence record:
+
+1. all distinct sources are collected before output truncation;
+2. sources are sorted by `canonicalUrl` so the retained subset is deterministic and input-order independent;
+3. the first 20 sorted sources are emitted in `sources[]`;
+4. `omittedSourceCount` reports the exact number of additional distinct canonical sources not emitted because of the output cap.
+
+This makes source overflow explicit instead of silently losing citations. `omittedSourceCount` is absent when no source is omitted.
+
 ## Conflict identity
 
-Conflict detection uses a deterministic comparable-fact identity rather than category/date alone. For comparable claims the normalizer derives a metric/entity signature from `claimNormalized` after removing subject markers, numbers/date tokens, month names, negation tokens, and common grammatical scaffolding. The conflict fact key combines:
+Conflict detection uses a deterministic comparable-fact identity rather than category/date alone. The normalizer derives a metric/entity signature from `claimNormalized` after removing subject markers, numeric/date tokens, month names, unit tokens, and common grammatical/metric scaffolding. Small deterministic lexical aliases normalize ordinary variants such as singular/plural audience units and `joined`/`joining`/`joins`.
+
+The conflict fact key combines:
 
 ```text
 subject + category + metric/entity signature + unit + claim-date bucket
 ```
 
-V1 compares metric/entity signatures exactly after that normalization. It deliberately does not use semantic similarity, embeddings, or an LLM for conflict identity. This conservative rule prevents broad categories such as `audience_metric` from grouping different entities such as Twitch followers and Instagram followers merely because most surrounding words, units, and dates are similar.
+V1 still deliberately avoids semantic similarity, embeddings, or an LLM for conflict identity. Ordinary wording noise such as possessive `s`, `count`, `total`, `metric`, `milestone`, or `organization` does not create a different identity, while entity anchors such as `Twitch`, `Instagram`, or `Acme` remain part of the signature. This allows normal paraphrases of the same metric/event to conflict without reintroducing the broad-category Twitch-vs-Instagram false positive.
 
 `claimDate` has two deterministic roles:
 
