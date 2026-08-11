@@ -23,7 +23,23 @@ Internet -> dramaclaw-caddy-1 :80/:443
 
 Bright Compose contains only `oauth2-proxy`, `app`, and `worker`. None publishes a host port. Only `oauth2-proxy` joins `bright-edge` and exposes the stable alias `bright-standalone-oauth2-proxy` for the shared Caddy. `app` and `worker` remain private.
 
+Production Compose is image-only: it has no application `build:` context. GitHub Actions performs the frozen install, web build, Docker build, full regression/runtime smoke, and then publishes the exact verified application image to GHCR. The VPS pulls that immutable image and must not rebuild it locally.
+
 There is no runtime dependency on n8n in the standalone design. The legacy `n8n-bright_default` attachment remains on shared Caddy only during the rollback window and must not be used by the new Bright stack.
+
+## Verified image publication
+
+Every push to `build/standalone-production-app` runs the standalone verification workflow. The application image is published only after focused tests, lint/syntax, the full regression suite, production web build, Compose topology checks, real Docker runtime health checks, private-network checks, OAuth health, and the external-Caddy unauthenticated isolation smoke all pass.
+
+The published image tag is immutable and follows:
+
+```text
+ghcr.io/nguyentuanson27-netizen/bright-profile-video-automation:sha-<git-sha>
+```
+
+Do not deploy `latest`. Use the exact SHA tag produced by the successful workflow run. The workflow authenticates to GHCR with the repository-scoped GitHub Actions token; production provider/OAuth secrets are never supplied to the image build or registry publication step.
+
+If the GHCR package is public, the VPS can pull it anonymously. If the package remains private, authenticate the VPS to GHCR with a read-only package credential before deployment; do not reuse a write-capable CI credential on the host.
 
 ## Production values for the current VPS
 
@@ -40,7 +56,7 @@ GEMINI_TTS_VOICE=Kore
 
 The chosen edge CIDR was checked against the VPS Docker networks and host IPv4 routing before cutover. Re-check routing if the host network topology changes.
 
-Gemini TTS is a Preview dependency. Deterministic CI uses fakes; a real production TTS call is a mandatory smoke test before the legacy stack is retired.
+Gemini TTS is a Preview dependency. Deterministic CI uses fakes for provider calls; a real production TTS call is a mandatory smoke test before the legacy stack is retired.
 
 ## Host ownership
 
@@ -100,7 +116,7 @@ The old `/srv/bright-profile/secrets/google-tts.json` is not consumed by the sta
 Create a deployment-local `.env` from `.env.example`. At minimum set:
 
 ```text
-BRIGHT_IMAGE=<immutable git-SHA tag or image digest>
+BRIGHT_IMAGE=ghcr.io/nguyentuanson27-netizen/bright-profile-video-automation:sha-<successful-workflow-git-sha>
 APP_DOMAIN=video.lanadesign.tech
 BRIGHT_EDGE_NETWORK=bright-edge
 BRIGHT_EDGE_CIDR=172.23.250.0/29
@@ -132,7 +148,7 @@ The second command must report `172.23.250.0/29`.
 
 ## Persist shared Caddy on bright-edge
 
-Back up the Dramacl​aw override before editing:
+Back up the Dramaclaw override before editing:
 
 ```bash
 cd /opt/dramaclaw
@@ -157,7 +173,7 @@ networks:
     external: true
 ```
 
-Validate the complete resolved Dramacl​aw Compose configuration:
+Validate the complete resolved Dramaclaw Compose configuration:
 
 ```bash
 docker compose \
@@ -168,16 +184,22 @@ docker compose \
 
 A temporary `docker network connect bright-edge dramaclaw-caddy-1` may be used to stage connectivity before a Caddy recreate, but that command is not the durable configuration. The override file must remain the source of truth.
 
-## Validate and start Bright without public cutover
+## Pull and start Bright without public cutover
 
-From the verified standalone checkout/image:
+Use the repository checkout only for deployment configuration (`compose.yml`, `.env`, and the Caddy snippet). Do not run `npm ci`, `npm run build`, or `docker build` on the VPS.
+
+From the standalone deployment directory:
 
 ```bash
-docker compose config
-docker compose build app
-docker compose up -d app worker oauth2-proxy
+set -euo pipefail
+
+docker compose config --quiet
+docker compose pull app worker oauth2-proxy
+docker compose up -d --no-build app worker oauth2-proxy
 docker compose ps
 ```
+
+The `app` and `worker` services must resolve to the same immutable `BRIGHT_IMAGE` SHA tag.
 
 Verify private readiness:
 
