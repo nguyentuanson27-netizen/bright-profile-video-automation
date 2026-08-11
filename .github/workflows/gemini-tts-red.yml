@@ -18,4 +18,4 @@ jobs:
           node-version: '24'
           package-manager-cache: false
       - run: npm ci --strict-allow-scripts=true --no-audit --no-fund
-      - run: node --test tests/unit/gemini-tts.test.mjs
+      - run: node --test tests/unit/gemini-tts.test.mjs tests/unit/timed-gemini-tts.test.mjs
