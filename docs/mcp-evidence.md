@@ -33,9 +33,28 @@ Production should keep the process on loopback/private networking. ChatGPT does 
 
 `normalize_evidence` accepts a subject plus 1–200 candidate evidence items. Each valid item requires an atomic `claim` and absolute public `http(s)` source URL. Malformed individual items are reported under `rejectedItems` when safe; malformed envelopes are rejected.
 
+The MCP `tools/list` contract is generated from the same checked-in JSON Schemas used by runtime Ajv validation. The advertised input schema includes the known evidence-item fields, types, limits, and descriptions. Its item schema also has a permissive fallback so one malformed candidate can still reach item-level validation and be returned under `rejectedItems` instead of causing the whole MCP call to fail. The advertised output schema exposes the structured shapes for `evidence`, `conflicts`, and `rejectedItems` rather than unknown arrays.
+
 The result contains both a short text summary and structured `EvidenceBundle` content. Deduplication preserves distinct canonical source URLs. Numeric/date guards prevent materially different facts from being merged; conflicts remain separate and are linked through unresolved conflict groups.
 
 Public source text is inert data. Instruction-looking claim/excerpt text has no permissions and is never executed.
+
+## Conflict identity
+
+Conflict detection uses a deterministic comparable-fact identity rather than category/date alone. For comparable claims the normalizer derives a metric/entity signature from `claimNormalized` after removing subject markers, numbers/date tokens, month names, negation tokens, and common grammatical scaffolding. The conflict fact key combines:
+
+```text
+subject + category + metric/entity signature + unit + claim-date bucket
+```
+
+This keeps broad categories such as `audience_metric` from grouping different entities such as Twitch followers and Instagram followers merely because their units and dates match.
+
+`claimDate` has two deterministic roles:
+
+- when a typed `value` exists, differing claim dates are treated as different snapshots and are not compared as the same numeric fact;
+- when neither side has a typed value and otherwise-comparable event claims disagree only on `claimDate`, the date itself is treated as the disputed fact and the conflict uses the `event-date-disputed` bucket.
+
+The normalizer does not use an LLM or embeddings to derive this identity.
 
 ## `maxEvidence` retention policy
 
@@ -43,10 +62,9 @@ Public source text is inert data. Instruction-looking claim/excerpt text has no 
 
 Retention is deterministic:
 
-1. Each unresolved conflict group is treated as one atomic retention unit. A group is ranked by the highest `qualityScore` among its members, with the conflict-group ID as the deterministic tie-breaker.
-2. Conflict units are considered before non-conflicting single evidence records. A conflict group is retained only when every member fits in the remaining `maxEvidence` budget; the normalizer never emits only one side of a conflict because of truncation.
-3. If an entire conflict group cannot fit, that group is omitted rather than partially retained.
-4. Remaining non-conflicting evidence is ranked by `qualityScore` descending, then fingerprint ascending as the deterministic tie-breaker.
-5. Final `evidence[]` and `conflicts[]` ordering is stable by fingerprint/group ID so identical input and normalizer version produce identical output.
+1. Each unresolved conflict group is an atomic retention unit. All detected conflict groups are retained before non-conflicting singleton evidence.
+2. `maxEvidence` is a target cap for ordinary retention, not permission to erase an unresolved contradiction. If preserving a complete conflict group requires more records than `maxEvidence`, the normalizer exceeds the requested cap rather than dropping the group or emitting only one side.
+3. After all conflict members are retained, any remaining budget up to `maxEvidence` is filled with non-conflicting evidence ranked by `qualityScore` descending, then fingerprint ascending.
+4. Final `evidence[]` and `conflicts[]` ordering is stable by fingerprint/group ID so identical input and normalizer version produce identical output.
 
-This policy makes `qualityScore` a ranking hint while preserving unresolved contradictions whenever the configured evidence budget can contain the whole conflict group.
+This makes `qualityScore` a ranking hint while keeping detected contradictions visible downstream. `stats.retainedEvidence` reports the actual retained count, which may therefore be greater than `options.maxEvidence` only when required to preserve unresolved conflict groups.
