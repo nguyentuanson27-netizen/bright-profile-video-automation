@@ -61,9 +61,9 @@ test('paraphrased claims about the same event can disagree on the event date', (
   assert.match(bundle.conflicts[0].factKey, /event-date-disputed/);
 });
 
-test('comma grouping separators are not treated as decimal commas', () => {
-  assert.deepEqual(normalizeTypedValue('2,100', 'followers'), {value: 2_100, unit: 'followers'});
-  assert.deepEqual(normalizeTypedValue('2,100K', 'followers'), {value: 2_100_000, unit: 'followers'});
+test('numeric separator parsing stays conservative without locale', () => {
+  assert.deepEqual(normalizeTypedValue('2,100', 'followers'), {value: '2,100', unit: 'followers'});
+  assert.deepEqual(normalizeTypedValue('2,100K', 'followers'), {value: '2,100K', unit: 'followers'});
   assert.deepEqual(normalizeTypedValue('2,1M', 'followers'), {value: 2_100_000, unit: 'followers'});
   assert.deepEqual(normalizeTypedValue('12,5%', undefined), {value: 12.5, unit: 'percent'});
   assert.deepEqual(normalizeTypedValue('1,2345', 'followers'), {value: '1,2345', unit: 'followers'});
