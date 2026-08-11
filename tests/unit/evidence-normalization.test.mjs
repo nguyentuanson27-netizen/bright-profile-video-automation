@@ -122,3 +122,12 @@ test('same input produces byte-equivalent bundle', () => {
   const input = base([{claim: 'Emiru is a creator.', url: 'https://example.com/profile', sourceType: 'official'}]);
   assert.deepEqual(normalizeEvidence(input), normalizeEvidence(input));
 });
+
+test('unrelated uncategorized numeric facts do not form a conflict', () => {
+  const bundle = normalizeEvidence(base([
+    {claim: 'Emiru published 100 videos.', url: 'https://a.example/videos', value: 100, unit: 'count'},
+    {claim: 'Emiru attended 12 events.', url: 'https://b.example/events', value: 12, unit: 'count'},
+  ]));
+  assert.equal(bundle.evidence.length, 2);
+  assert.equal(bundle.conflicts.length, 0);
+});
