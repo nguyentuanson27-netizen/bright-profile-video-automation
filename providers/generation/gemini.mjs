@@ -4,8 +4,6 @@ import {loadSecretValue} from '../../security/secret-file.mjs';
 import {createGenerationProvider} from './index.mjs';
 
 const DEFAULT_MODEL = 'gemini-3.5-flash-lite';
-const INCOMPLETE_STATUSES = new Set(['queued', 'in_progress', 'incomplete', 'requires_action']);
-const FAILED_STATUSES = new Set(['failed', 'cancelled', 'budget_exceeded']);
 const nullable = (schema) => ({anyOf: [schema, {type: 'null'}]});
 
 const statSchema = {
@@ -135,13 +133,13 @@ export function loadGeminiGenerationConfig(env = process.env) {
 
 const classifyGeminiError = (error, operation) => {
   const status = Number(error?.status);
-  if (error?.name === 'RequestTimeoutError' || error?.name === 'AbortError') {
+  if (error?.name === 'RequestTimeoutError') {
     return new AppError('PROVIDER_TIMEOUT', `Gemini ${operation} request timed out`, {status: 504, retryable: true});
   }
   if (status === 429) {
     return new AppError('PROVIDER_RATE_LIMITED', `Gemini ${operation} rate limit reached`, {status: 429, retryable: true});
   }
-  if (status >= 500 || error?.name === 'NetworkError') {
+  if (status >= 500 || error?.name === 'ConnectionError') {
     return new AppError('PROVIDER_TEMPORARY_FAILURE', `Gemini ${operation} is temporarily unavailable`, {status: 502, retryable: true});
   }
   return new AppError('PROVIDER_FAILURE', `Gemini ${operation} request failed`, {status: 502, retryable: false});
@@ -181,30 +179,26 @@ export function createGeminiGenerationProvider({client, config = loadGeminiGener
       let response;
       try {
         const gemini = await getClient();
-        response = await gemini.interactions.create({
+        response = await gemini.models.generateContent({
           model: config.model,
-          system_instruction: generationInstructions,
-          input: createProviderInput(input),
-          response_format: {
-            type: 'text',
-            mime_type: 'application/json',
-            schema: GEMINI_GENERATION_SCHEMA,
+          contents: createProviderInput(input),
+          config: {
+            systemInstruction: generationInstructions,
+            responseMimeType: 'application/json',
+            responseJsonSchema: GEMINI_GENERATION_SCHEMA,
+            maxOutputTokens: config.maxOutputTokens,
+            httpOptions: {timeout: config.timeoutMs},
           },
-          generation_config: {max_output_tokens: config.maxOutputTokens},
-          store: false,
-        }, {timeout_ms: config.timeoutMs});
+        });
       } catch (error) {
         throw classifyGeminiError(error, 'generation');
       }
 
-      if (INCOMPLETE_STATUSES.has(response?.status)) {
-        throw new AppError('PROVIDER_INCOMPLETE', 'Gemini generation response was incomplete', {status: 502, retryable: true});
-      }
-      if (FAILED_STATUSES.has(response?.status) || response?.status !== 'completed') {
-        throw new AppError('PROVIDER_FAILURE', 'Gemini generation response failed', {status: 502, retryable: false});
+      if (response?.promptFeedback?.blockReason) {
+        throw new AppError('PROVIDER_REFUSAL', 'Gemini generation blocked the request', {status: 422, retryable: false});
       }
 
-      const text = typeof response?.output_text === 'string' ? response.output_text.trim() : '';
+      const text = typeof response?.text === 'string' ? response.text.trim() : '';
       if (!text) {
         throw new AppError('PROVIDER_OUTPUT_INVALID', 'Gemini generation returned no structured output', {status: 502});
       }
