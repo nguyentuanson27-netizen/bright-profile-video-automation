@@ -36,3 +36,17 @@ Production should keep the process on loopback/private networking. ChatGPT does 
 The result contains both a short text summary and structured `EvidenceBundle` content. Deduplication preserves distinct canonical source URLs. Numeric/date guards prevent materially different facts from being merged; conflicts remain separate and are linked through unresolved conflict groups.
 
 Public source text is inert data. Instruction-looking claim/excerpt text has no permissions and is never executed.
+
+## `maxEvidence` retention policy
+
+`maxEvidence` is applied only after exact/near deduplication, deterministic quality scoring, and unresolved conflict detection have completed across the full retained candidate set.
+
+Retention is deterministic:
+
+1. Each unresolved conflict group is treated as one atomic retention unit. A group is ranked by the highest `qualityScore` among its members, with the conflict-group ID as the deterministic tie-breaker.
+2. Conflict units are considered before non-conflicting single evidence records. A conflict group is retained only when every member fits in the remaining `maxEvidence` budget; the normalizer never emits only one side of a conflict because of truncation.
+3. If an entire conflict group cannot fit, that group is omitted rather than partially retained.
+4. Remaining non-conflicting evidence is ranked by `qualityScore` descending, then fingerprint ascending as the deterministic tie-breaker.
+5. Final `evidence[]` and `conflicts[]` ordering is stable by fingerprint/group ID so identical input and normalizer version produce identical output.
+
+This policy makes `qualityScore` a ranking hint while preserving unresolved contradictions whenever the configured evidence budget can contain the whole conflict group.
