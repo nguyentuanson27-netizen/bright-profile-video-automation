@@ -71,13 +71,22 @@ jobs:
           docker compose -f compose.mcp.yml up -d --build
           container="$(docker compose -f compose.mcp.yml ps -q bright-evidence-mcp)"
           test -n "$container"
-          for attempt in $(seq 1 60); do
+          for attempt in $(seq 1 30); do
             status="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container")"
             if [ "$status" = healthy ]; then break; fi
-            if [ "$status" = unhealthy ]; then docker compose -f compose.mcp.yml logs; exit 1; fi
+            if [ "$status" = unhealthy ]; then
+              docker compose -f compose.mcp.yml logs --no-color
+              docker inspect --format='{{json .State.Health}}' "$container"
+              exit 1
+            fi
             sleep 1
           done
-          test "$(docker inspect --format='{{.State.Health.Status}}' "$container")" = healthy
+          final_status="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container")"
+          if [ "$final_status" != healthy ]; then
+            docker compose -f compose.mcp.yml logs --no-color
+            docker inspect --format='{{json .State.Health}}' "$container"
+            exit 1
+          fi
           test "$(docker compose -f compose.mcp.yml exec -T bright-evidence-mcp id -u)" != 0
           docker inspect "$container" | node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const c=JSON.parse(s)[0];const mounts=c.Mounts||[];if(mounts.length)process.exit(1);const b=c.HostConfig.PortBindings||{};const p=b['4190/tcp'];if(!Array.isArray(p)||p.length!==1||p[0].HostIp!=='127.0.0.1'||p[0].HostPort!=='4190')process.exit(1)})"
           curl -fsS http://127.0.0.1:4190/health >/dev/null
