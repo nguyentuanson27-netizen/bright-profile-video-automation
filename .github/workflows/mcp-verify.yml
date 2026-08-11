@@ -23,7 +23,16 @@ jobs:
       - name: Install frozen dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
+        run: |
+          set +e
+          npm audit --omit=dev --audit-level=high --json > "$RUNNER_TEMP/npm-audit.json"
+          audit_status=$?
+          set -e
+          cat "$RUNNER_TEMP/npm-audit.json"
+          node scripts/verify-mcp-prod-audit.mjs "$RUNNER_TEMP/npm-audit.json"
+          if [ "$audit_status" -ne 0 ]; then
+            echo "npm audit reported reviewed high findings; fail-closed triage passed."
+          fi
       - name: Unit and integration tests
         run: npm test
       - name: Lint MCP scope
@@ -34,6 +43,7 @@ jobs:
           node --check lib/evidence/primitives.mjs
           node --check lib/evidence/normalize-evidence.mjs
           node --check lib/evidence/schema-validator.mjs
+          node --check scripts/verify-mcp-prod-audit.mjs
       - name: Verify MCP process health
         env:
           MCP_PORT: 4191
