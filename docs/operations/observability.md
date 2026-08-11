@@ -11,7 +11,7 @@
 
 The app exposes:
 
-- `GET /health/live` — process liveness only; it does not call OpenAI, Google TTS, or other providers.
+- `GET /health/live` — process liveness only; it does not call Gemini, Gemini TTS, Remotion, or other providers.
 - `GET /health/ready` — verifies the local SQLite connection and that the configured data directory is readable and writable.
 - `GET /metrics` — Prometheus text exposition for the app process plus durable queue gauges read from SQLite at scrape time.
 
@@ -31,7 +31,9 @@ Runtime histograms/counters:
 - `bright_provider_duration_seconds{provider,operation,outcome}`
 - `bright_provider_errors_total{provider,operation}`
 
-Metric labels are intentionally bounded. Project IDs, job IDs, request IDs, raw URLs, error messages, source content, prompts, and model responses must not become metric labels.
+Provider labels are deliberately bounded. Current first-class provider labels are `gemini` and `remotion`; research, generation, and TTS use the `gemini` provider label with separate bounded operation labels. Unknown provider names collapse to `other` rather than creating unbounded metric cardinality.
+
+Project IDs, job IDs, request IDs, raw URLs, error messages, source content, prompts, and model responses must not become metric labels.
 
 ## Structured logs
 
