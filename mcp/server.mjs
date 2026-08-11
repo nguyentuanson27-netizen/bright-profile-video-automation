@@ -75,6 +75,11 @@ const parseAllowedHosts = (env) => new Set(
     .filter(Boolean),
 );
 
+const positiveFiniteOrDefault = (value, fallback) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
 const hostnameFromHeader = (value) => {
   if (!value) return '';
   try {
@@ -181,10 +186,10 @@ export function createBrightHttpServer({
   log = (event) => console.error(JSON.stringify(event)),
 } = {}) {
   const allowedHosts = parseAllowedHosts(env);
-  const maxBodyBytes = Number(env.MCP_MAX_BODY_BYTES || DEFAULT_MAX_BODY_BYTES);
-  const rateLimit = Number(env.MCP_RATE_LIMIT_PER_MINUTE || DEFAULT_RATE_LIMIT);
-  const requestTimeoutMs = Number(env.MCP_REQUEST_TIMEOUT_MS || DEFAULT_REQUEST_TIMEOUT_MS);
-  const allowRequest = makeRateLimiter({limit: Number.isFinite(rateLimit) && rateLimit > 0 ? rateLimit : DEFAULT_RATE_LIMIT});
+  const maxBodyBytes = positiveFiniteOrDefault(env.MCP_MAX_BODY_BYTES, DEFAULT_MAX_BODY_BYTES);
+  const rateLimit = positiveFiniteOrDefault(env.MCP_RATE_LIMIT_PER_MINUTE, DEFAULT_RATE_LIMIT);
+  const requestTimeoutMs = positiveFiniteOrDefault(env.MCP_REQUEST_TIMEOUT_MS, DEFAULT_REQUEST_TIMEOUT_MS);
+  const allowRequest = makeRateLimiter({limit: rateLimit});
 
   return createServer(async (req, res) => {
     const requestId = randomUUID();
@@ -228,10 +233,7 @@ export function createBrightHttpServer({
         headers,
         ...(body?.length ? {body} : {}),
       });
-      const timeoutMs = Number.isFinite(requestTimeoutMs) && requestTimeoutMs > 0
-        ? requestTimeoutMs
-        : DEFAULT_REQUEST_TIMEOUT_MS;
-      const response = await withTimeout(handler.fetch(request), timeoutMs);
+      const response = await withTimeout(handler.fetch(request), requestTimeoutMs);
       await writeWebResponse(response, res, requestId);
     } catch (error) {
       const status = Number(error?.status) || 500;
