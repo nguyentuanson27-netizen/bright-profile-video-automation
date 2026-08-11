@@ -33,12 +33,14 @@ jobs:
           node --check lib/evidence/normalize-evidence.mjs
           node --check lib/evidence/schema-validator.mjs
       - name: Verify MCP process health
+        env:
+          MCP_PORT: 4191
         run: |
-          npm run mcp >mcp.stdout.log 2>mcp.stderr.log &
+          node mcp/server.mjs >mcp.stdout.log 2>mcp.stderr.log &
           pid=$!
           trap 'kill "$pid" 2>/dev/null || true' EXIT
           for attempt in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:4190/health >/dev/null; then exit 0; fi
+            if curl -fsS http://127.0.0.1:4191/health >/dev/null; then exit 0; fi
             sleep 1
           done
           cat mcp.stderr.log
