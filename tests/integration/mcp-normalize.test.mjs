@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {once} from 'node:events';
+import http from 'node:http';
 import {createBrightHttpServer} from '../../mcp/server.mjs';
 
 const readRpcBody = async (response) => {
@@ -24,6 +25,26 @@ const rpc = async (url, body, extraHeaders = {}) => {
   });
   return {response, body: await readRpcBody(response)};
 };
+
+const rawStatus = (url, {host, body = '{}'} = {}) => new Promise((resolve, reject) => {
+  const parsed = new URL(url);
+  const req = http.request({
+    hostname: parsed.hostname,
+    port: parsed.port,
+    path: parsed.pathname,
+    method: 'POST',
+    headers: {
+      host: host || parsed.host,
+      'content-type': 'application/json',
+      'content-length': Buffer.byteLength(body),
+    },
+  }, (res) => {
+    res.resume();
+    res.on('end', () => resolve(res.statusCode));
+  });
+  req.on('error', reject);
+  req.end(body);
+});
 
 const start = async (env = {}) => {
   const logs = [];
@@ -87,12 +108,7 @@ test('HTTP boundary rejects invalid host and oversized payloads', async (t) => {
   const {server, url} = await start({MCP_MAX_BODY_BYTES: '256'});
   t.after(() => server.close());
 
-  const invalidHost = await fetch(url, {
-    method: 'POST',
-    headers: {host: 'evil.example', 'content-type': 'application/json'},
-    body: '{}',
-  });
-  assert.equal(invalidHost.status, 403);
+  assert.equal(await rawStatus(url, {host: 'evil.example'}), 403);
 
   const oversized = await fetch(url, {
     method: 'POST',
