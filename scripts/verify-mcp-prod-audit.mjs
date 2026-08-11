@@ -3,19 +3,20 @@ import {readFileSync} from 'node:fs';
 const reportPath = process.argv[2];
 if (!reportPath) throw new Error('usage: node scripts/verify-mcp-prod-audit.mjs <npm-audit.json>');
 
+const normalizeId = (value) => String(value).toUpperCase();
 const report = JSON.parse(readFileSync(reportPath, 'utf8'));
 const expected = new Map([
-  ['brace-expansion', new Set(['GHSA-3jxr-9vmj-r5cp', 'GHSA-mh99-v99m-4gvg', 'GHSA-rgw5-rvv9-x895'])],
-  ['fast-uri', new Set(['GHSA-v2hh-gcrm-f6hx', 'GHSA-7p8r-x3mc-p8w7'])],
-  ['nanoid', new Set(['GHSA-28wg-ghj8-5hjv', 'GHSA-2v37-7h3g-55p8'])],
-  ['postcss', new Set(['GHSA-r28c-9q8g-f849', 'GHSA-fxqj-rqcc-2cmp'])],
+  ['brace-expansion', new Set(['GHSA-3JXR-9VMJ-R5CP', 'GHSA-MH99-V99M-4GVG', 'GHSA-RGW5-RVV9-X895'])],
+  ['fast-uri', new Set(['GHSA-V2HH-GCRM-F6HX', 'GHSA-7P8R-X3MC-P8W7'])],
+  ['nanoid', new Set(['GHSA-28WG-GHJ8-5HJV', 'GHSA-2V37-7H3G-55P8'])],
+  ['postcss', new Set(['GHSA-R28C-9Q8G-F849', 'GHSA-FXQJ-RQCC-2CMP'])],
 ]);
 
 const advisoryId = (via) => {
   if (!via || typeof via !== 'object') return null;
   const url = String(via.url ?? '');
   const match = url.match(/GHSA-[\w-]+/i);
-  return match?.[0]?.toUpperCase() ?? null;
+  return match ? normalizeId(match[0]) : null;
 };
 
 const vulnerabilities = report.vulnerabilities ?? {};
