@@ -145,3 +145,19 @@ test('deployment verification simulates an external shared Caddy instead of star
   assert.doesNotMatch(workflow, /docker compose ps -q caddy/);
   assert.doesNotMatch(workflow, /docker compose up -d\s*$/m);
 });
+
+test('verified standalone image is published to GHCR only after all runtime gates pass', () => {
+  const workflow = read('.github/workflows/t18-static-web.yml');
+
+  assert.match(workflow, /permissions:\n(?:[ \t].*\n)*?  packages: write/m);
+  assert.match(workflow, /BRIGHT_IMAGE:\s*ghcr\.io\/\$\{\{ github\.repository \}\}:sha-\$\{\{ github\.sha \}\}/);
+  assert.match(workflow, /docker login ghcr\.io/);
+  assert.match(workflow, /\$\{\{ secrets\.GITHUB_TOKEN \}\}/);
+  assert.match(workflow, /docker push "\$BRIGHT_IMAGE"/);
+  assert.doesNotMatch(workflow, /:latest/);
+
+  const inspectIndex = workflow.indexOf('- name: Inspect final service state');
+  const publishIndex = workflow.indexOf('- name: Publish verified immutable image to GHCR');
+  assert.ok(inspectIndex >= 0, 'final runtime inspection must exist');
+  assert.ok(publishIndex > inspectIndex, 'GHCR publication must happen only after final runtime inspection');
+});
