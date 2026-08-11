@@ -37,6 +37,8 @@ test('compose defines standalone topology behind a shared external Caddy edge', 
 
   assert.match(app, /image: \$\{BRIGHT_IMAGE:\?/);
   assert.match(worker, /image: \$\{BRIGHT_IMAGE:\?/);
+  assert.doesNotMatch(app, /\n    build:/, 'production app service must pull the verified image instead of building on the VPS');
+  assert.doesNotMatch(worker, /\n    build:/, 'production worker service must pull the verified image instead of building on the VPS');
   assert.match(app, /bright_data:\/app\/data/);
   assert.match(worker, /bright_data:\/app\/data/);
   assert.match(worker, /worker\.mjs/);
