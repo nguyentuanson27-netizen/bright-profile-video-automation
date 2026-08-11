@@ -12,35 +12,23 @@ const config = {
   timeoutMs: 30_000,
 };
 
-const fakeClient = (implementation) => ({interactions: {create: implementation}});
+const fakeClient = (implementation) => ({models: {generateContent: implementation}});
 
-const completedSearch = (urls) => ({
-  id: 'interaction-1',
-  status: 'completed',
-  steps: [{
-    type: 'model_output',
-    content: [{
-      type: 'text',
-      text: 'Grounded source list',
-      annotations: urls.map(({url, title}, index) => ({
-        type: 'url_citation',
-        url,
-        title,
-        start_index: index,
-        end_index: index + 1,
-      })),
-    }],
+const groundedResponse = (sources) => ({
+  text: 'Grounded source list',
+  candidates: [{
+    groundingMetadata: {
+      groundingChunks: sources.map(({url, title}) => ({web: {uri: url, title}})),
+    },
   }],
 });
 
-test('Gemini research uses Interactions Google Search and returns deduplicated citation URLs', async () => {
+test('Gemini research uses generateContent Google Search and returns deduplicated grounding URLs', async () => {
   let request;
-  let options;
   const provider = createGeminiResearchProvider({
-    client: fakeClient(async (body, requestOptions) => {
+    client: fakeClient(async (body) => {
       request = body;
-      options = requestOptions;
-      return completedSearch([
+      return groundedResponse([
         {url: 'https://example.com/profile', title: 'Creator profile'},
         {url: 'https://youtube.com/watch?v=abc', title: 'Video'},
         {url: 'https://example.com/profile', title: 'Creator profile'},
@@ -55,11 +43,13 @@ test('Gemini research uses Interactions Google Search and returns deduplicated c
   });
 
   assert.equal(request.model, 'gemini-3.5-flash-lite');
-  assert.deepEqual(request.tools, [{type: 'google_search'}]);
-  assert.equal(request.store, false);
-  assert.match(request.input, /Creator profile/);
-  assert.match(request.input, /https:\/\/youtube\.com\/@creator/);
-  assert.equal(options.timeout_ms, 30_000);
+  assert.match(request.contents, /Creator profile/);
+  assert.match(request.contents, /https:\/\/youtube\.com\/@creator/);
+  assert.deepEqual(request.config.tools, [{googleSearch: {}}]);
+  assert.deepEqual(request.config.httpOptions, {timeout: 30_000});
+  assert.equal(request.config.temperature, undefined);
+  assert.equal(request.config.topP, undefined);
+  assert.equal(request.config.topK, undefined);
   assert.equal(result.candidates.length, 2);
   assert.deepEqual(result.candidates[0], {
     url: 'https://example.com/profile',
@@ -67,39 +57,38 @@ test('Gemini research uses Interactions Google Search and returns deduplicated c
     title: 'Creator profile',
     sourceType: 'search-result',
     discoveryStatus: 'discovered',
-    citation: {title: 'Creator profile', startIndex: 0, endIndex: 1},
   });
   assert.equal('sourceId' in result.candidates[0], false);
 });
 
-test('Gemini research rejects every non-final incomplete state even if partial citations exist', async () => {
-  for (const status of ['queued', 'in_progress', 'incomplete', 'requires_action']) {
-    const partial = completedSearch([{url: 'https://example.com/partial', title: 'Partial'}]);
-    partial.status = status;
-    const provider = createGeminiResearchProvider({
-      client: fakeClient(async () => partial),
-      config,
-    });
-    await assert.rejects(
-      () => provider.search({topic: 'Creator'}),
-      (error) => error instanceof AppError && error.code === 'PROVIDER_INCOMPLETE' && error.retryable === true,
-      `status ${status} must not persist partial research`,
-    );
-  }
-});
+test('Gemini research rejects blocked and empty grounded responses', async () => {
+  const blocked = createGeminiResearchProvider({
+    client: fakeClient(async () => ({
+      text: '',
+      promptFeedback: {blockReason: 'SAFETY'},
+      candidates: [],
+    })),
+    config,
+  });
+  await assert.rejects(
+    () => blocked.search({topic: 'Creator'}),
+    (error) => error instanceof AppError && error.code === 'PROVIDER_REFUSAL' && error.retryable === false,
+  );
 
-test('Gemini research maps no-results/provider failures to stable non-leaking errors', async () => {
   const empty = createGeminiResearchProvider({
-    client: fakeClient(async () => ({id: 'i', status: 'completed', steps: []})),
+    client: fakeClient(async () => ({text: 'No grounded sources', candidates: [{}]})),
     config,
   });
   await assert.rejects(
     () => empty.search({topic: 'Creator'}),
     (error) => error instanceof AppError && error.code === 'PROVIDER_NO_RESULTS',
   );
+});
 
+test('Gemini research maps timeout, connection, rate-limit and provider failures without leaking details', async () => {
   for (const [providerError, code, retryable] of [
     [Object.assign(new Error('sensitive timeout'), {name: 'RequestTimeoutError'}), 'PROVIDER_TIMEOUT', true],
+    [Object.assign(new Error('sensitive connection'), {name: 'ConnectionError'}), 'PROVIDER_TEMPORARY_FAILURE', true],
     [Object.assign(new Error('sensitive rate'), {status: 429}), 'PROVIDER_RATE_LIMITED', true],
     [Object.assign(new Error('sensitive server'), {status: 503}), 'PROVIDER_TEMPORARY_FAILURE', true],
     [Object.assign(new Error('sensitive auth'), {status: 401}), 'PROVIDER_FAILURE', false],
