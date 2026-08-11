@@ -53,6 +53,29 @@ test('exact dedupe enriches compatible typed metadata from richer duplicates', (
   assert.equal(bundle.stats.exactDuplicatesRemoved, 2);
 });
 
+test('exact dedupe does not combine incompatible typed metadata fragments', () => {
+  const bundle = normalizeEvidence(base([
+    {
+      claim: 'Emiru reported an audience metric.',
+      url: 'https://same.example/profile',
+      category: 'subscribers',
+      unit: 'subscribers',
+    },
+    {
+      claim: 'Emiru reported an audience metric.',
+      url: 'https://same.example/profile',
+      category: 'followers',
+      value: 1_000_000,
+      unit: 'followers',
+    },
+  ]));
+
+  assert.equal(bundle.evidence.length, 1);
+  assert.equal(bundle.evidence[0].category, 'subscribers');
+  assert.equal(bundle.evidence[0].unit, 'subscribers');
+  assert.equal(bundle.evidence[0].value, undefined);
+});
+
 test('near dedupe enriches compatible typed metadata from the richer candidate', () => {
   const bundle = normalizeEvidence(base([
     {
