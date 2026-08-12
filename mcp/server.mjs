@@ -15,6 +15,7 @@ const DEFAULT_PORT = 4190;
 const DEFAULT_MAX_BODY_BYTES = 2 * 1024 * 1024;
 const DEFAULT_RATE_LIMIT = 60;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const inputSchema = fromJsonSchema(evidenceInputSchema);
 const outputSchema = fromJsonSchema(evidenceBundleSchema);
 
@@ -78,6 +79,11 @@ const parseAllowedHosts = (env) => new Set(
 const positiveFiniteOrDefault = (value, fallback) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const positiveTimerDelayOrDefault = (value, fallback) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 && parsed <= MAX_TIMER_DELAY_MS ? parsed : fallback;
 };
 
 const hostnameFromHeader = (value) => {
@@ -226,7 +232,7 @@ export function createBrightHttpServer({
   const allowedHosts = parseAllowedHosts(env);
   const maxBodyBytes = positiveFiniteOrDefault(env.MCP_MAX_BODY_BYTES, DEFAULT_MAX_BODY_BYTES);
   const rateLimit = positiveFiniteOrDefault(env.MCP_RATE_LIMIT_PER_MINUTE, DEFAULT_RATE_LIMIT);
-  const requestTimeoutMs = positiveFiniteOrDefault(env.MCP_REQUEST_TIMEOUT_MS, DEFAULT_REQUEST_TIMEOUT_MS);
+  const requestTimeoutMs = positiveTimerDelayOrDefault(env.MCP_REQUEST_TIMEOUT_MS, DEFAULT_REQUEST_TIMEOUT_MS);
   const allowRequest = makeRateLimiter({limit: rateLimit});
 
   return createServer(async (req, res) => {
