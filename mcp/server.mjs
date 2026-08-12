@@ -10,6 +10,7 @@ import {
   evidenceBundleSchema,
   evidenceInputSchema,
 } from '../lib/evidence/schema-validator.mjs';
+import {getOpenAiChallenge, getPublicPage} from './public-pages.mjs';
 
 const DEFAULT_PORT = 4190;
 const DEFAULT_MAX_BODY_BYTES = 2 * 1024 * 1024;
@@ -223,6 +224,17 @@ const writeJson = (res, status, body, requestId) => {
   res.end(payload);
 };
 
+const writeText = (res, status, body, contentType, requestId) => {
+  const payload = String(body);
+  res.writeHead(status, {
+    'content-type': contentType,
+    'content-length': Buffer.byteLength(payload),
+    'cache-control': 'no-store',
+    'x-request-id': requestId,
+  });
+  res.end(payload);
+};
+
 const closeAfterResponse = (req, res) => {
   res.setHeader('connection', 'close');
   res.once('finish', () => req.destroy());
@@ -231,6 +243,11 @@ const closeAfterResponse = (req, res) => {
 const writeJsonBeforeBodyConsumed = (req, res, status, body, requestId) => {
   closeAfterResponse(req, res);
   writeJson(res, status, body, requestId);
+};
+
+const writeTextBeforeBodyConsumed = (req, res, status, body, contentType, requestId) => {
+  closeAfterResponse(req, res);
+  writeText(res, status, body, contentType, requestId);
 };
 
 const writeWebResponse = async (response, res, requestId) => {
@@ -289,6 +306,22 @@ export function createBrightHttpServer({
       requestPath = url.pathname;
       if (url.pathname === '/health' && req.method === 'GET') {
         writeJsonBeforeBodyConsumed(req, res, 200, {ok: true}, requestId);
+        return;
+      }
+
+      if (url.pathname === '/.well-known/openai-apps-challenge' && req.method === 'GET') {
+        const challenge = getOpenAiChallenge(env);
+        if (challenge) {
+          writeTextBeforeBodyConsumed(req, res, challenge.status, challenge.body, challenge.contentType, requestId);
+        } else {
+          writeJsonBeforeBodyConsumed(req, res, 404, {error: {code: 'NOT_FOUND', message: 'Route not found', requestId}}, requestId);
+        }
+        return;
+      }
+
+      const publicPage = getPublicPage(url.pathname);
+      if (publicPage && req.method === 'GET') {
+        writeTextBeforeBodyConsumed(req, res, publicPage.status, publicPage.body, publicPage.contentType, requestId);
         return;
       }
 
