@@ -1,0 +1,20 @@
+{
+  "name": "bright-profile-internal",
+  "interface": {
+    "displayName": "Bright Profile Internal"
+  },
+  "plugins": [
+    {
+      "name": "bright-evidence",
+      "source": {
+        "source": "local",
+        "path": "./plugins/bright-evidence"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

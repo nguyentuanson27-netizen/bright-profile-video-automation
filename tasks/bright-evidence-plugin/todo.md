@@ -1,12 +1,12 @@
-# Bright Evidence Plugin — Task List
+# Bright Evidence Internal Plugin — Task List
 
-- [x] **P01 RED tests** — publication contract RED captured in run `31620922734` (91 tests: 86 passed / 5 failed); Compose challenge wiring RED captured in run `31621411864` (92 tests: 91 passed / 1 failed).
-- [x] **P02 Public routes** — plugin/legal/support pages and environment-backed domain challenge implemented with existing Host/Origin boundaries preserved.
-- [x] **P03 Plugin package** — manifest, public-evidence skill, and exactly 5 positive + 3 negative reviewer fixtures implemented.
-- [x] **P04 Submission docs/config** — challenge env/Compose wiring, README link, CI route smoke, and OpenAI Platform submission checklist implemented.
-- [x] **P05 Verification/review** — full CI passed on implementation head `79851dd89fd75a55b756fb0db1f87a416ab2193c`; review priority correctness → security → architecture → simplicity → performance found no blocking issue. Final exact-head CI is re-run after this checklist-only commit.
-- [ ] **P06 Live/platform acceptance** — deploy public pages, domain challenge, confirm <=30-day infrastructure log retention, Lana Design identity verification, Apps Management permission, Scan Tools, logo/listing completion, OpenAI review, approval and publication.
+- [x] **I01 RED scope test** — prove the public-submission implementation conflicts with the internal-only requirement.
+- [x] **I02 Remove over-scope surface** — remove public listing/legal/support/domain-challenge behavior and config.
+- [x] **I03 Internal package** — keep the public-evidence skill, minimize plugin metadata, and add the repo-local marketplace.
+- [x] **I04 Internal setup docs** — document MCP registration and local connection-ID wiring without hard-coding it.
+- [ ] **I05 Verification/review** — full exact-head CI and focused correctness/security review.
+- [ ] **I06 Live internal acceptance** — register the MCP connection in the actual ChatGPT account/workspace, wire the generated ID locally, install the plugin, and observe `normalize_evidence` being called.
 
-## Definition of Done Notes
+## Definition of Done note
 
-Repository implementation is not equivalent to public publication. P06 remains open until actual OpenAI Platform and live endpoint evidence exists. Public submission must also confirm reverse-proxy/hosting operational-log retention is no more than 30 days.
+Repository completion is not the same as live ChatGPT acceptance. I06 remains open until the internal account/workspace installation is actually exercised. There is no public publication or commercial launch gate in this scope.

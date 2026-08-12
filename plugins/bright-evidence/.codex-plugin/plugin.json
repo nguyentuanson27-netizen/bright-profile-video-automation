@@ -1,32 +1,17 @@
 {
   "name": "bright-evidence",
   "version": "0.1.0",
-  "description": "Research public sources and normalize evidence with deterministic deduplication and conflict preservation.",
-  "author": {
-    "name": "Lana Design",
-    "url": "https://video.lanadesign.tech/plugin"
-  },
-  "homepage": "https://video.lanadesign.tech/plugin",
-  "repository": "https://github.com/nguyentuanson27-netizen/bright-profile-video-automation",
-  "keywords": [
-    "research",
-    "evidence",
-    "provenance",
-    "deduplication"
-  ],
+  "description": "Internal public-source research workflow backed by the read-only Bright Evidence MCP.",
   "skills": "./skills/",
   "interface": {
     "displayName": "Bright Evidence",
-    "shortDescription": "Research and normalize public-source evidence",
-    "longDescription": "Research public sources, collect atomic factual claims with provenance, and normalize them through the read-only Bright Evidence MCP with deterministic deduplication and conflict preservation.",
+    "shortDescription": "Internal public-evidence research and normalization",
+    "longDescription": "Research public sources, preserve atomic claims and provenance, then normalize them with the read-only Bright Evidence MCP.",
     "developerName": "Lana Design",
     "category": "Productivity",
     "capabilities": [
       "Read"
     ],
-    "websiteURL": "https://video.lanadesign.tech/plugin",
-    "privacyPolicyURL": "https://video.lanadesign.tech/privacy",
-    "termsOfServiceURL": "https://video.lanadesign.tech/terms",
     "defaultPrompt": [
       "Research public sources about a creator and normalize the evidence with Bright Evidence.",
       "Collect competing public claims about a topic, preserve provenance, and show unresolved conflicts."

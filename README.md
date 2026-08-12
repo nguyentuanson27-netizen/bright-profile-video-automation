@@ -39,29 +39,13 @@ to sit behind an HTTPS reverse proxy. See `docs/mcp-remote.md` for the deploymen
 health-check, ChatGPT tool-scan, and security notes. See `docs/mcp-evidence.md`
 for the evidence-normalization contract.
 
-## Bright Evidence OpenAI Plugin
+## Bright Evidence internal plugin
 
-The `plugins/bright-evidence/` package prepares the same read-only MCP capability
-for an OpenAI Plugin submission under publisher **Lana Design**. It bundles a
-`public-evidence` skill that researches public sources through ChatGPT's approved
-web capabilities, preserves provenance, and delegates deterministic deduplication
-and conflict handling to `normalize_evidence`.
+`plugins/bright-evidence/` packages the existing MCP workflow as an **internal/private** plugin for this project. It bundles the `public-evidence` skill, while `.agents/plugins/marketplace.json` exposes it as the repository-local install source.
 
-Public listing/legal routes are served by the MCP HTTP process:
+This package is not intended for the public Plugins Directory, commercial distribution, or a production launch. It therefore does not add public listing/legal/domain-verification routes or submission-review assets.
 
-```text
-https://video.lanadesign.tech/plugin
-https://video.lanadesign.tech/privacy
-https://video.lanadesign.tech/terms
-https://video.lanadesign.tech/support
-```
-
-OpenAI domain verification is supported at
-`/.well-known/openai-apps-challenge` after the portal-provided token is placed in
-`OPENAI_APPS_CHALLENGE_TOKEN`. See `docs/plugin-submission.md` for the exact
-submission, reverse-proxy, privacy/retention, Scan Tools, reviewer-test, and
-human/platform gates. Repository completion alone does not mean the plugin has
-been approved or published by OpenAI.
+The account/workspace-specific MCP connection ID is intentionally not committed. Register `https://video.lanadesign.tech/mcp` in the available ChatGPT plugin/developer controls, then wire the generated technical connection ID locally for that installation. See `docs/bright-evidence-plugin-internal.md`.
 
 ## API security notes
 
