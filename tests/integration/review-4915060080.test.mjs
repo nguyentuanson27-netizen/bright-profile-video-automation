@@ -47,7 +47,7 @@ test('overflow MCP_REQUEST_TIMEOUT_MS falls back instead of becoming an immediat
   const handler = {
     async fetch() {
       await new Promise((resolve) => setTimeout(resolve, 25));
-      return new Response(JSON.stringify({ok: true}), {
+      return new globalThis.Response(JSON.stringify({ok: true}), {
         status: 200,
         headers: {'content-type': 'application/json'},
       });
