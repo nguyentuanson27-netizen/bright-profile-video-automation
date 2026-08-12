@@ -1,8 +1,8 @@
 # MCP production dependency audit triage
 
-Review context: PR #1 / review `4907856994`.
+Review context: PR #1 / reviews `4907856994` and `4913719985`.
 
-The production verification workflow runs `npm audit --omit=dev --audit-level=high --json` against the same root lock graph installed by `Dockerfile.mcp`. High/critical findings are then checked by `scripts/verify-mcp-prod-audit.mjs`. That verifier fails closed on any high/critical package or advisory not listed below; this file records the temporary reachability/risk acceptance for the currently known findings.
+The production verification workflow runs `npm audit --omit=dev --audit-level=high --json` against the same root lock graph installed by `Dockerfile.mcp`. High/critical findings are then checked by `scripts/verify-mcp-prod-audit.mjs`. That verifier fails closed on an invalid/incomplete audit report, an unexpected audit process status, or any high/critical package/advisory not listed below; this file records the temporary reachability/risk acceptance for the currently known findings.
 
 ## Current reviewed findings
 
@@ -55,11 +55,21 @@ Risk acceptance: temporary for the current root-graph image; no MCP request path
 
 ## Gate behavior
 
-The allowlist is intentionally exact and narrow:
+The audit report and process status are treated as untrusted boundary data before the allowlist is applied:
+
+- the JSON root must be an npm audit v2 report with `auditReportVersion: 2`;
+- `vulnerabilities` and `metadata.vulnerabilities` must be present objects;
+- `info`, `low`, `moderate`, `high`, `critical`, and `total` metadata counts must be non-negative integers and internally consistent;
+- observed finding severities must agree with the metadata counts;
+- the raw `npm audit` process status must be an expected status (`0` for no threshold findings or `1` for reported threshold findings) and must agree with the report;
+- parseable error envelopes, missing metadata, malformed/inconsistent reports, or unexpected process statuses fail the gate rather than being interpreted as a clean audit.
+
+After those integrity checks, the allowlist remains intentionally exact and narrow:
 
 - any `critical` finding fails;
 - any new high-severity package fails;
 - any new GHSA under one of the reviewed packages fails;
+- a reviewed high finding without a complete parseable advisory identity fails;
 - removing an advisory from npm's report does not require keeping it present;
 - changing MCP behavior so a reviewed vulnerable code path becomes reachable requires removing the acceptance and fixing/upgrading before production readiness.
 
