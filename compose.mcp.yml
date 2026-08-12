@@ -7,7 +7,8 @@ services:
     environment:
       MCP_HOST: 0.0.0.0
       MCP_PORT: 4190
-      MCP_ALLOWED_HOSTS: 127.0.0.1,localhost
+      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-https://video.lanadesign.tech/mcp}
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-127.0.0.1,localhost}
       MCP_MAX_BODY_BYTES: 2097152
       MCP_RATE_LIMIT_PER_MINUTE: 60
       MCP_REQUEST_TIMEOUT_MS: 10000
