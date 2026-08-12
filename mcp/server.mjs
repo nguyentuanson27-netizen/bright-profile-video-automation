@@ -210,15 +210,16 @@ export function createBrightHttpServer({
         writeJson(res, 403, {error: {code: 'ORIGIN_NOT_ALLOWED', message: 'Origin is not allowed', requestId}}, requestId);
         return;
       }
-      if (!allowRequest(remote)) {
-        writeJson(res, 429, {error: {code: 'RATE_LIMITED', message: 'Too many requests', requestId}}, requestId);
-        return;
-      }
 
       const base = `http://${req.headers.host}`;
       const url = new URL(req.url || '/', base);
       if (url.pathname === '/health' && req.method === 'GET') {
         writeJson(res, 200, {ok: true}, requestId);
+        return;
+      }
+
+      if (!allowRequest(remote)) {
+        writeJson(res, 429, {error: {code: 'RATE_LIMITED', message: 'Too many requests', requestId}}, requestId);
         return;
       }
       if (url.pathname !== '/mcp') {
