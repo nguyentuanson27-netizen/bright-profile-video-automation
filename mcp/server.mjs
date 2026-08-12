@@ -191,6 +191,16 @@ const writeJson = (res, status, body, requestId) => {
   res.end(payload);
 };
 
+const closeAfterResponse = (req, res) => {
+  res.setHeader('connection', 'close');
+  res.once('finish', () => req.destroy());
+};
+
+const writeEarlyJson = (req, res, status, body, requestId) => {
+  closeAfterResponse(req, res);
+  writeJson(res, status, body, requestId);
+};
+
 const writeWebResponse = async (response, res, requestId) => {
   const headers = Object.fromEntries(response.headers.entries());
   headers['x-request-id'] = requestId;
@@ -234,11 +244,11 @@ export function createBrightHttpServer({
       }
 
       if (!allowedHosts.has(host)) {
-        writeJson(res, 403, {error: {code: 'HOST_NOT_ALLOWED', message: 'Host is not allowed', requestId}}, requestId);
+        writeEarlyJson(req, res, 403, {error: {code: 'HOST_NOT_ALLOWED', message: 'Host is not allowed', requestId}}, requestId);
         return;
       }
       if (!isAllowedOrigin(req.headers.origin, allowedHosts)) {
-        writeJson(res, 403, {error: {code: 'ORIGIN_NOT_ALLOWED', message: 'Origin is not allowed', requestId}}, requestId);
+        writeEarlyJson(req, res, 403, {error: {code: 'ORIGIN_NOT_ALLOWED', message: 'Origin is not allowed', requestId}}, requestId);
         return;
       }
 
@@ -251,11 +261,11 @@ export function createBrightHttpServer({
       }
 
       if (!allowRequest(remote)) {
-        writeJson(res, 429, {error: {code: 'RATE_LIMITED', message: 'Too many requests', requestId}}, requestId);
+        writeEarlyJson(req, res, 429, {error: {code: 'RATE_LIMITED', message: 'Too many requests', requestId}}, requestId);
         return;
       }
       if (url.pathname !== '/mcp') {
-        writeJson(res, 404, {error: {code: 'NOT_FOUND', message: 'Route not found', requestId}}, requestId);
+        writeEarlyJson(req, res, 404, {error: {code: 'NOT_FOUND', message: 'Route not found', requestId}}, requestId);
         return;
       }
 
@@ -276,10 +286,7 @@ export function createBrightHttpServer({
     } catch (error) {
       const status = Number(error?.status) || 500;
       if (!res.headersSent) {
-        if (status === 413 || status === 504) {
-          res.setHeader('connection', 'close');
-          res.once('finish', () => req.destroy());
-        }
+        if (status === 413 || status === 504) closeAfterResponse(req, res);
         writeJson(res, status, {
           error: {
             code: status === 413 ? 'REQUEST_TOO_LARGE' : status === 504 ? 'REQUEST_TIMEOUT' : 'INTERNAL_ERROR',
