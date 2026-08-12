@@ -104,6 +104,14 @@ const isAllowedOrigin = (origin, allowedHosts) => {
   }
 };
 
+const requestDeclaresBody = (req) => {
+  if (req.headers['transfer-encoding']) return true;
+  const contentLength = req.headers['content-length'];
+  if (contentLength === undefined) return false;
+  const parsed = Number(contentLength);
+  return !Number.isFinite(parsed) || parsed > 0;
+};
+
 const requestTimeoutError = () => {
   const error = new Error('MCP request timed out');
   error.status = 504;
@@ -202,7 +210,7 @@ const closeAfterResponse = (req, res) => {
   res.once('finish', () => req.destroy());
 };
 
-const writeEarlyJson = (req, res, status, body, requestId) => {
+const writeJsonBeforeBodyConsumed = (req, res, status, body, requestId) => {
   closeAfterResponse(req, res);
   writeJson(res, status, body, requestId);
 };
@@ -250,11 +258,11 @@ export function createBrightHttpServer({
       }
 
       if (!allowedHosts.has(host)) {
-        writeEarlyJson(req, res, 403, {error: {code: 'HOST_NOT_ALLOWED', message: 'Host is not allowed', requestId}}, requestId);
+        writeJsonBeforeBodyConsumed(req, res, 403, {error: {code: 'HOST_NOT_ALLOWED', message: 'Host is not allowed', requestId}}, requestId);
         return;
       }
       if (!isAllowedOrigin(req.headers.origin, allowedHosts)) {
-        writeEarlyJson(req, res, 403, {error: {code: 'ORIGIN_NOT_ALLOWED', message: 'Origin is not allowed', requestId}}, requestId);
+        writeJsonBeforeBodyConsumed(req, res, 403, {error: {code: 'ORIGIN_NOT_ALLOWED', message: 'Origin is not allowed', requestId}}, requestId);
         return;
       }
 
@@ -262,21 +270,33 @@ export function createBrightHttpServer({
       const url = new URL(req.url || '/', base);
       requestPath = url.pathname;
       if (url.pathname === '/health' && req.method === 'GET') {
-        writeEarlyJson(req, res, 200, {ok: true}, requestId);
+        writeJsonBeforeBodyConsumed(req, res, 200, {ok: true}, requestId);
         return;
       }
 
       if (!allowRequest(remote)) {
-        writeEarlyJson(req, res, 429, {error: {code: 'RATE_LIMITED', message: 'Too many requests', requestId}}, requestId);
+        writeJsonBeforeBodyConsumed(req, res, 429, {error: {code: 'RATE_LIMITED', message: 'Too many requests', requestId}}, requestId);
         return;
       }
       if (url.pathname !== '/mcp') {
-        writeEarlyJson(req, res, 404, {error: {code: 'NOT_FOUND', message: 'Route not found', requestId}}, requestId);
+        writeJsonBeforeBodyConsumed(req, res, 404, {error: {code: 'NOT_FOUND', message: 'Route not found', requestId}}, requestId);
+        return;
+      }
+
+      const method = req.method || 'GET';
+      if (['GET', 'HEAD'].includes(method) && requestDeclaresBody(req)) {
+        writeJsonBeforeBodyConsumed(req, res, 400, {
+          error: {
+            code: 'REQUEST_BODY_NOT_ALLOWED',
+            message: 'Request body is not allowed for this method',
+            requestId,
+          },
+        }, requestId);
         return;
       }
 
       let body;
-      if (!['GET', 'HEAD'].includes(req.method || 'GET')) body = await readBody(req, maxBodyBytes, deadlineAt);
+      if (!['GET', 'HEAD'].includes(method)) body = await readBody(req, maxBodyBytes, deadlineAt);
       const headers = new Headers();
       for (const [key, value] of Object.entries(req.headers)) {
         if (value === undefined) continue;
@@ -292,14 +312,18 @@ export function createBrightHttpServer({
     } catch (error) {
       const status = Number(error?.status) || 500;
       if (!res.headersSent) {
-        if (status === 413 || status === 504) closeAfterResponse(req, res);
-        writeJson(res, status, {
+        const errorBody = {
           error: {
             code: status === 413 ? 'REQUEST_TOO_LARGE' : status === 504 ? 'REQUEST_TIMEOUT' : 'INTERNAL_ERROR',
             message: status === 413 ? 'Request body is too large' : status === 504 ? 'Request timed out' : 'Internal server error',
             requestId,
           },
-        }, requestId);
+        };
+        if (status === 413 || status === 504) {
+          writeJsonBeforeBodyConsumed(req, res, status, errorBody, requestId);
+        } else {
+          writeJson(res, status, errorBody, requestId);
+        }
       } else {
         res.destroy();
       }
