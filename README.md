@@ -24,6 +24,21 @@ Supported scene types currently include `hero`, `claim`, `vertical`, `source`,
 `social`, and `stats`. `vertical` and `source` accept a `mediaUrl` pointing to an
 image or video.
 
+## Bright Evidence MCP
+
+The repository also contains the read-only Bright Evidence MCP tool
+`normalize_evidence`. For direct ChatGPT connectivity, the supported remote test
+endpoint for this deployment is:
+
+```text
+https://video.lanadesign.tech/mcp
+```
+
+The MCP Docker service remains published only on host loopback and is expected
+to sit behind an HTTPS reverse proxy. See `docs/mcp-remote.md` for the deployment,
+health-check, ChatGPT tool-scan, and security notes. See `docs/mcp-evidence.md`
+for the evidence-normalization contract.
+
 ## API security notes
 
 - Set a long random `BRIGHT_API_TOKEN`; all job/status/download endpoints require
