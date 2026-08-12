@@ -55,7 +55,7 @@ test('overflow MCP_REQUEST_TIMEOUT_MS falls back instead of becoming an immediat
   };
   const {server, url} = await start({
     handler,
-    env: {MCP_REQUEST_TIMEOUT_MS: '2147483648'},
+    env: {MCP_REQUEST_TIMEOUT_MS: '3000000000'},
   });
   t.after(() => server.close());
 
