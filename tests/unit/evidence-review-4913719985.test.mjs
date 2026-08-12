@@ -90,5 +90,5 @@ test('source relationship vocabulary rejects typo values batch-safely', () => {
 
   assert.equal(bundle.evidence.length, 0);
   assert.equal(bundle.rejectedItems.length, 1);
-  assert.match(bundle.rejectedItems[0].reasons.join(' '), /sourceRelationship/i);
+  assert.match(bundle.rejectedItems[0].reasons.join(' '), /allowed values/i);
 });
