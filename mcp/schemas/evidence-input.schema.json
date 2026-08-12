@@ -49,7 +49,7 @@
       "required": ["claim", "url"],
       "properties": {
         "claim": {"type": "string", "minLength": 3, "maxLength": 2000, "description": "Atomic factual claim supported by the source."},
-        "url": {"type": "string", "maxLength": 4096, "pattern": "^https?://", "description": "Public http(s) source URL supporting the claim."},
+        "url": {"type": "string", "maxLength": 4096, "pattern": "^https?://", "description": "Public http(s) source URL supporting the claim. URLs containing username/password userinfo credentials are batch-rejected."},
         "title": {"type": "string", "maxLength": 1000, "description": "Source page or document title."},
         "publisher": {"type": "string", "maxLength": 500, "description": "Publisher or source organization."},
         "author": {"type": "string", "maxLength": 500, "description": "Named source author when available."},
