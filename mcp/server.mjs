@@ -135,8 +135,8 @@ const readBody = (req, maxBytes, deadlineAt) => new Promise((resolve, reject) =>
     if (size > maxBytes) {
       const error = new Error('Request body too large');
       error.status = 413;
+      req.pause();
       fail(error);
-      req.resume();
       return;
     }
     chunks.push(chunk);
@@ -276,7 +276,7 @@ export function createBrightHttpServer({
     } catch (error) {
       const status = Number(error?.status) || 500;
       if (!res.headersSent) {
-        if (status === 504) {
+        if (status === 413 || status === 504) {
           res.setHeader('connection', 'close');
           res.once('finish', () => req.destroy());
         }
