@@ -98,15 +98,37 @@ const isAllowedOrigin = (origin, allowedHosts) => {
   }
 };
 
-const readBody = (req, maxBytes) => new Promise((resolve, reject) => {
+const requestTimeoutError = () => {
+  const error = new Error('MCP request timed out');
+  error.status = 504;
+  return error;
+};
+
+const remainingDeadlineMs = (deadlineAt) => Math.max(0, deadlineAt - Date.now());
+
+const readBody = (req, maxBytes, deadlineAt) => new Promise((resolve, reject) => {
   const chunks = [];
   let size = 0;
   let settled = false;
+  let timer;
+  const cleanup = () => {
+    if (timer) clearTimeout(timer);
+  };
   const fail = (error) => {
     if (settled) return;
     settled = true;
+    cleanup();
     reject(error);
   };
+  const remaining = remainingDeadlineMs(deadlineAt);
+  if (remaining <= 0) {
+    fail(requestTimeoutError());
+    return;
+  }
+  timer = setTimeout(() => {
+    req.pause();
+    fail(requestTimeoutError());
+  }, remaining);
   req.on('data', (chunk) => {
     if (settled) return;
     size += chunk.length;
@@ -122,17 +144,18 @@ const readBody = (req, maxBytes) => new Promise((resolve, reject) => {
   req.on('end', () => {
     if (settled) return;
     settled = true;
+    cleanup();
     resolve(Buffer.concat(chunks));
   });
   req.on('error', fail);
 });
 
 const withTimeout = (promise, timeoutMs) => new Promise((resolve, reject) => {
-  const timer = setTimeout(() => {
-    const error = new Error('MCP request timed out');
-    error.status = 504;
-    reject(error);
-  }, timeoutMs);
+  if (timeoutMs <= 0) {
+    reject(requestTimeoutError());
+    return;
+  }
+  const timer = setTimeout(() => reject(requestTimeoutError()), timeoutMs);
   promise.then(
     (value) => { clearTimeout(timer); resolve(value); },
     (error) => { clearTimeout(timer); reject(error); },
@@ -199,9 +222,17 @@ export function createBrightHttpServer({
   return createServer(async (req, res) => {
     const requestId = randomUUID();
     const started = Date.now();
+    const deadlineAt = started + requestTimeoutMs;
     const host = hostnameFromHeader(req.headers.host);
     const remote = req.socket.remoteAddress || 'unknown';
+    let requestPath = '/';
     try {
+      try {
+        requestPath = new URL(req.url || '/', 'http://localhost').pathname;
+      } catch {
+        requestPath = '/';
+      }
+
       if (!allowedHosts.has(host)) {
         writeJson(res, 403, {error: {code: 'HOST_NOT_ALLOWED', message: 'Host is not allowed', requestId}}, requestId);
         return;
@@ -213,6 +244,7 @@ export function createBrightHttpServer({
 
       const base = `http://${req.headers.host}`;
       const url = new URL(req.url || '/', base);
+      requestPath = url.pathname;
       if (url.pathname === '/health' && req.method === 'GET') {
         writeJson(res, 200, {ok: true}, requestId);
         return;
@@ -228,7 +260,7 @@ export function createBrightHttpServer({
       }
 
       let body;
-      if (!['GET', 'HEAD'].includes(req.method || 'GET')) body = await readBody(req, maxBodyBytes);
+      if (!['GET', 'HEAD'].includes(req.method || 'GET')) body = await readBody(req, maxBodyBytes, deadlineAt);
       const headers = new Headers();
       for (const [key, value] of Object.entries(req.headers)) {
         if (value === undefined) continue;
@@ -239,11 +271,15 @@ export function createBrightHttpServer({
         headers,
         ...(body?.length ? {body} : {}),
       });
-      const response = await withTimeout(handler.fetch(request), requestTimeoutMs);
+      const response = await withTimeout(handler.fetch(request), remainingDeadlineMs(deadlineAt));
       await writeWebResponse(response, res, requestId);
     } catch (error) {
       const status = Number(error?.status) || 500;
       if (!res.headersSent) {
+        if (status === 504) {
+          res.setHeader('connection', 'close');
+          res.once('finish', () => req.destroy());
+        }
         writeJson(res, status, {
           error: {
             code: status === 413 ? 'REQUEST_TOO_LARGE' : status === 504 ? 'REQUEST_TIMEOUT' : 'INTERNAL_ERROR',
@@ -255,7 +291,7 @@ export function createBrightHttpServer({
         res.destroy();
       }
     } finally {
-      log({event: 'mcp.request', requestId, method: req.method, path: req.url, status: res.statusCode, durationMs: Date.now() - started});
+      log({event: 'mcp.request', requestId, method: req.method, path: requestPath, status: res.statusCode, durationMs: Date.now() - started});
     }
   });
 }
