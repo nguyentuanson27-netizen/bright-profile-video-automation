@@ -27,7 +27,7 @@ MCP_RATE_LIMIT_PER_MINUTE=60
 MCP_REQUEST_TIMEOUT_MS=10000
 ```
 
-Non-finite or non-positive numeric safety settings fall back to their documented defaults. In particular, an invalid `MCP_MAX_BODY_BYTES` value cannot disable the default 2 MB request-body boundary.
+Invalid numeric safety settings fall back to their documented defaults. Non-finite or non-positive body/rate values fall back, and `MCP_REQUEST_TIMEOUT_MS` also falls back when it exceeds Node's supported timer-delay range (`2_147_483_647` ms). In particular, an invalid `MCP_MAX_BODY_BYTES` value cannot disable the default 2 MB request-body boundary.
 
 `MCP_REQUEST_TIMEOUT_MS` is an end-to-end application deadline for the `/mcp` request path: it starts before request-body collection and the remaining budget is then applied to MCP handler processing. A stalled upload therefore cannot consume an unbounded body-read phase outside the configured request deadline. Timeout responses close the connection after the response is written. Crossing `MCP_MAX_BODY_BYTES` also pauses body collection, returns `413`, and closes the connection rather than draining an oversized remainder indefinitely. Any Host/Origin, rate-limit, or route rejection that occurs before request-body consumption likewise sends `Connection: close` and destroys the request after the response is flushed, so an incomplete keep-alive body cannot outlive an early `403`, `429`, or `404` response. `GET /health` remains outside the application rate-limit bucket, but its early `200` response also closes the connection after flush so a body-bearing health request cannot hold an incomplete keep-alive socket open.
 
@@ -37,7 +37,7 @@ Production should keep the process on loopback/private networking. ChatGPT does 
 
 ## ChatGPT tool contract
 
-`normalize_evidence` accepts a subject plus 1–200 candidate evidence items. Each valid item requires an atomic `claim` and absolute public `http(s)` source URL. Malformed individual items are reported under `rejectedItems` when safe; malformed envelopes are rejected.
+`normalize_evidence` accepts a subject plus 1–200 candidate evidence items. Each valid item requires an atomic `claim` and absolute public `http(s)` source URL. Source URLs containing URL userinfo credentials (`username` and/or `password` before the host) are batch-rejected before normalization and are not copied into `EvidenceBundle` output. Malformed individual items are reported under `rejectedItems` when safe; malformed envelopes are rejected.
 
 The MCP `tools/list` contract is generated from the same checked-in JSON Schemas used by runtime Ajv validation. The advertised input schema includes the known evidence-item fields, types, limits, and descriptions. Its item schema also has a permissive fallback so one malformed candidate can still reach item-level validation and be returned under `rejectedItems` instead of causing the whole MCP call to fail. The advertised output schema exposes the structured shapes for `evidence`, `conflicts`, and `rejectedItems` rather than unknown arrays.
 
