@@ -25,11 +25,16 @@ const observed = new Map();
 for (const [name, finding] of Object.entries(vulnerabilities)) {
   if (!['high', 'critical'].includes(finding?.severity)) continue;
   const allowed = expected.get(name);
-  const ids = new Set((finding.via ?? []).map(advisoryId).filter(Boolean));
+  const viaEntries = Array.isArray(finding.via) ? finding.via : [];
+  const parsedIds = viaEntries.map(advisoryId);
+  const ids = new Set(parsedIds.filter(Boolean));
   observed.set(name, ids);
   if (!allowed) {
     untriaged.push(`${name}: unreviewed ${finding.severity} finding`);
     continue;
+  }
+  if (viaEntries.length === 0 || parsedIds.some((id) => !id)) {
+    untriaged.push(`${name}: ${finding.severity} finding has no complete parseable advisory identity`);
   }
   for (const id of ids) {
     if (!allowed.has(id)) untriaged.push(`${name}: unreviewed advisory ${id}`);
