@@ -88,3 +88,8 @@ test('public-submission-only challenge configuration is absent', async () => {
   assert.doesNotMatch(compose, /OPENAI_APPS_CHALLENGE_TOKEN/);
   assert.doesNotMatch(envExample, /OPENAI_APPS_CHALLENGE_TOKEN/);
 });
+
+test('account-specific MCP app mapping is ignored by git', async () => {
+  const gitignore = await readFile(new URL('../../.gitignore', import.meta.url), 'utf8');
+  assert.match(gitignore, /^plugins\/bright-evidence\/\.app\.json$/m);
+});
