@@ -37,9 +37,7 @@ test('same-canonical source provenance merge is deterministic and prefers explic
 
   assert.equal(left.sources.length, 1);
   assert.equal(right.sources.length, 1);
-  for (const key of ['title', 'publisher', 'publishedAt', 'excerpt', 'sourceType', 'sourceRelationship']) {
-    assert.equal(left.sources[0][key], right.sources[0][key], `${key} must not depend on input order`);
-  }
+  assert.deepEqual(left.sources[0], right.sources[0]);
   assert.equal(left.sources[0].publisher, 'Example Network');
   assert.equal(left.sources[0].sourceType, 'official');
   assert.equal(left.sources[0].sourceRelationship, 'primary');
