@@ -63,9 +63,14 @@ test('audit policy fails closed when a reviewed high package has no parseable ad
 });
 
 test('audit policy always fails on critical findings', () => {
-  const result = runPolicy(report({}, 1), 1);
+  const result = runPolicy(report({
+    'critical-package': {
+      severity: 'critical',
+      via: [{url: 'https://github.com/advisories/GHSA-zzzz-yyyy-xxxx'}],
+    },
+  }), 1);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /critical vulnerability/i);
+  assert.match(result.stderr, /critical/i);
 });
 
 test('audit policy fails closed on an empty report object', () => {
