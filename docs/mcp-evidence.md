@@ -29,6 +29,10 @@ MCP_REQUEST_TIMEOUT_MS=10000
 
 Non-finite or non-positive numeric safety settings fall back to their documented defaults. In particular, an invalid `MCP_MAX_BODY_BYTES` value cannot disable the default 2 MB request-body boundary.
 
+`MCP_REQUEST_TIMEOUT_MS` is an end-to-end application deadline for the `/mcp` request path: it starts before request-body collection and the remaining budget is then applied to MCP handler processing. A stalled upload therefore cannot consume an unbounded body-read phase outside the configured request deadline. Timeout responses close the connection after the response is written.
+
+Request logs intentionally record the sanitized URL pathname only. Query parameters are not persisted in the `mcp.request` log event.
+
 Production should keep the process on loopback/private networking. ChatGPT does not connect directly to localhost; for a private deployment use OpenAI Secure MCP Tunnel or an authenticated remote HTTPS MCP endpoint. Do not expose this process on `0.0.0.0` merely to make local testing work.
 
 ## ChatGPT tool contract
@@ -36,6 +40,8 @@ Production should keep the process on loopback/private networking. ChatGPT does 
 `normalize_evidence` accepts a subject plus 1–200 candidate evidence items. Each valid item requires an atomic `claim` and absolute public `http(s)` source URL. Malformed individual items are reported under `rejectedItems` when safe; malformed envelopes are rejected.
 
 The MCP `tools/list` contract is generated from the same checked-in JSON Schemas used by runtime Ajv validation. The advertised input schema includes the known evidence-item fields, types, limits, and descriptions. Its item schema also has a permissive fallback so one malformed candidate can still reach item-level validation and be returned under `rejectedItems` instead of causing the whole MCP call to fail. The advertised output schema exposes the structured shapes for `evidence`, `conflicts`, and `rejectedItems` rather than unknown arrays.
+
+`sourceRelationship` is constrained to the deterministic vocabulary `primary`, `independent`, `quotes_primary`, `syndicated`, or `unknown`. Independence is opt-in: only sources explicitly marked `independent` count toward the two-independent-sources confidence rule. Missing or `unknown` relationship metadata does not imply independence.
 
 The result contains both a short text summary and structured `EvidenceBundle` content. Numeric/date guards prevent materially different facts from being merged; conflicts remain separate and are linked through unresolved conflict groups. Missing `category` is treated as unknown/compatible for conflict comparison rather than disabling conflict detection; metric/entity, unit, date, and value guards still prevent unrelated uncategorized facts from being grouped.
 
@@ -53,11 +59,13 @@ Numeric normalization is conservative when no locale/number-format signal exists
 - repeated comma thousands groups or comma-grouping plus an explicit dot decimal remain parseable when structurally unambiguous;
 - strings that do not match a supported unambiguous form stay textual rather than being forced into a number.
 
-Near-deduplication also compares deterministic numeric markers derived from `claimNormalized` after removing the typed `claimDate` components. When callers omit the optional `value` field, a single unambiguous numeric claim value can still guard dedupe and participate in conflict detection. Different explicit claim numbers are never near-merged merely because the surrounding wording is highly similar.
+Near-deduplication also compares deterministic numeric markers derived from `claimNormalized` after removing explicit date spans in the claim. When callers omit the optional `value` field, a single unambiguous numeric claim value can still guard dedupe and participate in conflict detection. Different explicit claim numbers are never near-merged merely because the surrounding wording is highly similar.
 
 ## Source preservation and overflow
 
 Distinct canonical sources are preserved through deduplication before the output cap is applied. The `EvidenceBundle` output allows at most 20 `sources[]` entries per retained evidence record.
+
+When duplicate evidence points to the same canonical URL, source metadata is merged deterministically. Inferred hostname publishers and the default `sourceType: other` cannot override later explicit provenance; stronger explicit source type and explicit publisher metadata are retained independent of input order. Conflicting explicit source-relationship labels collapse conservatively to `unknown` instead of asserting a stronger relationship by order.
 
 When more than 20 distinct canonical source URLs support one evidence record:
 
@@ -103,4 +111,6 @@ This makes `qualityScore` a ranking hint while keeping detected contradictions v
 
 ## Production dependency verification
 
-CI installs from the authoritative root lockfile with lifecycle scripts disabled and runs `npm audit --omit=dev --audit-level=high` as a production dependency gate. The MCP image still uses the selected root production lock graph for this PR; the audit result is therefore directly applicable to the packages installed into that image. A later packaging optimization may split a minimal MCP-only lockfile, but it must not weaken frozen installs or advisory verification.
+CI installs from the authoritative root lockfile with lifecycle scripts disabled and runs `npm audit --omit=dev --audit-level=high --json` as a production dependency gate. The MCP image still uses the selected root production lock graph for this PR; the audit result is therefore directly applicable to the packages installed into that image. A later packaging optimization may split a minimal MCP-only lockfile, but it must not weaken frozen installs or advisory verification.
+
+The audit verifier treats the npm JSON report as an untrusted boundary: it requires the expected report version, vulnerability object, complete non-negative vulnerability metadata counts, consistency between metadata and finding severities, and a compatible raw `npm audit` exit status before applying the exact advisory allowlist. Parseable error/incomplete JSON is therefore a gate failure rather than an empty clean report.
