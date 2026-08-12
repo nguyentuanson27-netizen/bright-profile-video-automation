@@ -40,6 +40,7 @@ jobs:
       - name: Syntax checks
         run: |
           node --check mcp/server.mjs
+          node --check mcp/public-pages.mjs
           node --check lib/evidence/primitives.mjs
           node --check lib/evidence/normalize-evidence.mjs
           node --check lib/evidence/schema-validator.mjs
@@ -77,6 +78,7 @@ jobs:
           assert ports[0].get('host_ip') == '127.0.0.1'
           assert str(ports[0].get('published')) == '4190'
           assert str(ports[0].get('target')) == '4190'
+          assert service.get('environment', {}).get('OPENAI_APPS_CHALLENGE_TOKEN', '') == ''
           PY
       - name: Build and verify isolated MCP container
         run: |
@@ -102,6 +104,10 @@ jobs:
           test "$(docker compose -f compose.mcp.yml exec -T bright-evidence-mcp id -u)" != 0
           docker inspect "$container" | node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const c=JSON.parse(s)[0];const mounts=c.Mounts||[];if(mounts.length)process.exit(1);const b=c.HostConfig.PortBindings||{};const p=b['4190/tcp'];if(!Array.isArray(p)||p.length!==1||p[0].HostIp!=='127.0.0.1'||p[0].HostPort!=='4190')process.exit(1)})"
           curl -fsS http://127.0.0.1:4190/health >/dev/null
+          curl -fsS http://127.0.0.1:4190/plugin >/dev/null
+          curl -fsS http://127.0.0.1:4190/privacy >/dev/null
+          curl -fsS http://127.0.0.1:4190/terms >/dev/null
+          curl -fsS http://127.0.0.1:4190/support >/dev/null
       - name: Tear down MCP container
         if: always()
         run: docker compose -f compose.mcp.yml down -v --remove-orphans
