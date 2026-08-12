@@ -46,6 +46,44 @@ const rawStatus = (url, {host, body = '{}'} = {}) => new Promise((resolve, rejec
   req.end(body);
 });
 
+const stalledUploadStatus = (url, guardMs = 1_500) => new Promise((resolve, reject) => {
+  const parsed = new URL(url);
+  let settled = false;
+  const req = http.request({
+    hostname: parsed.hostname,
+    port: parsed.port,
+    path: parsed.pathname,
+    method: 'POST',
+    headers: {
+      host: parsed.host,
+      'content-type': 'application/json',
+      'content-length': '1024',
+    },
+  }, (res) => {
+    res.resume();
+    res.on('end', () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(guard);
+      resolve(res.statusCode);
+      req.destroy();
+    });
+  });
+  req.on('error', (error) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(guard);
+    reject(error);
+  });
+  const guard = setTimeout(() => {
+    if (settled) return;
+    settled = true;
+    req.destroy();
+    reject(new Error('stalled upload exceeded the configured request deadline'));
+  }, guardMs);
+  req.write('{"partial":"');
+});
+
 const start = async (env = {}) => {
   const logs = [];
   const server = createBrightHttpServer({env: {MCP_ALLOWED_HOSTS: '127.0.0.1,localhost', ...env}, log: (event) => logs.push(event)});
@@ -188,4 +226,28 @@ test('health checks do not consume or depend on the application rate-limit bucke
   assert.notEqual(firstApplicationRequest, 429);
   assert.equal(secondApplicationRequest, 429);
   assert.equal((await fetch(healthUrl)).status, 200);
+});
+
+test('configured request timeout includes stalled request-body upload time', async (t) => {
+  const {server, url} = await start({MCP_REQUEST_TIMEOUT_MS: '100'});
+  t.after(() => server.close());
+
+  assert.equal(await stalledUploadStatus(url), 504);
+});
+
+test('request logs persist only the sanitized pathname, not raw query parameters', async (t) => {
+  const {server, url, logs} = await start();
+  t.after(() => server.close());
+
+  const response = await fetch(`${url}?access_token=super-secret`, {
+    method: 'POST',
+    headers: {'content-type': 'application/json'},
+    body: '{}',
+  });
+  await response.arrayBuffer();
+
+  const requestLog = logs.find((entry) => entry.event === 'mcp.request');
+  assert.ok(requestLog);
+  assert.equal(requestLog.path, '/mcp');
+  assert.ok(!JSON.stringify(requestLog).includes('super-secret'));
 });
