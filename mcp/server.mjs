@@ -69,12 +69,30 @@ export function createBrightMcpHandler() {
   return createMcpHandler(buildBrightMcpServer);
 }
 
-const parseAllowedHosts = (env) => new Set(
-  String(env.MCP_ALLOWED_HOSTS || '127.0.0.1,localhost')
-    .split(',')
-    .map((value) => value.trim().toLowerCase())
-    .filter(Boolean),
-);
+const parsePublicMcpUrl = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error('MCP_PUBLIC_URL must be an absolute HTTPS URL');
+  }
+  if (url.protocol !== 'https:') throw new Error('MCP_PUBLIC_URL must use HTTPS');
+  return url;
+};
+
+const parseAllowedHosts = (env) => {
+  const allowedHosts = new Set(
+    String(env.MCP_ALLOWED_HOSTS || '127.0.0.1,localhost')
+      .split(',')
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  const publicUrl = parsePublicMcpUrl(env.MCP_PUBLIC_URL);
+  if (publicUrl) allowedHosts.add(publicUrl.hostname.toLowerCase());
+  return allowedHosts;
+};
 
 const positiveFiniteOrDefault = (value, fallback) => {
   const parsed = Number(value);
