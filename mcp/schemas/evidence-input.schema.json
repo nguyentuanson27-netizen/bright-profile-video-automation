@@ -57,7 +57,7 @@
         "excerpt": {"type": "string", "maxLength": 1500, "description": "Short source excerpt directly supporting the claim."},
         "category": {"type": "string", "maxLength": 128, "description": "Fact category used for guarded dedupe and conflict comparison."},
         "sourceType": {"type": "string", "maxLength": 64, "description": "Source-type hint such as official, primary, news, analytics, social, or aggregator."},
-        "sourceRelationship": {"type": "string", "maxLength": 64, "description": "Optional deterministic relationship hint such as independent, syndicated, primary, or quotes_primary."},
+        "sourceRelationship": {"type": "string", "enum": ["primary", "independent", "quotes_primary", "syndicated", "unknown"], "description": "Optional deterministic source relationship. Independence is explicit: only independent means independently established provenance."},
         "claimDate": {"type": "string", "maxLength": 64, "description": "ISO date/date-time the factual claim refers to; for event facts this may itself be the disputed value."},
         "value": {"type": ["string", "number", "boolean"], "description": "Optional explicit typed value extracted from the claim."},
         "unit": {"type": "string", "maxLength": 128, "description": "Optional unit associated with value, such as followers, subscribers, views, or percent."}
