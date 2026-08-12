@@ -9,8 +9,8 @@ The repository provides:
 - the existing remote MCP endpoint: `https://video.lanadesign.tech/mcp`;
 - the read-only `normalize_evidence` tool;
 - the `public-evidence` skill under `plugins/bright-evidence/skills/`;
-- a minimal plugin manifest under `plugins/bright-evidence/.codex-plugin/plugin.json`;
-- the repository marketplace `.agents/plugins/marketplace.json` for private/local installation.
+- a minimal plugin manifest under `plugins/bright-evidence/.codex-plugin/plugin.json` with the portable `"apps": "./.app.json"` pointer;
+- the repository marketplace `.agents/plugins/marketplace.json` for private/local installation in the ChatGPT desktop app.
 
 The plugin does **not** add privacy/terms/support/listing routes, domain-verification challenges, public reviewer fixtures, or public submission metadata.
 
@@ -20,15 +20,17 @@ The MCP connection registration is intentionally not hard-coded into the reposit
 
 For a local plugin that uses an MCP server, ChatGPT first creates/registers the MCP connection and gives that connection a technical ID such as `plugin_asdk_app...`. That ID belongs to the account/workspace connection, so committing somebody else's ID would make the package non-portable and potentially point at the wrong connection.
 
+The tracked plugin manifest already points to `./.app.json`. The account/workspace-specific mapping file itself stays local and is git-ignored.
+
 When the Plugins / Developer Mode controls are available for the account or workspace:
 
 1. register `https://video.lanadesign.tech/mcp` as the Bright Evidence MCP connection;
 2. confirm tool discovery finds `normalize_evidence`;
 3. copy the generated technical connection ID (`plugin_asdk_app...`);
-4. use the OpenAI plugin-creator flow to wire that connection into the local Bright Evidence package, which creates/updates the local `.app.json` mapping and the manifest `apps` entry for that installation;
-5. install Bright Evidence from the repository/local marketplace and test it in a new chat.
+4. use the OpenAI plugin-creator flow to wire that connection into the local Bright Evidence package, which creates/updates only the local `.app.json` mapping;
+5. in the **ChatGPT desktop app**, restart/refresh after the repo marketplace is available, select the source backed by `.agents/plugins/marketplace.json`, install Bright Evidence, and test it in a new chat.
 
-Do not invent a `plugin_asdk_app...` ID and do not commit an account/workspace-specific `.app.json` mapping to the shared branch.
+Do not invent a `plugin_asdk_app...` ID, do not commit an account/workspace-specific `.app.json` mapping to the shared branch, and do not mutate the tracked manifest with a connection ID.
 
 ## Internal acceptance prompt
 
@@ -49,7 +51,7 @@ Do not deduplicate manually. Return the structured EvidenceBundle stats and reta
 
 Pass criteria:
 
-- the plugin is available from the private/local source;
+- the plugin is available from the private/local source in the ChatGPT desktop app;
 - ChatGPT actually calls `normalize_evidence` through the registered MCP connection;
 - duplicate handling is performed by the MCP tool rather than manually by the model;
 - no public publication/submission step is required.

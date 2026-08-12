@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Internal public-source research workflow backed by the read-only Bright Evidence MCP.",
   "skills": "./skills/",
+  "apps": "./.app.json",
   "interface": {
     "displayName": "Bright Evidence",
     "shortDescription": "Internal public-evidence research and normalization",

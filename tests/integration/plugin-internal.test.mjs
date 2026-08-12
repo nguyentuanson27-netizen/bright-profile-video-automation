@@ -48,12 +48,15 @@ test('internal plugin does not add public listing, legal, support, or submission
   }
 });
 
-test('plugin manifest is minimal internal metadata without public-submission fields', async () => {
+test('plugin manifest is portable internal metadata with a local MCP app mapping pointer', async () => {
   const manifestUrl = new URL('../../plugins/bright-evidence/.codex-plugin/plugin.json', import.meta.url);
-  const manifest = JSON.parse(await readFile(manifestUrl, 'utf8'));
+  const manifestText = await readFile(manifestUrl, 'utf8');
+  const manifest = JSON.parse(manifestText);
 
   assert.equal(manifest.name, 'bright-evidence');
   assert.equal(manifest.skills, './skills/');
+  assert.equal(manifest.apps, './.app.json');
+  assert.doesNotMatch(manifestText, /plugin_asdk_app/);
   assert.equal(manifest.interface?.displayName, 'Bright Evidence');
   assert.equal(manifest.interface?.developerName, 'Lana Design');
   assert.deepEqual(manifest.interface?.capabilities, ['Read']);
@@ -61,7 +64,6 @@ test('plugin manifest is minimal internal metadata without public-submission fie
   assert.equal(manifest.interface?.websiteURL, undefined);
   assert.equal(manifest.interface?.privacyPolicyURL, undefined);
   assert.equal(manifest.interface?.termsOfServiceURL, undefined);
-  assert.equal(manifest.apps, undefined, 'account/workspace-specific plugin_asdk_app mapping must not be hard-coded');
 });
 
 test('repo marketplace exposes Bright Evidence only as an internal install source', async () => {
@@ -92,4 +94,13 @@ test('public-submission-only challenge configuration is absent', async () => {
 test('account-specific MCP app mapping is ignored by git', async () => {
   const gitignore = await readFile(new URL('../../.gitignore', import.meta.url), 'utf8');
   assert.match(gitignore, /^plugins\/bright-evidence\/\.app\.json$/m);
+});
+
+test('internal setup guide targets ChatGPT desktop marketplace and only mutates ignored .app.json', async () => {
+  const guide = await readFile(new URL('../../docs/bright-evidence-plugin-internal.md', import.meta.url), 'utf8');
+
+  assert.match(guide, /ChatGPT desktop app/);
+  assert.match(guide, /\.agents\/plugins\/marketplace\.json/);
+  assert.match(guide, /creates\/updates only the local `\.app\.json` mapping/);
+  assert.doesNotMatch(guide, /creates\/updates the local `\.app\.json` mapping and the manifest `apps` entry/);
 });
