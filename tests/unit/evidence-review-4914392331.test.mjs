@@ -39,13 +39,13 @@ const observations = () => [
 const normalizedObservation = (item) => ({
   url: item.url,
   canonicalUrl: 'https://profile.example/emiru',
-  title: item.title,
-  publisher: item.publisher,
-  author: item.author,
-  publishedAt: new Date(item.publishedAt).toISOString(),
-  excerpt: item.excerpt,
-  sourceType: item.sourceType,
-  sourceRelationship: item.sourceRelationship,
+  ...(item.title ? {title: item.title} : {}),
+  publisher: item.publisher ?? 'profile.example',
+  ...(item.author ? {author: item.author} : {}),
+  ...(item.publishedAt ? {publishedAt: new Date(item.publishedAt).toISOString()} : {}),
+  ...(item.excerpt ? {excerpt: item.excerpt} : {}),
+  sourceType: item.sourceType ?? 'other',
+  ...(item.sourceRelationship ? {sourceRelationship: item.sourceRelationship} : {}),
 });
 
 test('same-canonical provenance merge selects a coherent real observation instead of synthesizing fields', () => {
@@ -72,4 +72,44 @@ test('same-canonical provenance merge selects a coherent real observation instea
     }),
     `merged source must remain traceable to one input observation; got ${JSON.stringify(left.sources[0])}`,
   );
+});
+
+const threeWayObservations = () => [
+  {
+    claim: 'Emiru maintains a documented creator profile.',
+    url: 'https://profile.example/emiru?utm_source=a',
+    category: 'profile',
+    publisher: 'Publisher A',
+    publishedAt: '2024-01-01T00:00:00Z',
+    sourceType: 'news',
+  },
+  {
+    claim: 'Emiru maintains a documented creator profile.',
+    url: 'https://profile.example/emiru?utm_source=b',
+    category: 'profile',
+    title: 'Observation B title',
+    publisher: 'Publisher B',
+    author: 'Reporter B',
+    sourceType: 'news',
+  },
+  {
+    claim: 'Emiru maintains a documented creator profile.',
+    url: 'https://profile.example/emiru?utm_source=c',
+    category: 'profile',
+    title: 'Observation C title',
+    publisher: 'Publisher C',
+    author: 'Reporter C',
+    publishedAt: '2026-08-11T00:00:00Z',
+    sourceType: 'news',
+  },
+];
+
+test('same-canonical coherent observation selection is permutation-stable across three candidates', () => {
+  const input = threeWayObservations();
+  const first = normalizeEvidence(base(input)).evidence[0];
+  const second = normalizeEvidence(base([input[2], input[0], input[1]])).evidence[0];
+
+  assert.deepEqual(first.sources[0], second.sources[0]);
+  const realObservations = input.map(normalizedObservation);
+  assert.ok(realObservations.some((source) => JSON.stringify(source) === JSON.stringify(first.sources[0])));
 });
