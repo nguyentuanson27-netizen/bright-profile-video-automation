@@ -256,7 +256,7 @@ export function createBrightHttpServer({
       const url = new URL(req.url || '/', base);
       requestPath = url.pathname;
       if (url.pathname === '/health' && req.method === 'GET') {
-        writeJson(res, 200, {ok: true}, requestId);
+        writeEarlyJson(req, res, 200, {ok: true}, requestId);
         return;
       }
 
