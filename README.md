@@ -39,6 +39,14 @@ to sit behind an HTTPS reverse proxy. See `docs/mcp-remote.md` for the deploymen
 health-check, ChatGPT tool-scan, and security notes. See `docs/mcp-evidence.md`
 for the evidence-normalization contract.
 
+## Bright Evidence internal plugin
+
+`plugins/bright-evidence/` packages the existing MCP workflow as an **internal/private** plugin for this project. It bundles the `public-evidence` skill, while `.agents/plugins/marketplace.json` exposes it as the repository-local install source.
+
+This package is not intended for the public Plugins Directory, commercial distribution, or a production launch. It therefore does not add public listing/legal/domain-verification routes or submission-review assets.
+
+The account/workspace-specific MCP connection ID is intentionally not committed. Register `https://video.lanadesign.tech/mcp` in the available ChatGPT plugin/developer controls, then wire the generated technical connection ID locally for that installation. See `docs/bright-evidence-plugin-internal.md`.
+
 ## API security notes
 
 - Set a long random `BRIGHT_API_TOKEN`; all job/status/download endpoints require

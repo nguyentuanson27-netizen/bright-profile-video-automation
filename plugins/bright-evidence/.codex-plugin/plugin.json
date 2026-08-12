@@ -1,0 +1,20 @@
+{
+  "name": "bright-evidence",
+  "version": "0.1.0",
+  "description": "Internal public-source research workflow backed by the read-only Bright Evidence MCP.",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Bright Evidence",
+    "shortDescription": "Internal public-evidence research and normalization",
+    "longDescription": "Research public sources, preserve atomic claims and provenance, then normalize them with the read-only Bright Evidence MCP.",
+    "developerName": "Lana Design",
+    "category": "Productivity",
+    "capabilities": [
+      "Read"
+    ],
+    "defaultPrompt": [
+      "Research public sources about a creator and normalize the evidence with Bright Evidence.",
+      "Collect competing public claims about a topic, preserve provenance, and show unresolved conflicts."
+    ]
+  }
+}

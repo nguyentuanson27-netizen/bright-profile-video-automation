@@ -11,3 +11,4 @@ dist/
 coverage/
 .DS_Store
 Thumbs.db
+plugins/bright-evidence/.app.json
