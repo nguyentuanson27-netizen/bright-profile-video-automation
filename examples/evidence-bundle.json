@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "1.0",
+  "normalizerVersion": "1.0.0",
+  "subject": {
+    "name": "Emiru",
+    "aliases": ["Emily Schunk"]
+  },
+  "researchQuery": "career milestones and audience metrics",
+  "researchedAt": "2026-08-11T08:00:00.000Z",
+  "stats": {
+    "inputItems": 2,
+    "retainedEvidence": 1,
+    "exactDuplicatesRemoved": 1,
+    "nearDuplicatesMerged": 0,
+    "conflictGroups": 0,
+    "rejectedItems": 0
+  },
+  "evidence": [
+    {
+      "id": "ev_827297d2cde91d106774",
+      "claim": "Emiru reached 2.1 million followers.",
+      "claimNormalized": "__subject__ reached 2100000 followers.",
+      "category": "followers",
+      "claimDate": "2026-07-01",
+      "value": 2100000,
+      "unit": "followers",
+      "fingerprint": "sha256:b040f4825946bb0e7618e5cdc65390c6251ef4bd767b604e81bdbd9986b1854d",
+      "sources": [
+        {"url": "https://example.com/a?utm_source=research", "canonicalUrl": "https://example.com/a", "publisher": "Example A", "sourceType": "news"},
+        {"url": "https://example.org/b", "canonicalUrl": "https://example.org/b", "publisher": "Example B", "sourceType": "news"}
+      ],
+      "qualityScore": 0.58,
+      "confidence": "medium",
+      "conflictGroupId": null
+    }
+  ],
+  "conflicts": [],
+  "rejectedItems": []
+}

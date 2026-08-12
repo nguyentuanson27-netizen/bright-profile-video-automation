@@ -4,16 +4,25 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test": "node --test",
+    "lint": "eslint lib/evidence mcp tests",
+    "mcp": "node mcp/server.mjs",
     "render:smoke": "node scripts/render-smoke.mjs",
     "render:project": "node scripts/render-project.mjs"
   },
   "dependencies": {
     "@google-cloud/text-to-speech": "6.4.1",
+    "@modelcontextprotocol/server": "2.0.0",
     "@remotion/bundler": "4.0.484",
     "@remotion/renderer": "4.0.484",
     "@remotion/transitions": "4.0.484",
+    "ajv": "8.20.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
-    "remotion": "4.0.484"
+    "remotion": "4.0.484",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "eslint": "10.7.0"
   }
 }
