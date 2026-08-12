@@ -29,7 +29,7 @@ MCP_REQUEST_TIMEOUT_MS=10000
 
 Non-finite or non-positive numeric safety settings fall back to their documented defaults. In particular, an invalid `MCP_MAX_BODY_BYTES` value cannot disable the default 2 MB request-body boundary.
 
-`MCP_REQUEST_TIMEOUT_MS` is an end-to-end application deadline for the `/mcp` request path: it starts before request-body collection and the remaining budget is then applied to MCP handler processing. A stalled upload therefore cannot consume an unbounded body-read phase outside the configured request deadline. Timeout responses close the connection after the response is written.
+`MCP_REQUEST_TIMEOUT_MS` is an end-to-end application deadline for the `/mcp` request path: it starts before request-body collection and the remaining budget is then applied to MCP handler processing. A stalled upload therefore cannot consume an unbounded body-read phase outside the configured request deadline. Timeout responses close the connection after the response is written. Crossing `MCP_MAX_BODY_BYTES` also pauses body collection, returns `413`, and closes the connection rather than draining an oversized remainder indefinitely.
 
 Request logs intentionally record the sanitized URL pathname only. Query parameters are not persisted in the `mcp.request` log event.
 
@@ -65,7 +65,7 @@ Near-deduplication also compares deterministic numeric markers derived from `cla
 
 Distinct canonical sources are preserved through deduplication before the output cap is applied. The `EvidenceBundle` output allows at most 20 `sources[]` entries per retained evidence record.
 
-When duplicate evidence points to the same canonical URL, source metadata is merged deterministically. Inferred hostname publishers and the default `sourceType: other` cannot override later explicit provenance; stronger explicit source type and explicit publisher metadata are retained independent of input order. Conflicting explicit source-relationship labels collapse conservatively to `unknown` instead of asserting a stronger relationship by order.
+When duplicate evidence points to the same canonical URL, every emitted source field is merged with an input-order-independent policy. The raw tracking-variant URL is selected lexically for stable output. Inferred hostname publishers and the default `sourceType: other` cannot override stronger explicit provenance; explicit source types are compared by the existing source prior. `title`, `author`, and `excerpt` prefer the longer non-empty text, with lexical order as a deterministic tie-break. Conflicting explicit `publishedAt` values retain the earlier timestamp so freshness is conservative rather than order-dependent. Conflicting explicit source-relationship labels collapse to `unknown` instead of asserting a stronger relationship by order.
 
 When more than 20 distinct canonical source URLs support one evidence record:
 
