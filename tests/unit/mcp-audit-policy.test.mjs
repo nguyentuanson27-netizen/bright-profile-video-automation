@@ -41,6 +41,17 @@ test('audit policy fails closed on a new high advisory', () => {
   assert.match(result.stderr, /unreviewed advisory/i);
 });
 
+test('audit policy fails closed when a reviewed high package has no parseable advisory identity', () => {
+  const result = runPolicy(report({
+    'fast-uri': {
+      severity: 'high',
+      via: [],
+    },
+  }));
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /advisory identity/i);
+});
+
 test('audit policy always fails on critical findings', () => {
   const result = runPolicy(report({}, 1));
   assert.notEqual(result.status, 0);
