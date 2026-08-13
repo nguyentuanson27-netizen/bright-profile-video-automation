@@ -2,6 +2,8 @@ import {mkdirSync, readFileSync} from 'node:fs';
 import {dirname, resolve} from 'node:path';
 import Database from 'better-sqlite3';
 
+import {AppError, ErrorCodes} from '../domain/errors.mjs';
+
 const LATEST_VERSION = 1;
 const INITIAL_MIGRATION = readFileSync(new URL('./migrations/001_initial.sql', import.meta.url), 'utf8');
 const nowIso = () => new Date().toISOString();
@@ -94,6 +96,12 @@ const stageFromRow = (row) => row && ({
   updatedAt: row.updated_at,
 });
 
+const transitionError = (message) => new AppError(ErrorCodes.INVALID_TRANSITION, message);
+const downstreamStartedError = () => new AppError(
+  ErrorCodes.DOWNSTREAM_WORK_STARTED,
+  'Approval-relevant edit is blocked after downstream work starts',
+);
+
 export const createRepositories = (db) => {
   const insertProject = db.prepare(`
     INSERT INTO projects (id, creator, topic, status, created_at, updated_at)
@@ -124,6 +132,21 @@ export const createRepositories = (db) => {
     UPDATE projects
     SET status = 'approved', approved_revision_id = @revisionId, updated_at = @updatedAt
     WHERE id = @projectId AND current_revision_id = @revisionId
+  `);
+  const invalidateApprovalProject = db.prepare(`
+    UPDATE projects
+    SET status = 'review_required', approved_revision_id = NULL, updated_at = @updatedAt
+    WHERE id = @projectId
+      AND current_revision_id = @expectedRevisionId
+      AND approved_revision_id = @expectedRevisionId
+  `);
+  const enterMediaIngest = db.prepare(`
+    UPDATE projects
+    SET status = 'media_ingest', updated_at = @updatedAt
+    WHERE id = @projectId
+      AND status = 'approved'
+      AND current_revision_id = @revisionId
+      AND approved_revision_id = @revisionId
   `);
   const insertStage = db.prepare(`
     INSERT INTO stages (
@@ -174,6 +197,51 @@ export const createRepositories = (db) => {
   };
   const readBarrierTx = db.transaction(readBarrier);
   const serializedBarrierTx = db.transaction((projectId, operation) => operation(readBarrier(projectId)));
+
+  const invalidateForEditTx = db.transaction(({projectId, expectedRevisionId, updatedAt}) => {
+    const barrier = readBarrier(projectId);
+    if (!barrier || barrier.currentRevisionId !== expectedRevisionId || barrier.approvedRevisionId !== expectedRevisionId) {
+      throw transitionError('The expected approved revision is no longer current');
+    }
+    if (barrier.hasDescendantStage) throw downstreamStartedError();
+    if (barrier.status !== 'approved') throw transitionError('Project is not in the approved state');
+    const timestamp = updatedAt ?? nowIso();
+    if (invalidateApprovalProject.run({projectId, expectedRevisionId, updatedAt: timestamp}).changes !== 1) {
+      throw transitionError('Approval changed while applying the edit barrier');
+    }
+    return projectFromRow(getProject.get(projectId));
+  });
+
+  const createFirstDescendantTx = db.transaction((record) => {
+    if (record.type !== 'media_ingest') throw transitionError('The first downstream stage must be media_ingest');
+    const barrier = readBarrier(record.projectId);
+    if (
+      !barrier
+      || barrier.status !== 'approved'
+      || barrier.currentRevisionId !== record.revisionId
+      || barrier.approvedRevisionId !== record.revisionId
+      || barrier.hasDescendantStage
+    ) {
+      throw transitionError('Downstream stage requires the same current approved revision and no existing descendant stage');
+    }
+    const createdAt = record.createdAt ?? nowIso();
+    const updatedAt = record.updatedAt ?? createdAt;
+    const logicalKey = record.logicalKey ?? `${record.projectId}:${record.revisionId}:media_ingest`;
+    insertStage.run({
+      ...record,
+      logicalKey,
+      state: record.state ?? 'queued',
+      retryable: record.retryable ? 1 : 0,
+      maxAttempts: record.maxAttempts,
+      availableAtMs: record.availableAtMs ?? 0,
+      createdAt,
+      updatedAt,
+    });
+    if (enterMediaIngest.run({projectId: record.projectId, revisionId: record.revisionId, updatedAt}).changes !== 1) {
+      throw transitionError('Approval changed while creating the first downstream stage');
+    }
+    return stageFromRow(getStage.get(record.id));
+  });
 
   return Object.freeze({
     projects: Object.freeze({
@@ -244,6 +312,12 @@ export const createRepositories = (db) => {
       withSerializedBarrier(projectId, operation) {
         if (typeof operation !== 'function') throw new TypeError('operation must be a function');
         return serializedBarrierTx.immediate(projectId, operation);
+      },
+      invalidateForEdit(record) {
+        return invalidateForEditTx.immediate(record);
+      },
+      createFirstDescendant(record) {
+        return createFirstDescendantTx.immediate(record);
       },
     }),
   });
