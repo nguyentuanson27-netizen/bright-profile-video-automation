@@ -1,13 +1,14 @@
-# Bright Evidence Internal Plugin — Task List
+# Bright Evidence Internal ChatGPT Integration — Task List
 
-- [x] **I01 RED scope test** — prove the public-submission implementation conflicts with the internal-only requirement.
+- [x] **I01 RED scope test** — prove the earlier public-submission implementation conflicted with the internal-only requirement.
 - [x] **I02 Remove over-scope surface** — remove public listing/legal/support/domain-challenge behavior and config.
-- [x] **I03 Internal package** — keep the public-evidence skill, minimize plugin metadata, and add the repo-local marketplace.
-- [x] **I04 Internal setup docs** — document MCP registration and local connection-ID wiring without hard-coding it.
+- [x] **I03 Internal package baseline** — keep the public-evidence skill and minimal internal packaging without public-distribution surface.
+- [x] **I04 Internal setup docs** — document the direct ChatGPT MCP workflow and security boundaries.
 - [x] **I05 Verification/review** — full exact-head CI and focused correctness/security review.
-- [x] **I06a Live MCP acceptance** — the actual ChatGPT app connection discovered `normalize_evidence` and an observed tool call returned a structured EvidenceBundle with 2 input items, 1 retained item, 1 exact duplicate removed, 0 conflicts, and 0 rejected items.
-- [ ] **I06b Local plugin package acceptance** — copy the real `plugin_asdk_app...` connection ID into the git-ignored `plugins/bright-evidence/.app.json`, restart the ChatGPT desktop app, install Bright Evidence from the repo marketplace, and observe `normalize_evidence` being called from that installed plugin package.
+- [x] **I06 Live ChatGPT MCP acceptance** — actual ChatGPT connection discovered `normalize_evidence` and an observed tool call returned a structured `EvidenceBundle` with 2 input items, 1 retained item, 1 exact duplicate removed, 0 conflicts, and 0 rejected items.
 
-## Definition of Done note
+## Scope note
 
-Remote MCP connectivity/tool invocation is verified. The repository plugin package is not fully accepted until I06b is exercised through the ChatGPT desktop repo-marketplace flow. There is no public publication or commercial launch gate in this scope.
+The current requirement ends at successful internal ChatGPT ↔ Bright Evidence MCP use. ChatGPT desktop repo-marketplace installation, Codex-specific packaging, public Plugins Directory publication, commercial launch, and public reviewer/legal flows are not required completion gates.
+
+The account/workspace-specific `.app.json` remains git-ignored and must not be committed. Further plugin packaging work should only resume if the project scope changes explicitly.
