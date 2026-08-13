@@ -96,11 +96,11 @@ test('account-specific MCP app mapping is ignored by git', async () => {
   assert.match(gitignore, /^plugins\/bright-evidence\/\.app\.json$/m);
 });
 
-test('internal setup guide targets ChatGPT desktop marketplace and only mutates ignored .app.json', async () => {
+test('internal guide accepts direct ChatGPT MCP use without requiring desktop or Codex packaging', async () => {
   const guide = await readFile(new URL('../../docs/bright-evidence-plugin-internal.md', import.meta.url), 'utf8');
 
-  assert.match(guide, /ChatGPT desktop app/);
-  assert.match(guide, /\.agents\/plugins\/marketplace\.json/);
-  assert.match(guide, /creates\/updates only the local `\.app\.json` mapping/);
-  assert.doesNotMatch(guide, /creates\/updates the local `\.app\.json` mapping and the manifest `apps` entry/);
+  assert.match(guide, /sufficient live acceptance of the ChatGPT ↔ Bright Evidence MCP integration/);
+  assert.match(guide, /No further desktop-marketplace or Codex acceptance work is required/);
+  assert.match(guide, /account\/workspace-specific `\.app\.json` mapping remains git-ignored/);
+  assert.doesNotMatch(guide, /must be installed through the ChatGPT desktop repo marketplace/);
 });
