@@ -32,9 +32,6 @@ jobs:
           set -e
           cat "$RUNNER_TEMP/npm-audit.json"
           node scripts/verify-mcp-prod-audit.mjs "$RUNNER_TEMP/npm-audit.json" "$audit_status"
-          if [ "$audit_status" -eq 1 ]; then
-            echo "npm audit reported reviewed high findings; fail-closed triage passed."
-          fi
       - name: Unit and integration tests
         run: npm test
       - name: Aggregate first-party lint
