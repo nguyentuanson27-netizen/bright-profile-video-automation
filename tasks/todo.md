@@ -127,16 +127,19 @@ Rules:
 
 ## T05: Build the canonical SSRF-safe HTTP(S) fetch boundary
 
-**Description:** Create one application-owned fetch module for operator/model-influenced public URLs and media, with manual redirect and DNS/IP validation.
+**Description:** Create one application-owned fetch module for operator/model-influenced public URLs and media. Manual redirect handling, DNS/IP policy, and socket connection must form one check-to-connect security decision so the address validated for a request attempt is the address actually connected to.
 
 **Acceptance criteria:**
-- [ ] Public HTTP/HTTPS targets can be fetched within purpose-specific timeout/byte/MIME limits.
-- [ ] Loopback, private, reserved, link-local, cloud-metadata, localhost, and public-to-private redirect targets are rejected.
-- [ ] Application/provider auth headers are never forwarded to arbitrary destinations and media can stream to disk without unbounded buffering.
+- [ ] Public HTTP/HTTPS targets can be fetched within purpose-specific timeout/byte/MIME limits, while loopback, private, reserved, link-local, cloud-metadata, localhost, and public-to-private redirect targets are rejected.
+- [ ] For every request attempt, the application resolves the hostname under its control, validates the selected connection IP, and opens the outbound socket only to that validated IP. The connection path must not perform an unvalidated second/default hostname lookup that can choose a different address after policy validation. Preserve the original hostname for HTTP `Host` and HTTPS SNI/certificate validation, and repeat independent resolve -> validate -> connect pinning for every redirect hop.
+- [ ] URLs containing embedded credentials (`url.username` or `url.password`) are rejected before any outbound request. Application/provider auth headers are never forwarded to arbitrary destinations.
+- [ ] Allowed media can stream to disk without unbounded buffering and with safe timeout/size/MIME enforcement.
 
 **Verification:**
 - [ ] `node --test tests/unit/url-policy.test.mjs`
-- [ ] Tests include direct private IP, DNS-to-private result, redirect-to-private, oversize, and timeout cases
+- [ ] Tests include direct private IP, DNS-to-private result, redirect-to-private, URL-embedded credentials, oversize, and timeout cases.
+- [ ] Add a deterministic DNS-rebinding/check-to-connect regression: simulate an attacker-controlled hostname resolving to an allowed public IP for policy validation but to blocked loopback/private on a later/default lookup; the safe fetch must either connect only to the already validated public IP or fail closed, and the test must prove no connection/request reaches the blocked target.
+- [ ] Add a redirect-hop variant or equivalent assertion proving each redirect independently resolves, validates, and pins its own connection IP.
 - [ ] `npm run lint`
 
 **Dependencies:** T02
@@ -152,7 +155,7 @@ Rules:
 
 ### Checkpoint A
 
-Before T06, run T01-T05 together. Do not continue if durable reopen/lease recovery or SSRF redirect/DNS controls are unproven.
+Before T06, run T01-T05 together. Do not continue if durable reopen/lease recovery, SSRF redirect/DNS controls, DNS-rebinding/check-to-connect regression, or credential-bearing URL rejection is unproven.
 
 ---
 
@@ -483,6 +486,7 @@ Do not declare the standalone MVP complete until all are observed:
 - [ ] Approved media is ingested safely before TTS/render.
 - [ ] TTS/render run through durable worker stages and produce a validated MP4.
 - [ ] App restart does not lose project state; expired worker lease recovers safely.
+- [ ] T05 proves check-to-connect DNS safety: each outbound attempt connects only to an address resolved and validated for that attempt, including redirects; DNS-rebinding regression and credential-bearing URL rejection are green.
 - [ ] Normal render path does not depend on arbitrary remote media or default `disableWebSecurity`.
 - [ ] UI supports create/status/review/approve/render/download without raw JSON.
 - [ ] `compose.yml` no longer depends on n8n.
