@@ -1,53 +1,56 @@
-# Task List: Standalone Bright Profile Production App
+# Task List: Standalone Bright Profile Internal MVP
 
-Source: `tasks/plan.md` and `docs/specs/standalone-production-app.md`.
+Source: `tasks/plan.md`, `docs/project-status.md`, and `docs/specs/standalone-internal-mvp-amendment.md`.
 
-Rules for implementation:
+Rules:
+
 - follow dependency order;
 - use RED -> GREEN -> REFACTOR for changed behavior;
-- keep each task focused to the listed concern;
-- do not start the next checkpoint while required verification is red;
-- do not silently substitute providers/auth/storage choices from the approved plan.
+- keep each task to one focused session and roughly 5 files or fewer;
+- stop at checkpoints when required verification is red;
+- reuse existing Remotion/TTS/evidence-normalizer code instead of rewriting it;
+- do not reintroduce production/commercial/plugin/Codex scope;
+- verify current official docs before implementing version-sensitive OpenAI/library APIs;
+- the project-wide Definition of Done still applies to every completed task.
 
 ---
 
-## T01: Establish test, lint, dependency, and config foundation
+## T01: Establish standalone config, dependencies, and scripts
 
-**Description:** Add the minimum repository tooling needed for safe incremental implementation: Node test command, ESLint, pinned production dependencies for the chosen architecture, validated configuration module, and consistent scripts. Keep existing render commands working.
+**Description:** Add the minimum runtime configuration and pinned dependencies required by the standalone architecture while preserving the existing MCP/render commands and tests.
 
 **Acceptance criteria:**
-- [ ] `npm test` runs Node's built-in test runner and has at least one passing configuration/tooling test.
-- [ ] `npm run lint` exists and checks repository JavaScript/JSX without rewriting files automatically.
-- [ ] Required dependencies are lockfile-pinned: `better-sqlite3`, `ajv`, official `openai` SDK, and metrics dependency; Vite may be added now or in T14 but must be pinned before UI implementation.
-- [ ] `app/config.mjs` fails fast on malformed numeric/boolean/path configuration without logging secret values.
+- [ ] Config validates data/database paths, worker lease/retry limits, fetch bounds, and OpenAI model/API settings without logging secrets.
+- [ ] `better-sqlite3` and the official `openai` SDK are pinned in the lockfile after current upstream compatibility/API verification; existing dependency versions are not opportunistically upgraded.
+- [ ] Existing `npm test`, `npm run lint`, `npm run render:smoke`, and MCP verification behavior remains available.
 
 **Verification:**
-- [ ] `npm ci`
+- [ ] `node --test tests/unit/config.test.mjs`
 - [ ] `npm test`
 - [ ] `npm run lint`
-- [ ] Existing `npm run render:smoke` still runs when its runtime dependencies/credentials are available; if not available in the implementation environment, record it as pending rather than claiming success.
+- [ ] `npm run render:smoke`
 
 **Dependencies:** None
 
 **Files likely touched:**
 - `package.json`
 - `package-lock.json`
-- `eslint.config.js`
 - `app/config.mjs`
 - `tests/unit/config.test.mjs`
+- `eslint.config.js`
 
 **Estimated scope:** Medium (5 files)
 
 ---
 
-## T02: Define domain workflow, error, and JSON-schema contracts
+## T02: Define project lifecycle and shared JSON-schema contracts
 
-**Description:** Encode the approved project lifecycle, supported scene/render bounds, source/claim contracts, generation output schema, stable application errors, and transition rules independently of HTTP/storage/provider code.
+**Description:** Encode project states, stable application errors, source/evidence contracts, generation output, mutable draft, immutable approved revision, and render bounds independently from HTTP/storage/provider code.
 
 **Acceptance criteria:**
-- [ ] Legal project transitions match the approved spec; invalid transitions return stable domain errors.
-- [ ] Shared schemas validate project input, source records, generation output, draft revisions, and approved render snapshots.
-- [ ] Supported claims cannot reference unknown `sourceId` values; unverified claims are represented explicitly.
+- [ ] Legal transitions cover `draft -> researching -> research_ready -> generating -> review_required -> approved -> media_ingest -> tts -> render_queued -> rendering -> completed`, with explicit failed/cancelled behavior.
+- [ ] Shared schemas reject unknown source references, unsupported scene types, invalid timelines, malformed evidence/drafts, and invalid render settings.
+- [ ] Approval-relevant edits have an explicit rule that invalidates prior approval.
 
 **Verification:**
 - [ ] `node --test tests/unit/domain.test.mjs`
@@ -65,18 +68,18 @@ Rules for implementation:
 
 ---
 
-## T03: Add SQLite schema, migrations, and repositories
+## T03: Add SQLite migrations and durable repositories
 
-**Description:** Introduce the durable metadata store with explicit migrations and repository functions for projects, sources, revisions, artifacts, and job metadata. Use `better-sqlite3` with WAL/foreign keys/busy timeout and parameterized statements.
+**Description:** Introduce SQLite-backed persistence for projects, normalized sources, revisions, jobs, attempts, and artifact metadata while keeping large files on the existing data volume.
 
 **Acceptance criteria:**
-- [ ] A fresh database can migrate from version 0 to the current schema using one documented command.
+- [ ] A fresh temporary database migrates from version 0 using an explicit migration command.
 - [ ] Project/source/revision records survive process close/reopen and preserve foreign-key invariants.
-- [ ] Approved revision payload/hash cannot be mutated through repository APIs.
+- [ ] Repository APIs cannot mutate an approved revision payload/hash after approval.
 
 **Verification:**
 - [ ] `node --test tests/integration/storage.test.mjs`
-- [ ] `npm run db:migrate -- --database <temp-db>` or the final repository-equivalent focused migration command
+- [ ] `npm run db:migrate -- --database <temp-db>`
 - [ ] `npm run lint`
 
 **Dependencies:** T02
@@ -91,46 +94,44 @@ Rules for implementation:
 
 ---
 
-## T04: Implement durable job claims, leases, retries, and recovery
+## T04: Implement durable stage claims, leases, retries, and recovery
 
-**Description:** Replace the in-memory queue contract with SQLite-backed runnable jobs/stages. Prove atomic claim, lease expiry, bounded retry, and graceful recovery before connecting external providers/rendering.
+**Description:** Replace the standalone workflow's in-memory scheduling model with SQLite-backed runnable stages and prove safe worker recovery before provider/render integration.
 
 **Acceptance criteria:**
-- [ ] Only one worker can claim a runnable job/stage atomically.
-- [ ] An expired lease becomes recoverable after a simulated worker crash; a live lease cannot be stolen.
-- [ ] Retryable failures use bounded attempt counts/backoff; non-retryable failures do not loop.
-- [ ] Re-running an idempotent stage does not duplicate state transitions/artifact records.
+- [ ] Only one worker can atomically claim a runnable stage; a live lease cannot be stolen.
+- [ ] Expired work becomes recoverable after simulated worker death, with bounded retry/backoff and no duplicate completion records.
+- [ ] Graceful shutdown stops new claims while leaving current work recoverable.
 
 **Verification:**
 - [ ] `node --test tests/integration/jobs.test.mjs`
-- [ ] Run a test with two competing claimant instances against the same temp SQLite DB.
+- [ ] Focused test with two competing claimant instances against the same temp DB
 - [ ] `npm run lint`
 
 **Dependencies:** T03
 
 **Files likely touched:**
 - `storage/jobs.mjs`
-- `domain/workflow.mjs`
 - `worker/job-runner.mjs`
+- `worker.mjs`
 - `tests/integration/jobs.test.mjs`
 
 **Estimated scope:** Medium (4 files)
 
 ---
 
-## T05: Build the canonical SSRF-safe URL fetcher
+## T05: Build the canonical SSRF-safe HTTP(S) fetch boundary
 
-**Description:** Extract/replace URL validation into one safe HTTP(S) fetch boundary used by research and media ingest. Use manual redirects and DNS validation; do not rely on browser/renderer security settings.
+**Description:** Create one application-owned fetch module for operator/model-influenced public URLs and media, with manual redirect and DNS/IP validation.
 
 **Acceptance criteria:**
-- [ ] HTTP/HTTPS public URLs can be fetched within configured timeout/byte/MIME limits.
-- [ ] Loopback, private, reserved, link-local, cloud-metadata, localhost, and redirect-to-private targets are rejected.
-- [ ] Each redirect is revalidated; auth/provider headers are never forwarded to arbitrary destinations.
-- [ ] Safe fetch can stream an allowed media response to a caller without buffering unbounded content.
+- [ ] Public HTTP/HTTPS targets can be fetched within purpose-specific timeout/byte/MIME limits.
+- [ ] Loopback, private, reserved, link-local, cloud-metadata, localhost, and public-to-private redirect targets are rejected.
+- [ ] Application/provider auth headers are never forwarded to arbitrary destinations and media can stream to disk without unbounded buffering.
 
 **Verification:**
 - [ ] `node --test tests/unit/url-policy.test.mjs`
-- [ ] Tests include direct private IP, DNS result to private IP, and public -> private redirect cases.
+- [ ] Tests include direct private IP, DNS-to-private result, redirect-to-private, oversize, and timeout cases
 - [ ] `npm run lint`
 
 **Dependencies:** T02
@@ -146,49 +147,49 @@ Rules for implementation:
 
 ### Checkpoint A
 
-Before T06, verify T01-T05 together. The system must have deterministic tests for durable state/recovery and SSRF controls. Do not continue if either foundation is unproven.
+Before T06, run T01-T05 together. Do not continue if durable reopen/lease recovery or SSRF redirect/DNS controls are unproven.
 
 ---
 
-## T06: Define provider interfaces and deterministic fakes
+## T06: Define research provider fakes and reuse the existing evidence normalizer in-process
 
-**Description:** Create narrow research and generation interfaces plus fakes so application workflows can be built/tested without live API credentials or cost.
+**Description:** Create a narrow research-provider contract and application research service. The service converts provider/operator-source results into atomic evidence candidates and calls the existing `lib/evidence` normalizer directly; it does not call the remote MCP endpoint.
 
 **Acceptance criteria:**
-- [ ] Research provider returns normalized discovery records/source candidates only through the documented contract.
-- [ ] Generation provider accepts normalized source records and returns the shared structured generation contract.
-- [ ] Fake providers can deterministically simulate success, timeout, rate limit, malformed output, inaccessible source, and retryable/non-retryable failure.
+- [ ] Deterministic fake research provider can simulate success, inaccessible sources, timeout, rate limit, and retryable/non-retryable failure.
+- [ ] Research service preserves provenance, keeps duplicate/conflicting candidates until normalization, and returns the existing `EvidenceBundle` contract.
+- [ ] Prompt-like source content stays inert data and no ChatGPT/MCP transport is required by the standalone service.
 
 **Verification:**
-- [ ] `node --test tests/unit/provider-contracts.test.mjs`
+- [ ] `node --test tests/unit/research-service.test.mjs`
+- [ ] Existing evidence/MCP normalization tests remain green via `npm test`
 - [ ] `npm run lint`
 
 **Dependencies:** T02, T05
 
 **Files likely touched:**
 - `providers/research/index.mjs`
-- `providers/generation/index.mjs`
-- `tests/fakes/providers.mjs`
-- `tests/unit/provider-contracts.test.mjs`
+- `tests/fakes/research-provider.mjs`
+- `app/services/research-project.mjs`
+- `tests/unit/research-service.test.mjs`
 
 **Estimated scope:** Medium (4 files)
 
 ---
 
-## T07: Implement OpenAI web-search research adapter
+## T07: Implement the OpenAI Responses web-search adapter
 
-**Description:** Implement the first research adapter using the OpenAI Responses API web-search tool. Treat search results as discovery metadata; feed discovered URLs into the application's normalized source pipeline rather than trusting model prose as factual storage.
+**Description:** Add the first live research adapter using the official OpenAI JavaScript SDK and Responses API `web_search`, mapping provider results into the T06 contract without treating model prose as privileged/final factual storage.
 
 **Acceptance criteria:**
-- [ ] Adapter records web-search source URLs/citation metadata in the provider contract without inventing source IDs.
-- [ ] Timeouts/rate limits/incomplete/provider failures map to stable application errors and bounded retry behavior.
-- [ ] Model/provider configuration comes from validated env; API keys/raw response bodies are not logged.
-- [ ] No live provider call is required for normal CI tests.
+- [ ] Adapter returns public source/citation metadata and evidence candidates through the documented provider contract without inventing application source IDs.
+- [ ] Timeout/rate-limit/incomplete/provider failures map to stable application errors and bounded retries; API keys/raw full responses are not logged.
+- [ ] Normal CI uses fakes only; a live provider call is manual/gated.
 
 **Verification:**
+- [ ] Re-check current official OpenAI Responses/web-search docs and pinned SDK API before implementation commit
 - [ ] `node --test tests/unit/openai-research.test.mjs`
-- [ ] Manual/gated live smoke with credentials: one creator query returns at least one normalized search source or a clear provider failure.
-- [ ] Re-check official OpenAI Responses/web-search docs and pinned SDK version before implementation commit.
+- [ ] Optional live smoke with credentials returns at least one source candidate or a classified provider failure
 
 **Dependencies:** T06
 
@@ -201,45 +202,18 @@ Before T06, verify T01-T05 together. The system must have deterministic tests fo
 
 ---
 
-## T08: Implement OpenAI structured generation adapter
+## T08: Deliver create -> research_ready as the first API vertical slice
 
-**Description:** Implement the generation adapter using Responses API JSON-schema structured output. Generation receives stored normalized sources and cannot browse/fetch arbitrary new URLs during this stage.
-
-**Acceptance criteria:**
-- [ ] Requested output schema matches the shared generation schema and the returned object is locally validated again.
-- [ ] Unknown source references, unsupported scene types, invalid timeline bounds, and malformed output are rejected before persistence.
-- [ ] Provider incomplete/refusal/timeout/rate-limit states are classified without leaking raw prompt/response content.
-- [ ] Production model configuration supports an explicit pinned snapshot ID.
-
-**Verification:**
-- [ ] `node --test tests/unit/openai-generation.test.mjs`
-- [ ] Manual/gated live smoke with a controlled normalized-source fixture returns a valid Vietnamese draft.
-- [ ] Re-check official OpenAI structured-output docs and pinned SDK version before implementation commit.
-
-**Dependencies:** T06
-
-**Files likely touched:**
-- `providers/generation/openai.mjs`
-- `tests/unit/openai-generation.test.mjs`
-- `.env.example`
-
-**Estimated scope:** Medium (3 files)
-
----
-
-## T09: Deliver project creation and research as an API vertical slice
-
-**Description:** Add the minimal HTTP router/error mapping and project API needed to create a topic project, enqueue/execute research, fetch operator URLs through the safe fetcher, normalize sources, and persist `research_ready` state.
+**Description:** Add the minimal project HTTP surface for create/list/read/research/status, backed by SQLite and durable stages, and persist normalized research evidence.
 
 **Acceptance criteria:**
-- [ ] `POST /api/projects` creates a persisted project with topic/optional URLs and stable ID.
-- [ ] Research action progresses through durable job state and stores normalized source records with retrieval status/hash/provenance.
-- [ ] Inaccessible URLs remain visible as failed/unavailable sources; the workflow does not fabricate replacement facts.
-- [ ] API errors use the spec's stable JSON error shape with request ID.
+- [ ] `POST /api/projects` persists creator/topic, optional public URLs/instructions, and returns a stable project ID.
+- [ ] Research progresses through durable state to `research_ready`, persisting normalized evidence/source provenance and explicit unavailable-source records.
+- [ ] Restarting the app between create/research/read does not lose project or research state; API errors use stable sanitized JSON with request ID.
 
 **Verification:**
 - [ ] `node --test tests/integration/research-api.test.mjs`
-- [ ] Restart app between create and read; persisted project/sources remain available.
+- [ ] Restart/reopen integration case using a temp DB/data directory
 - [ ] `npm run lint`
 
 **Dependencies:** T03, T04, T05, T07
@@ -247,7 +221,7 @@ Before T06, verify T01-T05 together. The system must have deterministic tests fo
 **Files likely touched:**
 - `app/http/router.mjs`
 - `app/http/projects.mjs`
-- `app/services/research-project.mjs`
+- `app/server.mjs`
 - `server.mjs`
 - `tests/integration/research-api.test.mjs`
 
@@ -255,52 +229,82 @@ Before T06, verify T01-T05 together. The system must have deterministic tests fo
 
 ---
 
-## T10: Deliver generation, draft editing, and approval gate
+### Checkpoint B
 
-**Description:** Add generation from stored sources, editable review draft persistence, approval validation, immutable approved revision snapshot, and invalidation when approved content is edited.
+Using deterministic fake research, prove `creator/topic -> research_ready` survives restart and retains source provenance. Then run the optional live OpenAI research smoke if credentials are available.
+
+---
+
+## T09: Implement structured generation from normalized evidence
+
+**Description:** Add the generation provider contract/service and OpenAI Responses Structured Outputs adapter. Generation receives normalized application-owned evidence/source records only and produces a locally validated draft.
 
 **Acceptance criteria:**
-- [ ] Generate action creates a `review_required` draft linked only to stored source IDs.
-- [ ] Draft edits are schema-validated and persist without allowing unsupported scene/timeline values.
-- [ ] Approval is blocked for unverified claims unless each has an explicit stored override reason.
-- [ ] Approval creates an immutable revision snapshot/hash; subsequent relevant edits invalidate approval.
+- [ ] Output schema contains claims/source references, script, voiceover chunks, and supported Remotion scene plan; local Ajv validation runs after provider output.
+- [ ] Unknown source IDs, unsupported scene types, invalid timing/render bounds, malformed/refused/incomplete output are rejected with stable errors.
+- [ ] Provider calls have configured timeout/token/retry bounds and do not log full prompts/responses by default.
+
+**Verification:**
+- [ ] Re-check current official OpenAI Structured Outputs/Responses docs and pinned SDK API before implementation commit
+- [ ] `node --test tests/unit/openai-generation.test.mjs`
+- [ ] Optional live smoke with a controlled normalized evidence fixture produces a valid draft or a classified provider failure
+
+**Dependencies:** T06, T08
+
+**Files likely touched:**
+- `providers/generation/index.mjs`
+- `providers/generation/openai.mjs`
+- `app/services/generate-project.mjs`
+- `tests/unit/openai-generation.test.mjs`
+
+**Estimated scope:** Medium (4 files)
+
+---
+
+## T10: Add persisted draft editing and immutable approval gate
+
+**Description:** Persist the review-required draft, expose edit/approve actions, block unsafe approval, and create an immutable approved revision snapshot for downstream work.
+
+**Acceptance criteria:**
+- [ ] Generate action creates a persisted `review_required` draft; schema-valid edits persist without raw arbitrary JSON/file paths.
+- [ ] Approval rejects unknown source references and unverified claims unless each has an explicit stored override reason.
+- [ ] Approval creates immutable revision content/hash; approval-relevant edits afterwards return the project to `review_required` and render cannot start from an unapproved draft.
 
 **Verification:**
 - [ ] `node --test tests/integration/approval-api.test.mjs`
-- [ ] Regression test proves render cannot be requested from mutable/unapproved draft state.
+- [ ] Regression: render request from mutable/unapproved state returns a stable transition error
 - [ ] `npm run lint`
 
-**Dependencies:** T03, T04, T08, T09
+**Dependencies:** T03, T09
 
 **Files likely touched:**
-- `app/services/generate-project.mjs`
 - `app/services/approve-project.mjs`
 - `app/http/revisions.mjs`
+- `storage/revisions.mjs`
 - `tests/integration/approval-api.test.mjs`
 
 **Estimated scope:** Medium (4 files)
 
 ---
 
-### Checkpoint B
+### Checkpoint C
 
-Before media/render/UI work, prove topic -> research -> generation -> review-required -> approval using deterministic providers. Verify unknown citations and unverified-claim approval failures are blocked.
+Prove `research_ready -> review_required -> approved` with deterministic generation. Verify bad source references/unverified claims are blocked and post-approval edits invalidate approval.
 
 ---
 
 ## T11: Ingest approved media into trusted local artifacts
 
-**Description:** Download/validate approved remote media into project-owned local storage, persist provenance/hash/type/size, and produce a render-ready manifest containing only trusted local/application-controlled asset references.
+**Description:** Download only approved remote media through T05, validate it, store it under project-owned paths, and persist provenance/hash/type/size for a render-ready local manifest.
 
 **Acceptance criteria:**
-- [ ] Remote filenames cannot influence local paths; path traversal and unsupported media are rejected.
-- [ ] Size/MIME/type limits are enforced during streaming download through T05 safe fetch.
-- [ ] Artifact records link local media to source provenance and approved revision.
-- [ ] Re-running ingest for the same approved revision is deterministic/idempotent or safely replaces an incomplete temp artifact atomically.
+- [ ] Remote filenames cannot influence local paths; path traversal, unsupported type, oversize response, and interrupted download are rejected/cleaned safely.
+- [ ] Artifact records link the local file to source provenance and the immutable approved revision.
+- [ ] Re-running media ingest for the same approved revision is idempotent or atomically replaces an incomplete temporary artifact.
 
 **Verification:**
 - [ ] `node --test tests/integration/media-ingest.test.mjs`
-- [ ] Test malicious filename/path, oversized response, wrong MIME, and interrupted download cleanup.
+- [ ] Focused malicious filename/MIME/oversize/interruption cases
 - [ ] `npm run lint`
 
 **Dependencies:** T05, T10
@@ -314,20 +318,19 @@ Before media/render/UI work, prove topic -> research -> generation -> review-req
 
 ---
 
-## T12: Execute approved TTS/render stages in the durable worker
+## T12: Execute TTS and render as durable worker stages
 
-**Description:** Connect durable jobs to the existing timed Google TTS and Remotion renderer. The worker consumes only immutable approved revisions and ingested media, records stage progress, and validates final output before completion.
+**Description:** Connect the durable worker to the existing Google TTS and Remotion renderer. Only immutable approved revisions with completed required media ingest can enter TTS/render.
 
 **Acceptance criteria:**
-- [ ] TTS/render stages cannot start without an approved revision and completed required media ingest.
-- [ ] Interrupted attempts leave isolated partial output and can be safely retried from the approved revision.
-- [ ] Final MP4 is marked completed only after file existence/non-zero/ffprobe duration validation.
-- [ ] Worker graceful shutdown stops new claims and preserves recoverable state for current work.
+- [ ] Worker records TTS/render stage progress and cannot start them from an unapproved revision or missing required media.
+- [ ] Interrupted attempts isolate partial output and can be retried after lease expiry without duplicate completed artifact records.
+- [ ] A project reaches `completed` only after output MP4 exists, is non-zero, and passes ffprobe duration/readability validation.
 
 **Verification:**
 - [ ] `node --test tests/integration/render-worker.test.mjs`
-- [ ] Controlled real smoke with local fixture: TTS/render produces readable MP4 when required credentials/runtime exist.
-- [ ] Simulated worker termination demonstrates expired-lease recovery without duplicate completed artifact records.
+- [ ] Existing `npm run render:smoke`
+- [ ] Simulated worker termination/lease recovery integration case
 
 **Dependencies:** T04, T11
 
@@ -341,18 +344,18 @@ Before media/render/UI work, prove topic -> research -> generation -> review-req
 
 ---
 
-## T13: Harden the Remotion trusted-asset boundary
+## T13: Remove arbitrary remote media/default disabled web security from the render path
 
-**Description:** Remove the normal-path dependency on arbitrary remote render URLs and `chromiumOptions.disableWebSecurity: true`. Keep existing scene behavior intact and cover the change with a real render smoke.
+**Description:** Make the normal standalone render path consume trusted local/application-controlled artifacts only and remove `chromiumOptions.disableWebSecurity: true` from the default Remotion renderer configuration.
 
 **Acceptance criteria:**
-- [ ] Normal production render input contains only local/application-controlled trusted asset URLs/data.
-- [ ] `disableWebSecurity: true` is removed from the default renderer path; any explicit compatibility escape hatch is off by default and documented/tested.
-- [ ] Existing supported scene types still render controlled fixtures.
+- [ ] Normal render manifests contain only local/application-controlled media references produced by T11.
+- [ ] Default renderer no longer sets `disableWebSecurity: true`; no broad compatibility escape hatch is silently enabled.
+- [ ] Existing supported scene fixtures continue to render successfully.
 
 **Verification:**
-- [ ] `npm run smoke:render`
 - [ ] `node --test tests/integration/renderer-security.test.mjs`
+- [ ] `npm run render:smoke`
 - [ ] `npm run lint`
 
 **Dependencies:** T11, T12
@@ -366,28 +369,27 @@ Before media/render/UI work, prove topic -> research -> generation -> review-req
 
 ---
 
-### Checkpoint C
+### Checkpoint D
 
-Run the controlled approved-revision fixture through ingest -> TTS -> render -> output validation. Confirm renderer no longer needs arbitrary remote media/global disabled web security.
+Run a controlled approved fixture through media ingest -> TTS -> render -> output validation. Confirm retry/recovery and no normal dependency on arbitrary remote URLs/default disabled browser security.
 
 ---
 
-## T14: Add standalone React/Vite project creation and status UI
+## T14: Add React/Vite project create and status UI
 
-**Description:** Add the minimal Vite SPA shell and operator screens for project list/create/status, using the existing API and no raw JSON editing.
+**Description:** Add the minimal internal SPA shell for project list/create/status using the T08 API, with no raw JSON editing or new browser authentication subsystem.
 
 **Acceptance criteria:**
-- [ ] Operator can create a topic project with optional public URLs/instructions.
-- [ ] Project list/status screen displays persisted stage, source progress, failure state, retry/cancel controls when allowed.
-- [ ] Loading/empty/error/pending states are present and keyboard controls use semantic HTML.
-- [ ] `npm run dev` and `npm run build` are documented and build the web assets.
+- [ ] Operator can create a creator/topic project with optional public URLs/instructions and start/observe research.
+- [ ] Project list/status shows persisted stage, source/research progress, sanitized failure state, and retry/cancel controls only where legal.
+- [ ] Loading/empty/error/pending states and keyboard-usable semantic controls are present; build output is reproducible.
 
 **Verification:**
 - [ ] `npm run build`
-- [ ] UI-focused tests for create/status behavior using mocked API responses.
-- [ ] Keyboard/manual browser walkthrough at representative desktop/mobile width when browser tooling is available; otherwise mark runtime browser verification pending.
+- [ ] `node --test tests/unit/web-status.test.mjs`
+- [ ] Manual/available-browser keyboard walkthrough; if no browser tool exists, record runtime browser verification as pending
 
-**Dependencies:** T01, T09
+**Dependencies:** T08
 
 **Files likely touched:**
 - `web/index.html`
@@ -400,176 +402,78 @@ Run the controlled approved-revision fixture through ingest -> TTS -> render -> 
 
 ---
 
-## T15: Add review/edit/approve/render/completed UI
+## T15: Add review, approval, render, and completed UI
 
-**Description:** Complete the human checkpoint and output workflow: sources, claims, script, voiceover chunks, scenes, media, overrides, approval, render initiation, and MP4 download.
+**Description:** Complete the internal operator workflow over the T10/T12 API: inspect evidence, edit the draft, approve, render, see progress/errors, and download the final MP4.
 
 **Acceptance criteria:**
-- [ ] Review UI surfaces each claim's supporting source IDs and clearly marks unverified claims.
-- [ ] Operator can edit draft fields, save, override an unverified claim only with reason, approve, and start render.
-- [ ] Edits after approval visibly return the project to review-required state.
-- [ ] Completed screen downloads the final MP4 and shows approved revision summary; missing/corrupt output is a clear error.
+- [ ] Review screen shows retained sources/evidence, conflicts/unverified claims, script, voiceover chunks, scene plan, and editable approval-relevant fields.
+- [ ] Approve/render actions respect server state; disabled/error UI makes invalid transitions clear rather than bypassing them.
+- [ ] Completed state exposes the final MP4 download and approved revision summary without requiring raw project JSON.
 
 **Verification:**
 - [ ] `npm run build`
-- [ ] UI-focused tests cover unverified claim block, approval, invalidation, and completed download state.
-- [ ] Keyboard/manual browser walkthrough of review/approval path when browser tooling is available.
+- [ ] `node --test tests/unit/web-review.test.mjs`
+- [ ] Manual/available-browser walkthrough of create -> review -> approve -> render -> download against deterministic backend fixtures
 
 **Dependencies:** T10, T12, T14
 
 **Files likely touched:**
-- `web/src/review.jsx`
-- `web/src/project.jsx`
-- `web/src/api.mjs`
 - `web/src/app.jsx`
+- `web/src/review-view.jsx`
+- `web/src/project-view.jsx`
 - `tests/unit/web-review.test.mjs`
-
-**Estimated scope:** Medium (5 files)
-
----
-
-### Checkpoint D
-
-Demonstrate the full operator workflow with fake providers and controlled render fixtures without editing JSON manually.
-
----
-
-## T16: Add structured logs, health/readiness, metrics, and request correlation
-
-**Description:** Make app/worker behavior observable with stable structured events, correlation IDs, health endpoints, and bounded-cardinality metrics.
-
-**Acceptance criteria:**
-- [ ] App requests and worker attempts emit structured events with request/project/job/stage fields and no secrets/full source/model payloads.
-- [ ] `/health/live` does not depend on providers; `/health/ready` checks DB/data-dir readiness.
-- [ ] `/metrics` exposes queue depth, active jobs, failures by stage, provider latency/error counts, and render/stage duration histograms without high-cardinality IDs as labels.
-
-**Verification:**
-- [ ] `node --test tests/integration/observability.test.mjs`
-- [ ] Induce one controlled failure and locate it by request/project/job correlation fields.
-- [ ] Inspect metrics output for expected bounded label sets.
-
-**Dependencies:** T04, T09, T12
-
-**Files likely touched:**
-- `app/observability.mjs`
-- `app/http/health.mjs`
-- `server.mjs`
-- `worker.mjs`
-- `tests/integration/observability.test.mjs`
-
-**Estimated scope:** Medium (5 files)
-
----
-
-## T17: Add retention, disk guard, cleanup, and backup operations
-
-**Description:** Implement the approved storage lifecycle defaults and operator commands for cleanup/backup. Guard expensive stages before disk exhaustion.
-
-**Acceptance criteria:**
-- [ ] Default retention implements 30-day completed heavy artifacts and 7-day failed/cancelled/unapproved transient artifacts while retaining project/source/approved metadata.
-- [ ] New media-ingest/TTS/render work is blocked when disk crosses the configured hard threshold; active jobs are not deleted by cleanup.
-- [ ] Backup command creates a consistent SQLite backup plus required approved manifests/source metadata and reports destination/status.
-- [ ] Cleanup/backup paths cannot escape the configured data root.
-
-**Verification:**
-- [ ] `node --test tests/integration/storage-ops.test.mjs`
-- [ ] Dry-run cleanup test lists expected files without deleting active artifacts.
-- [ ] Create backup from temp fixture DB/data and restore/read it in a verification test.
-
-**Dependencies:** T03, T11, T12
-
-**Files likely touched:**
-- `storage/lifecycle.mjs`
-- `scripts/cleanup.mjs`
-- `scripts/backup.mjs`
-- `tests/integration/storage-ops.test.mjs`
 
 **Estimated scope:** Medium (4 files)
 
 ---
 
-## T18: Replace n8n Compose topology with authenticated standalone production stack
+## T16: Remove n8n dependency and prove the standalone MVP end-to-end
 
-**Description:** Build the production Docker/Compose topology with one app image serving app/worker roles, persistent data, Caddy TLS, oauth2-proxy GitHub OAuth allowlist, resource limits, health dependencies, and no n8n network.
+**Description:** Replace the current n8n-network Compose topology with app + worker + persistent data, retire the legacy in-memory orchestration path from the normal flow, and add deterministic end-to-end/restart verification.
 
 **Acceptance criteria:**
-- [ ] `compose.yml` contains no external n8n network/service/callback dependency.
-- [ ] Only Caddy publishes 80/443; oauth2-proxy/app/worker are private and worker publishes no port.
-- [ ] App/worker use the same persistent data root with correct non-root ownership; Google/provider/auth secrets are injected/mounted and not baked into image.
-- [ ] Docker build uses lockfile-frozen install semantics and an immutable app image tag convention; package/release/image versions are no longer contradictory.
-- [ ] OAuth2 proxy restricts access to explicit GitHub users and forwards only to the private app upstream.
+- [ ] `compose.yml` has no external n8n network dependency; app and worker share the durable DB/artifact volume, worker publishes no port, and app is private/loopback by default.
+- [ ] Normal operator flow `creator/topic -> research -> review -> approve -> render -> MP4` works using deterministic fake providers without n8n or manually supplied render JSON.
+- [ ] App restart preserves project state and worker lease expiry/recovery resumes supported work; existing MCP and render regression suites remain green.
 
 **Verification:**
+- [ ] `node --test tests/integration/standalone-e2e.test.mjs`
 - [ ] `docker compose config`
-- [ ] `docker compose build`
-- [ ] `docker compose up -d` in a suitable integration/staging environment
-- [ ] `docker compose ps`
-- [ ] Verify unauthenticated request does not reach app UI and allowed GitHub login succeeds when real OAuth/TLS config is available.
+- [ ] `npm test && npm run lint && npm run build && npm run render:smoke`
+- [ ] Project-wide Definition of Done review
 
-**Dependencies:** T13, T15, T16, T17
+**Dependencies:** T03, T04, T12, T13, T15
 
 **Files likely touched:**
-- `Dockerfile`
 - `compose.yml`
-- `Caddyfile`
-- `.env.example`
-- `docs/operations/deployment.md`
-
-**Estimated scope:** Medium (5 files)
-
----
-
-## T19: Add CI gates, end-to-end smoke, release/rollback runbook, and final DoD evidence
-
-**Description:** Finish the production lifecycle: CI, deterministic E2E smoke, restart recovery rehearsal, deployment/rollback commands, README updates, and Definition-of-Done verification.
-
-**Acceptance criteria:**
-- [ ] GitHub Actions gates PR/main on frozen install, lint, unit/integration tests, build, controlled render smoke, Docker build, and dependency audit/triage policy.
-- [ ] Deterministic E2E smoke proves create -> research(fake) -> generate -> review/approve -> render -> download.
-- [ ] Recovery smoke demonstrates app restart preserves state and expired worker claim is recovered after controlled interruption.
-- [ ] Operations docs contain backup/migrate/deploy/health/smoke/rollback commands using immutable image tags and database compatibility notes.
-- [ ] README describes the standalone app and no longer instructs users to operate it as an internal n8n service.
-- [ ] All spec success criteria and project-wide Definition of Done have explicit verified/pending evidence; no unexecuted check is reported as passed.
-
-**Verification:**
-- [ ] `npm ci`
-- [ ] `npm run lint`
-- [ ] `npm test`
-- [ ] `npm run build`
-- [ ] `npm run smoke:render`
-- [ ] `npm run smoke:api`
-- [ ] `docker compose config`
-- [ ] `docker compose build`
-- [ ] Review actual GitHub Actions result when available; do not claim CI passed before a run exists.
-- [ ] Execute/rehearse documented rollback in staging or mark production-only parts pending with exact commands.
-
-**Dependencies:** T18
-
-**Files likely touched:**
-- `.github/workflows/ci.yml`
-- `scripts/smoke-e2e.mjs`
-- `docs/operations/runbook.md`
+- `server.mjs`
+- `scripts/standalone-smoke.mjs`
+- `tests/integration/standalone-e2e.test.mjs`
 - `README.md`
-- `package.json`
 
 **Estimated scope:** Medium (5 files)
 
 ---
 
-## Final implementation order
+## Final acceptance checklist
 
-```text
-T01 -> T02 -> (T03 || T05)
-T03 -> T04
-T05 + T02 -> T06 -> (T07 || T08)
-T03 + T04 + T05 + T07 -> T09
-T08 + T09 -> T10
-T05 + T10 -> T11 -> T12 -> T13
-T09 -> T14
-T10 + T12 + T14 -> T15
-T04/T09/T12 -> T16
-T03/T11/T12 -> T17
-T13/T15/T16/T17 -> T18 -> T19
-```
+Do not declare the standalone MVP complete until all are observed:
 
-`||` means tasks may be safely parallelized if separate working contexts/branches are actually available; do not claim parallel execution otherwise.
+- [ ] An internal operator can start from creator/topic + optional public URLs.
+- [ ] Research produces persisted normalized evidence with provenance using the existing in-process normalizer.
+- [ ] Structured generation produces a reviewable draft tied to stored sources.
+- [ ] Human approval produces an immutable approved revision.
+- [ ] Approved media is ingested safely before TTS/render.
+- [ ] TTS/render run through durable worker stages and produce a validated MP4.
+- [ ] App restart does not lose project state; expired worker lease recovers safely.
+- [ ] Normal render path does not depend on arbitrary remote media or default `disableWebSecurity`.
+- [ ] UI supports create/status/review/approve/render/download without raw JSON.
+- [ ] `compose.yml` no longer depends on n8n.
+- [ ] Existing Bright Evidence MCP integration/tests remain green but are not a runtime dependency of the standalone app.
+- [ ] No production/commercial/Codex/desktop-marketplace work was added outside scope.
+- [ ] Project-wide Definition of Done passes.
+
+## Human approval gate
+
+- [ ] User reviewed and approved this revised `/plan` before `/build` starts.
