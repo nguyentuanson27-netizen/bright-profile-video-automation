@@ -16,8 +16,9 @@ const inV4Cidr = (value, base, prefix) => {
 const blockedV4Ranges = [
   ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
   ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24],
-  ['192.88.99.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24],
-  ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4],
+  ['192.31.196.0', 24], ['192.52.193.0', 24], ['192.88.99.0', 24], ['192.168.0.0', 16],
+  ['192.175.48.0', 24], ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24],
+  ['224.0.0.0', 4], ['240.0.0.0', 4],
 ].map(([base, prefix]) => [ipv4Number(base), prefix]);
 const isPublicV4Number = (value) => !blockedV4Ranges.some(([base, prefix]) => inV4Cidr(value, base, prefix));
 
@@ -60,7 +61,6 @@ const ipv6Number = (address) => {
 };
 
 const inV6Cidr = (value, base, prefix) => {
-  if (prefix === 0) return true;
   const shift = BigInt(128 - prefix);
   return (value >> shift) === (base >> shift);
 };
@@ -69,10 +69,13 @@ const v6Base = (address) => {
   if (value === null) throw new Error(`invalid static IPv6 range: ${address}`);
   return value;
 };
+const GLOBAL_UNICAST_V6 = [v6Base('2000::'), 3];
 const blockedV6Ranges = [
-  ['::', 128], ['::1', 128], ['64:ff9b::', 96], ['64:ff9b:1::', 48], ['100::', 64],
-  ['2001::', 32], ['2001:10::', 28], ['2001:20::', 28], ['2001:db8::', 32],
-  ['2002::', 16], ['3fff::', 20], ['fc00::', 7], ['fe80::', 10], ['fec0::', 10], ['ff00::', 8],
+  ['2001::', 23],
+  ['2001:db8::', 32],
+  ['2002::', 16],
+  ['2620:4f:8000::', 48],
+  ['3fff::', 20],
 ].map(([base, prefix]) => [v6Base(base), prefix]);
 
 export const isPublicIp = (address) => {
@@ -81,14 +84,16 @@ export const isPublicIp = (address) => {
   if (version === 4) return isPublicV4Number(ipv4Number(normalized));
   if (version !== 6) return false;
   const value = ipv6Number(normalized);
-  if (value === null) return false;
-  if ((value >> 32n) === 0xffffn || value <= 0xffffffffn) {
-    return isPublicV4Number(Number(value & 0xffffffffn) >>> 0);
-  }
+  if (value === null || !inV6Cidr(value, ...GLOBAL_UNICAST_V6)) return false;
   return !blockedV6Ranges.some(([base, prefix]) => inV6Cidr(value, base, prefix));
 };
 
-const blockedHostnames = new Set(['localhost', 'metadata.google.internal', 'instance-data.ec2.internal', 'metadata.azure.internal']);
+const blockedHostnames = new Set([
+  'localhost',
+  'metadata.google.internal',
+  'instance-data.ec2.internal',
+  'metadata.azure.internal',
+]);
 
 export const assertSafePublicUrl = (input) => {
   let url;
@@ -100,7 +105,14 @@ export const assertSafePublicUrl = (input) => {
   if (!['http:', 'https:'].includes(url.protocol)) throw blocked('Only public HTTP(S) URLs are allowed');
   if (url.username || url.password) throw blocked('Credential-bearing URLs are not allowed');
   const hostname = normalizeHost(url.hostname);
-  if (!hostname || blockedHostnames.has(hostname) || hostname.endsWith('.localhost')) throw blocked('Local or metadata hostnames are not allowed');
+  if (
+    !hostname
+    || blockedHostnames.has(hostname)
+    || hostname.endsWith('.localhost')
+    || hostname.endsWith('.local')
+  ) {
+    throw blocked('Local or metadata hostnames are not allowed');
+  }
   if (isIP(hostname) && !isPublicIp(hostname)) throw blocked('Non-public IP targets are not allowed');
   url.hash = '';
   return url;
