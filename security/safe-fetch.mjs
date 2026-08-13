@@ -1,11 +1,12 @@
 import {randomUUID} from 'node:crypto';
 import {lookup as dnsLookup} from 'node:dns/promises';
-import {once} from 'node:events';
 import {createWriteStream, mkdirSync, renameSync, rmSync} from 'node:fs';
 import {request as nodeHttpRequest} from 'node:http';
 import {request as nodeHttpsRequest} from 'node:https';
 import {isIP} from 'node:net';
 import {dirname, resolve} from 'node:path';
+import {Transform} from 'node:stream';
+import {pipeline} from 'node:stream/promises';
 
 import {AppError, ErrorCodes} from '../domain/errors.mjs';
 import {assertSafePublicUrl, isPublicIp, normalizedHostname} from './url-policy.mjs';
@@ -70,21 +71,6 @@ const mimeAllowed = (mimeType, allowed) => allowed.some((pattern) => (
   pattern.endsWith('/*') ? mimeType.startsWith(pattern.slice(0, -1)) : mimeType === pattern
 ));
 
-const withTimeout = async (operation, timeoutMs) => {
-  let timer;
-  try {
-    return await Promise.race([
-      Promise.resolve().then(operation),
-      new Promise((_, reject) => {
-        timer = setTimeout(() => reject(timeoutError()), timeoutMs);
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-};
-
 const normalizeRecords = (result) => (Array.isArray(result) ? result : [result]).map((record) => {
   const address = String(record?.address ?? '');
   return {address, family: isIP(address)};
@@ -99,18 +85,46 @@ export const createSafeFetcher = ({
   lookup = dnsLookup,
   httpRequest = nodeHttpRequest,
   httpsRequest = nodeHttpsRequest,
+  now = Date.now,
 } = {}) => {
-  const resolvePinnedAddress = async (url, timeoutMs) => {
+  const remainingMs = (deadline) => {
+    const current = now();
+    if (!Number.isFinite(current)) throw new TypeError('now() must return a finite number');
+    const remaining = Math.ceil(deadline - current);
+    if (remaining <= 0) throw timeoutError();
+    return remaining;
+  };
+
+  const withDeadline = async (operation, deadline) => {
+    const remaining = remainingMs(deadline);
+    let timer;
+    try {
+      const result = await Promise.race([
+        Promise.resolve().then(operation),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(timeoutError()), remaining);
+          timer.unref?.();
+        }),
+      ]);
+      remainingMs(deadline);
+      return result;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const resolvePinnedAddress = async (url, deadline) => {
     const hostname = normalizedHostname(url);
     const literalFamily = isIP(hostname);
     if (literalFamily) {
+      remainingMs(deadline);
       if (!isPublicIp(hostname)) throw blockedError('Non-public IP targets are not allowed');
       return {address: hostname, family: literalFamily};
     }
 
     let result;
     try {
-      result = await withTimeout(() => lookup(hostname, {all: true, verbatim: true}), timeoutMs);
+      result = await withDeadline(() => lookup(hostname, {all: true, verbatim: true}), deadline);
     } catch (error) {
       if (error instanceof AppError) throw error;
       throw blockedError('Hostname resolution failed closed');
@@ -122,7 +136,7 @@ export const createSafeFetcher = ({
     return records[0];
   };
 
-  const openPinnedResponse = async (url, pinned, timeoutMs, allowedMimeTypes) => {
+  const openPinnedResponse = async (url, pinned, deadline, allowedMimeTypes) => {
     const requestFn = url.protocol === 'https:' ? httpsRequest : httpRequest;
     const originalHostname = normalizedHostname(url);
     const options = {
@@ -155,6 +169,13 @@ export const createSafeFetcher = ({
         clearTimeout(timer);
         rejectOpened(networkError(error));
       };
+      let remaining;
+      try {
+        remaining = remainingMs(deadline);
+      } catch (error) {
+        rejectOpened(error);
+        return;
+      }
       timer = setTimeout(() => {
         const error = timeoutError();
         response?.destroy?.(error);
@@ -163,13 +184,22 @@ export const createSafeFetcher = ({
           settled = true;
           rejectOpened(error);
         }
-      }, timeoutMs);
+      }, remaining);
       timer.unref?.();
 
       try {
         request = requestFn(options, (incoming) => {
           if (settled) {
             incoming.destroy?.();
+            return;
+          }
+          try {
+            remainingMs(deadline);
+          } catch (error) {
+            settled = true;
+            clearTimeout(timer);
+            incoming.destroy?.();
+            rejectOpened(error);
             return;
           }
           response = incoming;
@@ -189,10 +219,14 @@ export const createSafeFetcher = ({
 
   const openFinalResponse = async (input, rawOptions) => {
     const options = validateOptions(rawOptions);
+    const startedAt = now();
+    if (!Number.isFinite(startedAt)) throw new TypeError('now() must return a finite number');
+    const deadline = startedAt + options.timeoutMs;
     let url = assertSafePublicUrl(input);
     for (let redirects = 0; ; redirects += 1) {
-      const pinned = await resolvePinnedAddress(url, options.timeoutMs);
-      const handle = await openPinnedResponse(url, pinned, options.timeoutMs, options.allowedMimeTypes);
+      remainingMs(deadline);
+      const pinned = await resolvePinnedAddress(url, deadline);
+      const handle = await openPinnedResponse(url, pinned, deadline, options.allowedMimeTypes);
       const {response} = handle;
       const statusCode = Number(response.statusCode ?? 0);
       if (REDIRECT_STATUSES.has(statusCode)) {
@@ -263,20 +297,20 @@ export const createSafeFetcher = ({
     const destination = resolve(destinationPath);
     const tempPath = `${destination}.part-${randomUUID()}`;
     mkdirSync(dirname(destination), {recursive: true});
-    const output = createWriteStream(tempPath, {flags: 'wx'});
     let bytes = 0;
-    try {
-      for await (const rawChunk of opened.response) {
-        const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
-        bytes += chunk.length;
+    const limiter = new Transform({
+      transform(chunk, _encoding, callback) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        bytes += buffer.length;
         if (bytes > opened.options.maxBytes) {
-          opened.response.destroy?.();
-          throw fetchError(ErrorCodes.FETCH_TOO_LARGE, 'Response exceeds byte limit', 413);
+          callback(fetchError(ErrorCodes.FETCH_TOO_LARGE, 'Response exceeds byte limit', 413));
+          return;
         }
-        if (!output.write(chunk)) await once(output, 'drain');
-      }
-      output.end();
-      await once(output, 'finish');
+        callback(null, buffer);
+      },
+    });
+    try {
+      await pipeline(opened.response, limiter, createWriteStream(tempPath, {flags: 'wx'}));
       renameSync(tempPath, destination);
       return {
         url: opened.url.href,
@@ -286,7 +320,6 @@ export const createSafeFetcher = ({
         path: destination,
       };
     } catch (error) {
-      output.destroy();
       rmSync(tempPath, {force: true});
       throw networkError(error);
     } finally {
