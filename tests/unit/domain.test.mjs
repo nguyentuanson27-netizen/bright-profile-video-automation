@@ -11,7 +11,12 @@ import {
   assertCanCreateFirstDescendant,
 } from '../../domain/project.mjs';
 import {ErrorCodes} from '../../domain/errors.mjs';
-import {validateDraft, validateApprovedRevision} from '../../domain/schemas.mjs';
+import {
+  validateSource,
+  validateEvidence,
+  validateDraft,
+  validateApprovedRevision,
+} from '../../domain/schemas.mjs';
 
 const baseProject = (status, overrides = {}) => ({
   id: 'project-1',
@@ -114,6 +119,29 @@ test('first descendant creation requires the same current approved revision', ()
       revisionId: 'revision-old', hasDescendantStage: false,
     }),
     (error) => error.code === ErrorCodes.INVALID_TRANSITION,
+  );
+});
+
+test('source and evidence contracts reject malformed records', () => {
+  const source = {
+    id: 'source-1',
+    url: 'https://example.com/profile',
+    title: 'Profile',
+    status: 'available',
+  };
+  const evidence = {
+    id: 'evidence-1',
+    sourceId: 'source-1',
+    claim: 'Creator launched the project.',
+    confidence: 'high',
+  };
+  assert.deepEqual(validateSource(source), source);
+  assert.deepEqual(validateEvidence(evidence, {knownSourceIds: ['source-1']}), evidence);
+  assert.throws(() => validateSource({...source, status: 'mystery'}));
+  assert.throws(() => validateEvidence({...evidence, extra: true}, {knownSourceIds: ['source-1']}));
+  assert.throws(
+    () => validateEvidence({...evidence, sourceId: 'source-missing'}, {knownSourceIds: ['source-1']}),
+    (error) => error.code === ErrorCodes.UNKNOWN_SOURCE_REFERENCE,
   );
 });
 
