@@ -153,9 +153,12 @@ Media ingest, TTS, and render require an immutable approved revision. Editing fa
 All application-owned remote HTTP(S) fetches use one safe-fetch module with:
 
 - HTTP/HTTPS allowlist;
-- DNS/IP validation;
-- private/reserved/link-local/loopback/cloud-metadata rejection;
-- redirect revalidation;
+- explicit rejection of URL-embedded credentials (`username` / `password`);
+- application-controlled DNS resolution for every request attempt;
+- private/reserved/link-local/loopback/cloud-metadata rejection before connect;
+- a check-to-connect invariant: the outbound socket connects only to an IP address that was resolved and validated for that exact attempt, with no fresh/default hostname lookup allowed to choose a different address after validation;
+- preservation of the original hostname for HTTP `Host` and HTTPS SNI/certificate validation while the socket is pinned to the validated IP;
+- independent re-resolution, re-validation, and validated-IP connection pinning for every redirect hop;
 - timeout/size/MIME limits;
 - no secret/auth-header forwarding;
 - generated local filenames for downloaded artifacts.
@@ -237,9 +240,9 @@ Prove the hardest invariants first:
 - project lifecycle/contracts are explicit;
 - state survives process reopen;
 - job claims recover after simulated worker failure;
-- every future remote fetch goes through one SSRF-safe boundary.
+- every future remote fetch goes through one SSRF-safe boundary whose validated DNS result is the address actually used to connect.
 
-**Checkpoint A:** stop if SQLite persistence/lease recovery or safe-fetch redirect/DNS tests are red.
+**Checkpoint A:** stop if SQLite persistence/lease recovery, safe-fetch redirect/DNS policy, DNS-rebinding/check-to-connect regression, or credential-bearing URL rejection is red.
 
 ### Slice B — Creator/topic to normalized research
 
@@ -404,7 +407,8 @@ Final runtime evidence must additionally cover:
 - one gated live OpenAI research smoke and one gated structured-generation smoke when credentials are available;
 - app restart without project-state loss;
 - simulated worker death and expired-lease recovery;
-- SSRF rejection including redirect-to-private target;
+- SSRF rejection for direct private targets, redirect-to-private targets, DNS rebinding/check-to-connect changes, and credential-bearing URLs;
+- deterministic proof that a blocked address is never connected to after a different address was validated for the same attempt;
 - approved-media path traversal/type/size failures;
 - output MP4 existence/non-zero/ffprobe validation;
 - normal render path without arbitrary remote media or default `disableWebSecurity`;
