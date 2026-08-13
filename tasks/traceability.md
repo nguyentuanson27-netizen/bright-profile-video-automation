@@ -18,7 +18,7 @@ The implementation plan remains `tasks/plan.md` + `tasks/todo.md`. This matrix i
 
    `create -> research -> generate -> review/edit -> approve -> render-start -> media ingest -> TTS -> render -> download`.
 
-2. Required cross-cutting controls are frozen to the rows below: durable SQLite state, lease renewal/fencing/recovery, retry/cancel, approval/downstream race safety, source provenance, SSRF-safe fetch, model/schema validation, artifact/path safety, standalone dependency audit, aggregate lint/build/E2E, internal/private Compose, health endpoints, and retained MCP regressions.
+2. Required cross-cutting controls are frozen to the rows below: durable SQLite state, lease renewal/fencing/recovery, retry/cancel, approval/downstream race safety, source provenance, SSRF-safe fetch, model/schema validation, artifact/path safety, standalone dependency audit, aggregate lint/build/E2E, internal/private non-root Compose runtime, health endpoints, and retained MCP regressions.
 3. Historical production/commercial/operations requirements remain superseded by the active scope amendment unless explicitly retained here.
 4. After this closure pass, review should be against this frozen contract. New requirements require an explicit scope change; re-review of unchanged historical requirements should not implicitly expand the MVP.
 
@@ -55,7 +55,7 @@ The implementation plan remains `tasks/plan.md` + `tasks/todo.md`. This matrix i
 | C09 | Aggregate lint covers all first-party standalone JS/JSX/MJS and CI also gates tests, frontend build, main Compose config, deterministic E2E | T01, T14, T16 | package scripts + workflow | inspect workflow + commands | exact-head CI all green before MVP complete |
 | C10 | Normal renderer consumes application-controlled local media and does not rely on default `disableWebSecurity: true` | T11, T12, T13 | artifact manifest + Remotion renderer | renderer-security integration + render smoke | T16 real local render smoke |
 | C11 | Artifact writes/downloads are application-owned: safe relative paths, per-attempt temp areas, fenced promotion, no remote filename/path control | T03, T11, T12 | artifact repository + ingest/render services + output route | traversal/malicious filename/stale-promotion/missing-corrupt output tests | T16 authoritative artifact + HTTP download path |
-| C12 | Secrets are not committed/logged/stored in project records; app is private/loopback by default and worker publishes no port | T01, T07, T09, T16 | config/provider logging + Compose | config tests + Compose inspection | exact-head CI/DoD security review |
+| C12 | Secrets are not committed/logged/stored in project records; app is private/loopback by default; app/worker containers run non-root; worker publishes no port; broader exposure requires a separate auth/TLS task first | T01, T07, T09, T16 | config/provider logging + Docker/Compose runtime boundary | config tests + Compose/image inspection for bind/ports/effective non-root user; no secrets in diff/examples | exact-head CI/DoD security review |
 | C13 | Existing Bright Evidence MCP behavior remains green but is not a runtime dependency of standalone app | T06, T16 | in-process `lib/evidence`; existing MCP tests/workflow | `npm test` + existing MCP health/container checks | retained MCP regression gates in CI |
 | C14 | UI loading/empty/error/pending states and keyboard-usable semantic controls are covered for the supported internal flow | T14, T15 | React UI | web unit tests + manual/browser keyboard walkthrough when available | frontend build + DoD accessibility review |
 | C15 | No n8n network/workflow/manual project JSON is required by normal flow | T16 | `compose.yml`, app/worker entrypoints, E2E fixture | main Compose config + standalone E2E | final MVP acceptance |
@@ -93,6 +93,8 @@ These statements are part of the current task acceptance even if the older task 
 
 The deterministic standalone E2E must use the real external application controls for create/research/generate/edit/approve/render-start/retry/cancel/output-download and health. It may fake external providers, but it must not bypass missing HTTP contracts by directly invoking worker/services for the observable operator operations above.
 
+T16 also verifies the final app/worker Compose/image boundary remains private/non-root as required by the active internal scope.
+
 ## Explicitly deferred historical functional extras
 
 The historical production spec contains useful ideas that are **not required for this frozen internal MVP** because they are not needed by the active success condition. They may be reintroduced later by explicit scope change:
@@ -103,6 +105,7 @@ The historical production spec contains useful ideas that are **not required for
 | Regenerate an already reviewable draft from the same source set | Deferred; one durable generation path is sufficient for MVP acceptance |
 | Rerender a completed project/revision as a new run | Deferred; duplicate render-start is idempotent while a downstream run is active; completed rerender is a later feature |
 | Download/export the raw approved manifest as a separate operator artifact | Deferred; UI shows approved revision summary and MP4 download |
+| Additional create-time duration/voice controls beyond the configured/default supported path | Deferred unless required by a later operator workflow change |
 | Full metrics/SLO platform, queue histograms, provider dashboards, disk-pressure telemetry | Deferred by internal-scope amendment; persisted stage/error state + health are retained |
 | Production retention/cleanup defaults, backup policy, immutable release tags, rollback runbook | Deferred unless a real deployment/ship task reintroduces them |
 | Public TLS/auth/OAuth gateway or browser account system | Deferred while app remains private/loopback/trusted-network only; required before intentional broader exposure |
@@ -112,12 +115,14 @@ The historical production spec contains useful ideas that are **not required for
 
 Before `/build` is approved, review this matrix once against the frozen source set:
 
-- [ ] Every retained observable API operation has an owner task.
-- [ ] Every retained worker stage has a durable owner and focused regression.
-- [ ] Every retained security/concurrency invariant has a focused regression owner.
-- [ ] Every operator-visible action is exercised through the application boundary in final E2E.
-- [ ] Every current MVP row maps to a final E2E/CI/DoD gate.
-- [ ] Historical requirements not retained here are explicitly deferred rather than left ambiguous.
-- [ ] No public/commercial/plugin/Codex scope has been reintroduced.
+- [x] Every retained observable API operation has an owner task.
+- [x] Every retained worker stage has a durable owner and focused regression.
+- [x] Every retained security/concurrency invariant has a focused regression owner.
+- [x] Every operator-visible action is exercised through the application boundary in final E2E.
+- [x] Every current MVP row maps to a final E2E/CI/DoD gate.
+- [x] Historical requirements not retained here are explicitly deferred rather than left ambiguous.
+- [x] No public/commercial/plugin/Codex scope has been reintroduced.
+
+Closure audit result: **no orphan retained requirement found in the frozen current-MVP contract.** This is a planning completeness statement only; it does not claim the mapped runtime behavior has been implemented.
 
 If all rows remain owned and no new scope is introduced, the next review should be a closure/delta review rather than another full historical-spec expansion pass.
