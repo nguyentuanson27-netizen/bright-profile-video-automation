@@ -50,15 +50,18 @@ Rules:
 
 ## T02: Define project lifecycle and shared JSON-schema contracts
 
-**Description:** Encode project states, stable application errors, source/evidence contracts, generation output, mutable draft, immutable approved revision, and render bounds independently from HTTP/storage/provider code.
+**Description:** Encode project states, stable application errors, source/evidence contracts, generation output, mutable draft, immutable approved revision, render bounds, and explicit failed/cancelled control semantics independently from HTTP/storage/provider code.
 
 **Acceptance criteria:**
 - [ ] Legal transitions cover `draft -> researching -> research_ready -> generating -> review_required -> approved -> media_ingest -> tts -> render_queued -> rendering -> completed`, with explicit failed/cancelled behavior.
+- [ ] `failed` records the failed durable stage plus retryability metadata; only an explicitly retryable failed stage may be operator-requeued.
+- [ ] `cancelled` is terminal for the current project run and is legal only from a queued/running durable stage; cancellation does not silently resume later work.
 - [ ] Shared schemas reject unknown source references, unsupported scene types, invalid timelines, malformed evidence/drafts, and invalid render settings.
 - [ ] Approval-relevant edits have an explicit rule that invalidates prior approval.
 
 **Verification:**
 - [ ] `node --test tests/unit/domain.test.mjs`
+- [ ] Include transition-table cases for retryable/non-retryable failure and legal/illegal cancellation states
 - [ ] `npm run lint`
 
 **Dependencies:** T01
@@ -99,15 +102,18 @@ Rules:
 
 ---
 
-## T04: Implement durable stage claims, lease renewal/fencing, retries, and recovery
+## T04: Implement durable stage claims, lease renewal/fencing, retry/cancel, and recovery
 
-**Description:** Replace the standalone workflow's in-memory scheduling model with SQLite-backed runnable stages and prove safe worker recovery before provider/render integration. Long-running work must renew ownership and all writes must be fenced so a stale worker cannot commit after its claim is lost or reclaimed.
+**Description:** Replace the standalone workflow's in-memory scheduling model with SQLite-backed runnable stages and prove safe worker recovery before provider/render integration. Long-running work must renew ownership and all writes must be fenced so a stale worker cannot commit after its claim is lost, reclaimed, or cancelled.
 
 **Acceptance criteria:**
 - [ ] Only one worker can atomically claim a runnable stage; each claim has a unique current owner/attempt fencing token and a live lease cannot be stolen.
 - [ ] A worker can heartbeat/renew only the lease it currently owns. Long-running work renews before expiry; renewal fails closed if the claim token is no longer current.
-- [ ] Expired work becomes recoverable after simulated worker death, with bounded retry/backoff and no duplicate completion records.
-- [ ] Progress updates, terminal completion/failure, draft/result commits, and artifact registration/promotion APIs require the current claim token. After a stage is reclaimed, the previous owner cannot mutate state or publish a completed artifact/result even if it resumes later.
+- [ ] Expired work becomes recoverable after simulated worker death, with bounded automatic retry/backoff and no duplicate completion records.
+- [ ] Progress updates, terminal completion/failure, draft/result commits, and artifact registration/promotion APIs require the current claim token. After a stage is reclaimed or cancelled, the previous owner cannot mutate state or publish a completed artifact/result even if it resumes later.
+- [ ] Operator retry is a transactional control for the same failed logical stage: it is legal only when that stage is marked retryable and no replacement attempt is already queued/running; it requeues a new attempt without rerunning or duplicating completed upstream work.
+- [ ] Operator cancel is a transactional control for a queued/running durable stage: it marks the logical stage/project run cancelled, prevents new claims, invalidates/rotates any current claim token, and makes all later writes from the in-flight/stale owner fail closed. Best-effort abort of underlying work is allowed but correctness must not depend on immediate interruption.
+- [ ] Repeated retry/cancel requests are idempotent for the same current state and cannot create duplicate runnable jobs or revive cancelled work.
 - [ ] Graceful shutdown stops new claims while leaving current work either renewed until orderly completion or safely recoverable after lease expiry.
 
 **Verification:**
@@ -115,6 +121,8 @@ Rules:
 - [ ] Focused test with two competing claimant instances against the same temp DB
 - [ ] Heartbeat regression: worker A renews before expiry and worker B cannot reclaim while A's renewed lease is live
 - [ ] Stale-owner fencing regression: worker A holds a stage past its original lease, worker B recovers/reclaims it, then worker A attempts progress/finalization; A is rejected, only B can complete, and exactly one completion/result/artifact record survives
+- [ ] Retry regression: a failed retryable logical stage is atomically requeued once, completed upstream work stays untouched, and repeated retry while queued/running creates no duplicate active attempt
+- [ ] Cancel regression: cancel a running stage, prove no new claim is possible and the pre-cancel owner cannot renew, report progress, finalize, create a draft, or promote/register an artifact afterwards
 - [ ] `npm run lint`
 
 **Dependencies:** T03
@@ -159,7 +167,7 @@ Rules:
 
 ### Checkpoint A
 
-Before T06, run T01-T05 together. Do not continue if durable reopen/lease recovery, heartbeat/stale-owner fencing, SSRF redirect/DNS controls, DNS-rebinding/check-to-connect regression, or credential-bearing URL rejection is unproven.
+Before T06, run T01-T05 together. Do not continue if durable reopen/lease recovery, heartbeat/stale-owner fencing, retry/cancel controls, SSRF redirect/DNS controls, DNS-rebinding/check-to-connect regression, or credential-bearing URL rejection is unproven.
 
 ---
 
@@ -215,19 +223,25 @@ Before T06, run T01-T05 together. Do not continue if durable reopen/lease recove
 
 ---
 
-## T08: Deliver create -> research_ready as the first API vertical slice
+## T08: Deliver create -> research_ready plus generic retry/cancel API controls
 
-**Description:** Add the minimal project HTTP surface for create/list/read/research/status, backed by SQLite and durable stages, and persist normalized research evidence.
+**Description:** Add the minimal project HTTP surface for create/list/read/research/status, backed by SQLite and durable stages, persist normalized research evidence, and expose the generic operator retry/cancel controls defined by T04. These endpoints operate on the project's current logical durable stage and are reused by later generation/media/TTS/render stages.
 
 **Acceptance criteria:**
 - [ ] `POST /api/projects` persists creator/topic, optional public URLs/instructions, and returns a stable project ID.
 - [ ] Research progresses through the T04 durable worker mechanism to `research_ready`, persisting normalized evidence/source provenance and explicit unavailable-source records under the current fenced claim.
-- [ ] Restarting the app/worker between create/research/read does not lose project or research state; API errors use stable sanitized JSON with request ID.
+- [ ] `POST /api/projects/:id/retry` is legal only from `failed` when the recorded failed stage is retryable and no replacement attempt is already queued/running; it requeues the same logical stage transactionally and repeated retry is idempotent.
+- [ ] `POST /api/projects/:id/cancel` is legal only while a durable stage is queued/running; it marks the project run/stage cancelled, prevents new claims, invalidates the active fence, and returns without waiting for the underlying provider/download/render process to terminate.
+- [ ] A cancelled or pre-retry stale worker cannot later commit progress, draft/result state, or artifacts; already completed upstream work remains intact across retry.
+- [ ] Restarting the app/worker between create/research/read/control operations does not lose project or research state; API errors use stable sanitized JSON with request ID.
 
 **Verification:**
 - [ ] `node --test tests/integration/research-api.test.mjs`
 - [ ] Restart/reopen integration case using a temp DB/data directory
 - [ ] Research worker uses T04 lease renewal/fencing and cannot commit from a stale reclaimed claim
+- [ ] Retry API regression: fail research in a retryable state, call `/retry`, verify one replacement attempt is queued and the project can reach `research_ready`; repeated `/retry` while active does not duplicate the job
+- [ ] Cancel API regression: block an in-flight fake research provider, call `/cancel`, verify project/stage remains cancelled after the provider is released and the old worker cannot commit normalized evidence or transition state
+- [ ] Illegal retry/cancel states return stable transition errors and do not mutate jobs/projects
 - [ ] `npm run lint`
 
 **Dependencies:** T03, T04, T05, T07
@@ -245,7 +259,7 @@ Before T06, run T01-T05 together. Do not continue if durable reopen/lease recove
 
 ### Checkpoint B
 
-Using deterministic fake research, prove `creator/topic -> research_ready` survives restart and retains source provenance. Confirm research uses T04 claim renewal/fencing. Then run the optional live OpenAI research smoke if credentials are available.
+Using deterministic fake research, prove `creator/topic -> research_ready` survives restart and retains source provenance. Confirm research uses T04 claim renewal/fencing. Exercise one failed-retryable research stage through `/retry` and one blocked in-flight research stage through `/cancel`; cancellation must fence the old worker from any later commit. Then run the optional live OpenAI research smoke if credentials are available.
 
 ---
 
@@ -257,7 +271,8 @@ Using deterministic fake research, prove `creator/topic -> research_ready` survi
 - [ ] Output schema contains claims/source references, script, voiceover chunks, and supported Remotion scene plan; local Ajv validation runs after provider output.
 - [ ] Unknown source IDs, unsupported scene types, invalid timing/render bounds, malformed/refused/incomplete output are rejected with stable errors.
 - [ ] The provider call runs in the worker, not inside the HTTP request. The generation stage persists attempt count, retryable/non-retryable provider failure classification, lease/claim ownership, and bounded retry/backoff state.
-- [ ] Generation uses T04 heartbeat renewal and fencing. A validated draft is created transactionally/idempotently for the current generation job/claim; a stale/reclaimed worker cannot create or replace the review draft.
+- [ ] Generation uses T04 heartbeat renewal and fencing. A validated draft is created transactionally/idempotently for the current generation job/claim; a stale/reclaimed/cancelled worker cannot create or replace the review draft.
+- [ ] The generic T08 `/retry` and `/cancel` controls apply to generation without generation-specific duplicate job/draft behavior.
 - [ ] Normal CI uses deterministic fake generation; live OpenAI generation is manual/gated and API keys/full prompts/responses are not logged by default.
 
 **Verification:**
@@ -266,6 +281,7 @@ Using deterministic fake research, prove `creator/topic -> research_ready` survi
 - [ ] `node --test tests/integration/generation-worker.test.mjs`
 - [ ] Restart/lease-recovery regression: generation enters `generating`, the first worker is interrupted or loses its lease, a replacement worker recovers, and exactly one valid `review_required` draft is persisted
 - [ ] Stale-owner regression: after worker B reclaims generation, worker A cannot finalize/create a duplicate draft or overwrite B's result
+- [ ] Cancellation regression can reuse T08 API integration: after generation is cancelled, releasing a blocked provider cannot create a draft or transition to `review_required`
 - [ ] Optional live smoke with a controlled normalized evidence fixture produces a valid draft or a classified provider failure
 - [ ] `npm run lint`
 
@@ -289,6 +305,7 @@ Using deterministic fake research, prove `creator/topic -> research_ready` survi
 **Acceptance criteria:**
 - [ ] Generate action is legal only from the appropriate `research_ready` state, enqueues/requests the T09 durable generation stage, returns without waiting for the provider call, and exposes persisted `generating`/failure/retry status.
 - [ ] Only the T09 worker may transition a successful generation to `review_required` by committing the validated draft under the current fenced claim; HTTP retries do not create duplicate generation jobs/drafts for the same intended action.
+- [ ] Generic T08 `/retry` and `/cancel` semantics are reflected in generation status responses and UI-facing transition errors; no separate synchronous generation retry path is added.
 - [ ] Schema-valid draft edits persist without raw arbitrary JSON/file paths.
 - [ ] Approval rejects unknown source references and unverified claims unless each has an explicit stored override reason.
 - [ ] Approval creates immutable revision content/hash; approval-relevant edits afterwards return the project to `review_required` and render cannot start from an unapproved draft.
@@ -314,43 +331,51 @@ Using deterministic fake research, prove `creator/topic -> research_ready` survi
 
 ### Checkpoint C
 
-Prove `research_ready -> generating -> review_required -> approved` with deterministic generation. Kill/expire/reclaim an in-flight generation and confirm recovery produces exactly one draft; stale owners cannot finalize. Verify bad source references/unverified claims are blocked and post-approval edits invalidate approval.
+Prove `research_ready -> generating -> review_required -> approved` with deterministic generation. Kill/expire/reclaim an in-flight generation and confirm recovery produces exactly one draft; stale/reclaimed/cancelled owners cannot finalize. Verify bad source references/unverified claims are blocked and post-approval edits invalidate approval.
 
 ---
 
-## T11: Ingest approved media into trusted local artifacts
+## T11: Ingest approved media as a durable fenced worker stage
 
-**Description:** Download only approved remote media through T05, validate it, store it under project-owned paths, and persist provenance/hash/type/size for a render-ready local manifest.
+**Description:** Execute approved remote-media download/validation through the T04 durable worker mechanism. The stage transitions `approved -> media_ingest -> tts`, downloads only through T05, writes per-attempt temporary files under project-owned paths, and promotes/registers a render-ready local artifact set only from the current fenced claim.
 
 **Acceptance criteria:**
+- [ ] Media ingest is a durable claimed stage with persisted attempt/error/retry state, heartbeat renewal, restart/lease recovery, and T04 retry/cancel semantics; it is never performed as a long synchronous HTTP/service step.
 - [ ] Remote filenames cannot influence local paths; path traversal, unsupported type, oversize response, and interrupted download are rejected/cleaned safely.
-- [ ] Artifact records link the local file to source provenance and the immutable approved revision.
-- [ ] Re-running media ingest for the same approved revision is idempotent or atomically replaces an incomplete temporary artifact.
+- [ ] Every attempt writes to a unique temporary artifact area. Only the current fenced owner may atomically promote/register the completed artifact set, link it to source provenance and the immutable approved revision, transition the project to `tts`, and enqueue/enable the next TTS stage.
+- [ ] A stale/reclaimed/cancelled ingest owner cannot promote files, register artifacts, transition project state, or overwrite the current owner's artifact set after it resumes.
+- [ ] Re-running/retrying media ingest for the same approved revision is idempotent at the logical artifact-set level: incomplete attempt files are cleaned or ignored and exactly one authoritative artifact set survives.
 
 **Verification:**
 - [ ] `node --test tests/integration/media-ingest.test.mjs`
 - [ ] Focused malicious filename/MIME/oversize/interruption cases
+- [ ] Restart/lease-recovery regression: interrupt media ingest mid-download, reclaim with another worker, and finish with exactly one authoritative artifact set
+- [ ] Stale-owner regression: worker B reclaims after A loses ownership; A's later promotion/registration/state transition is rejected and cannot overwrite B's artifact set
+- [ ] Cancel regression: cancel a blocked/in-flight media ingest, release the downloader, and prove no artifact is promoted/registered and no TTS stage becomes runnable
+- [ ] Retry regression: a failed retryable ingest reuses the same approved revision/logical stage, does not duplicate already-valid artifacts, and reaches `tts` once
 - [ ] `npm run lint`
 
-**Dependencies:** T05, T10
+**Dependencies:** T04, T05, T10
 
 **Files likely touched:**
 - `storage/artifacts.mjs`
 - `app/services/ingest-media.mjs`
+- `worker/job-runner.mjs`
 - `tests/integration/media-ingest.test.mjs`
 
-**Estimated scope:** Medium (3 files)
+**Estimated scope:** Medium (4 files)
 
 ---
 
 ## T12: Execute TTS and render as durable fenced worker stages
 
-**Description:** Connect the durable worker to the existing Google TTS and Remotion renderer. Only immutable approved revisions with completed required media ingest can enter TTS/render. Long-running work renews its lease and final artifacts are published only by the current fenced claim owner.
+**Description:** Connect the durable worker to the existing Google TTS and Remotion renderer. Only immutable approved revisions with a T11 authoritative media artifact set can enter TTS/render. Long-running work renews its lease and final artifacts are published only by the current fenced claim owner.
 
 **Acceptance criteria:**
-- [ ] Worker records TTS/render stage progress and cannot start them from an unapproved revision or missing required media.
-- [ ] TTS/render attempts use T04 heartbeat renewal and claim-token fencing. Partial outputs are isolated under per-attempt temporary paths; a stale/reclaimed worker cannot update progress, mark completion, promote a temporary output, or register the final artifact.
+- [ ] Worker records TTS/render stage progress and cannot start them from an unapproved revision or missing/incomplete authoritative media ingest.
+- [ ] TTS/render attempts use T04 heartbeat renewal and claim-token fencing. Partial outputs are isolated under per-attempt temporary paths; a stale/reclaimed/cancelled worker cannot update progress, mark completion, promote a temporary output, or register the final artifact.
 - [ ] Interrupted attempts can be retried after lease expiry without duplicate completed artifact records, and stale attempts cannot overwrite the current owner's result.
+- [ ] Generic T08 `/retry` and `/cancel` controls apply to TTS/render: cancel prevents further claims and fences current output publication; retry only requeues the failed retryable logical stage and preserves completed upstream media/TTS work where applicable.
 - [ ] A project reaches `completed` only after the current owner has atomically promoted/registered an output MP4 that exists, is non-zero, and passes ffprobe duration/readability validation.
 
 **Verification:**
@@ -358,6 +383,7 @@ Prove `research_ready -> generating -> review_required -> approved` with determi
 - [ ] Existing `npm run render:smoke`
 - [ ] Simulated worker termination/lease recovery integration case
 - [ ] Stale render owner regression: worker B reclaims after A loses ownership; A's later finalization/promotion is rejected and exactly one completed artifact record/file is authoritative
+- [ ] Cancel a blocked render attempt and prove the stale/current worker cannot publish a final artifact after cancellation
 - [ ] `npm run lint`
 
 **Dependencies:** T04, T11
@@ -399,7 +425,7 @@ Prove `research_ready -> generating -> review_required -> approved` with determi
 
 ### Checkpoint D
 
-Run a controlled approved fixture through media ingest -> TTS -> render -> output validation. Confirm lease renewal/recovery/fencing, prove stale attempts cannot publish final artifacts, and confirm no normal dependency on arbitrary remote URLs/default disabled browser security.
+Run a controlled approved fixture through durable media ingest -> TTS -> render -> output validation. Confirm restart/lease recovery/fencing for media ingest and exactly one authoritative ingested artifact set; confirm TTS/render lease renewal/recovery/fencing and stale/cancelled attempts cannot publish final artifacts; confirm no normal dependency on arbitrary remote URLs/default disabled browser security.
 
 ---
 
@@ -409,12 +435,14 @@ Run a controlled approved fixture through media ingest -> TTS -> render -> outpu
 
 **Acceptance criteria:**
 - [ ] Operator can create a creator/topic project with optional public URLs/instructions and start/observe research.
-- [ ] Project list/status shows persisted stage, source/research progress, sanitized failure state, and retry/cancel controls only where legal.
+- [ ] Project list/status shows persisted stage, source/research progress, sanitized failure state, and retry/cancel controls only where legal according to T02/T08; controls surface stable transition errors instead of inventing client-side state changes.
+- [ ] Retry is offered only for an explicitly retryable failed stage; cancel is offered only while a durable stage is queued/running. Cancelled projects do not show a misleading resume action in the MVP.
 - [ ] Loading/empty/error/pending states and keyboard-usable semantic controls are present; build output is reproducible.
 
 **Verification:**
 - [ ] `npm run build`
 - [ ] `node --test tests/unit/web-status.test.mjs`
+- [ ] UI-state tests include retryable failure, non-retryable failure, cancellable active stage, and cancelled terminal state
 - [ ] `npm run lint`
 - [ ] Manual/available-browser keyboard walkthrough; if no browser tool exists, record runtime browser verification as pending
 
@@ -433,18 +461,18 @@ Run a controlled approved fixture through media ingest -> TTS -> render -> outpu
 
 ## T15: Add review, approval, render, and completed UI
 
-**Description:** Complete the internal operator workflow over the T10/T12 API: inspect evidence, edit the draft, approve, render, see progress/errors, and download the final MP4.
+**Description:** Complete the internal operator workflow over the T10/T12 API: inspect evidence, edit the draft, approve, render, see progress/errors, use legal retry/cancel controls, and download the final MP4.
 
 **Acceptance criteria:**
 - [ ] Review screen shows retained sources/evidence, conflicts/unverified claims, script, voiceover chunks, scene plan, and editable approval-relevant fields.
-- [ ] Approve/render actions respect server state; disabled/error UI makes invalid transitions clear rather than bypassing them.
+- [ ] Approve/render/retry/cancel actions respect server state; disabled/error UI makes invalid transitions clear rather than bypassing them.
 - [ ] Completed state exposes the final MP4 download and approved revision summary without requiring raw project JSON.
 
 **Verification:**
 - [ ] `npm run build`
 - [ ] `node --test tests/unit/web-review.test.mjs`
 - [ ] `npm run lint`
-- [ ] Manual/available-browser walkthrough of create -> review -> approve -> render -> download against deterministic backend fixtures
+- [ ] Manual/available-browser walkthrough of create -> review -> approve -> render -> download plus one legal retry/cancel control against deterministic backend fixtures
 
 **Dependencies:** T10, T12, T14
 
@@ -464,15 +492,19 @@ Run a controlled approved fixture through media ingest -> TTS -> render -> outpu
 
 **Acceptance criteria:**
 - [ ] `compose.yml` has no external n8n network dependency; app and worker share the durable DB/artifact volume, worker publishes no port, and app is private/loopback by default.
-- [ ] Normal operator flow `creator/topic -> research -> generate -> review -> approve -> render -> MP4` works using deterministic fake providers without n8n or manually supplied render JSON.
-- [ ] App restart preserves project state; research/generation/TTS/render use durable T04 claims with heartbeat renewal and stale-owner fencing; worker lease expiry/recovery resumes supported work without duplicate drafts/completions/artifacts.
+- [ ] Normal operator flow `creator/topic -> research -> generate -> review -> approve -> media ingest -> TTS -> render -> MP4` works using deterministic fake providers without n8n or manually supplied render JSON.
+- [ ] App restart preserves project state; research/generation/media-ingest/TTS/render use durable T04 claims with heartbeat renewal and stale-owner/cancellation fencing; worker lease expiry/recovery resumes supported work without duplicate drafts/completions/artifact sets.
+- [ ] Final deterministic E2E includes at least one explicit operator `/retry` path from a failed retryable stage to success and one `/cancel` path for an in-flight stage; cancelled/stale work must be unable to commit after the control action.
 - [ ] Pull-request CI gates the complete first-party standalone quality surface: aggregate `npm run lint`, `npm test`, frontend `npm run build`, main `docker compose config`, and deterministic standalone E2E. These checks must run without live/paid OpenAI calls.
 - [ ] Existing MCP-specific health/container verification is preserved or moved into an equivalent workflow; widening standalone CI must not silently delete existing MCP regression coverage.
 
 **Verification:**
 - [ ] `node --test tests/integration/standalone-e2e.test.mjs`
 - [ ] E2E includes generation restart/reclaim and stale-owner rejection with exactly one review draft
+- [ ] E2E includes media-ingest restart/reclaim and verifies exactly one authoritative ingested artifact set
 - [ ] E2E includes a long-running stage heartbeat/fencing scenario and verifies exactly one authoritative completion/artifact
+- [ ] E2E retry path: a deterministic stage reaches `failed` with `retryable=true`, `/retry` requeues only that stage, and the project later advances without duplicating upstream work
+- [ ] E2E cancel path: cancel a controllably blocked stage, release the old worker/provider, and verify the project remains cancelled with no late draft/artifact/state commit and no new stage claim
 - [ ] `docker compose config`
 - [ ] `npm test`
 - [ ] `npm run lint`
@@ -502,12 +534,14 @@ Do not declare the standalone MVP complete until all are observed:
 - [ ] Research produces persisted normalized evidence with provenance using the existing in-process normalizer.
 - [ ] Structured generation runs as a durable worker stage, persists provider attempt/failure state, survives restart/reclaim, and produces exactly one reviewable draft tied to stored sources.
 - [ ] Human approval produces an immutable approved revision.
-- [ ] Approved media is ingested safely before TTS/render.
+- [ ] Approved media ingest runs as a durable fenced worker stage, survives restart/reclaim, and produces exactly one authoritative local artifact set before TTS/render.
 - [ ] TTS/render run through durable fenced worker stages and produce one validated authoritative MP4 artifact.
-- [ ] App restart does not lose project state; long-running jobs renew leases, expired worker leases recover safely, and stale owners cannot commit after reclaim.
+- [ ] App restart does not lose project state; long-running jobs renew leases, expired worker leases recover safely, and stale/reclaimed/cancelled owners cannot commit after losing ownership.
+- [ ] `/retry` only requeues an explicitly retryable failed logical stage without duplicating completed upstream work or active attempts.
+- [ ] `/cancel` prevents new claims, invalidates current ownership, and guarantees no in-flight/stale worker can later publish state/drafts/artifacts; final deterministic E2E covers both retry and cancel.
 - [ ] T05 proves check-to-connect DNS safety: each outbound attempt connects only to an address resolved and validated for that attempt, including redirects; DNS-rebinding regression and credential-bearing URL rejection are green.
 - [ ] Normal render path does not depend on arbitrary remote media or default `disableWebSecurity`.
-- [ ] UI supports create/status/review/approve/render/download without raw JSON.
+- [ ] UI supports create/status/review/approve/render/download plus legal retry/cancel controls without raw JSON.
 - [ ] `compose.yml` no longer depends on n8n.
 - [ ] Aggregate `npm run lint` covers all first-party standalone JS/JSX/MJS surfaces and runs in PR CI.
 - [ ] PR CI gates aggregate lint/tests, frontend build, main Compose config, deterministic standalone E2E, and retained MCP regressions.
