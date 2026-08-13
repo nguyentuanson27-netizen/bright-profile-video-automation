@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "lint": "eslint lib/evidence mcp tests",
+    "lint": "eslint . --ext .js,.jsx,.mjs",
+    "audit:standalone": "node security/standalone-audit-policy.mjs",
     "mcp": "node mcp/server.mjs",
     "render:smoke": "node scripts/render-smoke.mjs",
     "render:project": "node scripts/render-project.mjs"
@@ -17,6 +18,8 @@
     "@remotion/renderer": "4.0.484",
     "@remotion/transitions": "4.0.484",
     "ajv": "8.20.0",
+    "better-sqlite3": "13.0.1",
+    "openai": "6.49.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "remotion": "4.0.484",

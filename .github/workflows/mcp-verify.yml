@@ -1,4 +1,4 @@
-name: MCP Evidence Verification
+name: Bright Profile Verification
 
 on:
   push:
@@ -22,7 +22,9 @@ jobs:
           package-manager-cache: false
       - name: Install frozen dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Audit production dependencies
+      - name: Standalone production dependency audit
+        run: npm run audit:standalone
+      - name: Audit MCP production dependencies
         run: |
           set +e
           npm audit --omit=dev --audit-level=high --json > "$RUNNER_TEMP/npm-audit.json"
@@ -35,10 +37,12 @@ jobs:
           fi
       - name: Unit and integration tests
         run: npm test
-      - name: Lint MCP scope
+      - name: Aggregate first-party lint
         run: npm run lint
       - name: Syntax checks
         run: |
+          node --check app/config.mjs
+          node --check security/standalone-audit-policy.mjs
           node --check mcp/server.mjs
           node --check lib/evidence/primitives.mjs
           node --check lib/evidence/normalize-evidence.mjs
