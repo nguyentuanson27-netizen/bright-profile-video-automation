@@ -48,6 +48,8 @@ jobs:
           node --check domain/schemas.mjs
           node --check storage/db.mjs
           node --check storage/jobs.mjs
+          node --check security/url-policy.mjs
+          node --check security/safe-fetch.mjs
           node --check worker/job-runner.mjs
           node --check worker.mjs
           node --check scripts/db-migrate.mjs
