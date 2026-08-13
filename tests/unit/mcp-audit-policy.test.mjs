@@ -30,14 +30,14 @@ const report = (vulnerabilities, critical = 0) => {
   };
 };
 
-test('audit policy accepts only the explicitly reviewed high advisory set', () => {
+test('audit policy fails closed when a remediated high advisory reappears', () => {
   const result = runPolicy(report({
     'fast-uri': {
       severity: 'high',
       via: [{url: 'https://github.com/advisories/GHSA-v2hh-gcrm-f6hx'}],
     },
   }), 1);
-  assert.equal(result.status, 0, result.stderr);
+  assert.notEqual(result.status, 0);
 });
 
 test('audit policy fails closed on a new high advisory', () => {
@@ -48,10 +48,9 @@ test('audit policy fails closed on a new high advisory', () => {
     },
   }), 1);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /unreviewed advisory/i);
 });
 
-test('audit policy fails closed when a reviewed high package has no parseable advisory identity', () => {
+test('audit policy fails closed on a high finding without advisory identity', () => {
   const result = runPolicy(report({
     'fast-uri': {
       severity: 'high',
@@ -59,7 +58,6 @@ test('audit policy fails closed when a reviewed high package has no parseable ad
     },
   }), 1);
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /advisory identity/i);
 });
 
 test('audit policy always fails on critical findings', () => {
