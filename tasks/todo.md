@@ -12,25 +12,33 @@ Rules:
 - do not reintroduce production/commercial/plugin/Codex scope;
 - verify current official docs before implementing version-sensitive OpenAI/library APIs;
 - `npm run lint` is the aggregate first-party lint gate for the standalone app, not an MCP-only check;
+- standalone dependency-risk evidence must match the actual app/worker root production runtime boundary; MCP-only reachability acceptance is not transferable evidence;
 - the project-wide Definition of Done still applies to every completed task.
 
 ---
 
-## T01: Establish standalone config, dependencies, and aggregate lint scripts
+## T01: Establish standalone config, dependencies, aggregate lint, and standalone production-audit scripts
 
-**Description:** Add the minimum runtime configuration and pinned dependencies required by the standalone architecture while preserving the existing MCP/render commands and tests. Expand the repository lint contract now so later standalone code cannot pass the documented quality gate without actually being linted.
+**Description:** Add the minimum runtime configuration and pinned dependencies required by the standalone architecture while preserving the existing MCP/render commands and tests. Expand the repository lint contract and add a standalone/root production dependency-audit contract so later app/worker code cannot pass quality/security gates using MCP-only coverage or reachability assumptions.
 
 **Acceptance criteria:**
 - [ ] Config validates data/database paths, worker lease/retry limits, fetch bounds, and OpenAI model/API settings without logging secrets.
 - [ ] `better-sqlite3` and the official `openai` SDK are pinned in the lockfile after current upstream compatibility/API verification; existing dependency versions are not opportunistically upgraded.
 - [ ] `npm run lint` is an aggregate first-party gate covering the standalone JavaScript/JSX/MJS surfaces as they are introduced: `app/`, `domain/`, `storage/`, `security/`, `providers/`, worker/server entrypoints, `web/`, `scripts/`, plus the existing `lib/evidence`, `mcp`, and `tests` scopes. New standalone first-party directories must not be silently excluded from lint.
 - [ ] Pull-request CI invokes the aggregate `npm run lint` gate; the workflow step/name is updated so verification is not represented as MCP-only lint coverage.
+- [ ] Add an aggregate standalone production dependency gate, intended as `npm run audit:standalone`, against the frozen root production graph actually installed/executed by the app + worker. It must validate the npm audit report/process status fail-closed before applying any reviewed allowlist.
+- [ ] `docs/security/mcp-dependency-audit.md` remains scoped only to the MCP container/request boundary. A separate standalone audit record documents the app/worker reachability assessment; existing reviewed highs are not automatically accepted merely because they are accepted for MCP.
+- [ ] Any existing high accepted for standalone has a fresh app/worker reachability assessment covering render/bundler, Ajv/schema usage, database/provider paths, and the actual root runtime graph. Any new critical, new high-severity package, new advisory under a reviewed package, malformed/incomplete audit report, or unexpected audit process status fails closed until explicitly reviewed.
+- [ ] Keeping the current MCP-specific gate for `Dockerfile.mcp` is allowed and preferred where its narrower reachability contract still applies; the standalone gate must be separate or generalized without weakening MCP verification.
 - [ ] Existing `npm test`, `npm run render:smoke`, and MCP verification behavior remains available.
 
 **Verification:**
 - [ ] `node --test tests/unit/config.test.mjs`
 - [ ] `npm test`
 - [ ] `npm run lint`
+- [ ] `npm run audit:standalone`
+- [ ] Audit verifier regression includes malformed report, unexpected status, new high/critical advisory, and reviewed-finding allowlist cases
+- [ ] Inspect the standalone audit record and confirm no acceptance relies solely on MCP-only unreachable-path reasoning
 - [ ] Inspect the PR workflow and confirm it invokes the aggregate `npm run lint`, not a narrower direct ESLint path
 - [ ] `npm run render:smoke`
 
@@ -42,26 +50,32 @@ Rules:
 - `app/config.mjs`
 - `tests/unit/config.test.mjs`
 - `eslint.config.js`
+- `scripts/verify-standalone-prod-audit.mjs`
+- `docs/security/standalone-dependency-audit.md`
 - `.github/workflows/mcp-verify.yml` or its standalone successor
 
-**Estimated scope:** Medium; split the workflow-only edit into the same focused PR if needed rather than weakening the lint contract.
+**Estimated scope:** Medium. Split lint/workflow or audit-document verifier changes into adjacent commits if needed rather than weakening either gate; all T01 acceptance remains required before later standalone implementation claims its quality/security foundation.
 
 ---
 
 ## T02: Define project lifecycle and shared JSON-schema contracts
 
-**Description:** Encode project states, stable application errors, source/evidence contracts, generation output, mutable draft, immutable approved revision, render bounds, and explicit failed/cancelled control semantics independently from HTTP/storage/provider code.
+**Description:** Encode project states, stable application errors, source/evidence contracts, generation output, mutable draft, immutable approved revision, render bounds, explicit failed/cancelled control semantics, and the post-approval edit/downstream-work race policy independently from HTTP/storage/provider code.
 
 **Acceptance criteria:**
 - [ ] Legal transitions cover `draft -> researching -> research_ready -> generating -> review_required -> approved -> media_ingest -> tts -> render_queued -> rendering -> completed`, with explicit failed/cancelled behavior.
 - [ ] `failed` records the failed durable stage plus retryability metadata; only an explicitly retryable failed stage may be operator-requeued.
-- [ ] `cancelled` is terminal for the current project run and is legal only from a queued/running durable stage; cancellation does not silently resume later work.
+- [ ] `cancelled` is terminal for the current project run and is legal from a queued/running durable stage; cancellation does not silently resume later work.
+- [ ] Repeated cancellation of the already-cancelled current run is defined as an idempotent no-op/read of the existing cancelled state, not an illegal transition and not a new state mutation.
 - [ ] Shared schemas reject unknown source references, unsupported scene types, invalid timelines, malformed evidence/drafts, and invalid render settings.
-- [ ] Approval-relevant edits have an explicit rule that invalidates prior approval.
+- [ ] Approval-relevant edits after approval follow one explicit race-safe rule: the edit may invalidate approval and return to `review_required` only while no downstream `media_ingest`/TTS/render logical stage record exists for the current approved revision. Once any such descendant stage exists, the edit is rejected with a stable downstream-work-started transition error and does not mutate approval/project state.
+- [ ] First downstream-stage creation and post-approval edit are mutually exclusive transactional outcomes: downstream creation succeeds only while the same approved revision is still current; an edit can win only before any descendant stage exists.
 
 **Verification:**
 - [ ] `node --test tests/unit/domain.test.mjs`
 - [ ] Include transition-table cases for retryable/non-retryable failure and legal/illegal cancellation states
+- [ ] Include repeated-cancel case proving already-cancelled returns the existing state/no-op contract
+- [ ] Include approval edit cases before and after descendant-stage existence, including the stable rejection error after downstream work starts
 - [ ] `npm run lint`
 
 **Dependencies:** T01
@@ -84,10 +98,12 @@ Rules:
 - [ ] A fresh temporary database migrates from version 0 using an explicit migration command.
 - [ ] Project/source/revision records survive process close/reopen and preserve foreign-key invariants.
 - [ ] Repository APIs cannot mutate an approved revision payload/hash after approval.
+- [ ] Storage queries needed to atomically check the current approved revision plus descendant durable-stage existence are available without relying on in-memory state.
 
 **Verification:**
 - [ ] `node --test tests/integration/storage.test.mjs`
 - [ ] `npm run db:migrate -- --database <temp-db>`
+- [ ] Repository regression proves approved-revision/current-descendant checks survive close/reopen
 - [ ] `npm run lint`
 
 **Dependencies:** T02
@@ -113,7 +129,8 @@ Rules:
 - [ ] Progress updates, terminal completion/failure, draft/result commits, and artifact registration/promotion APIs require the current claim token. After a stage is reclaimed or cancelled, the previous owner cannot mutate state or publish a completed artifact/result even if it resumes later.
 - [ ] Operator retry is a transactional control for the same failed logical stage: it is legal only when that stage is marked retryable and no replacement attempt is already queued/running; it requeues a new attempt without rerunning or duplicating completed upstream work.
 - [ ] Operator cancel is a transactional control for a queued/running durable stage: it marks the logical stage/project run cancelled, prevents new claims, invalidates/rotates any current claim token, and makes all later writes from the in-flight/stale owner fail closed. Best-effort abort of underlying work is allowed but correctness must not depend on immediate interruption.
-- [ ] Repeated retry/cancel requests are idempotent for the same current state and cannot create duplicate runnable jobs or revive cancelled work.
+- [ ] A second cancel against the already-cancelled current run is idempotent: return/read the existing cancelled state without creating jobs, rotating ownership again, or treating it as a conflicting transition. Cancel from other non-active/non-cancelled states remains an illegal transition.
+- [ ] Repeated retry while the replacement attempt is queued/running is idempotent and cannot create duplicate runnable jobs or revive cancelled work.
 - [ ] Graceful shutdown stops new claims while leaving current work either renewed until orderly completion or safely recoverable after lease expiry.
 
 **Verification:**
@@ -123,6 +140,7 @@ Rules:
 - [ ] Stale-owner fencing regression: worker A holds a stage past its original lease, worker B recovers/reclaims it, then worker A attempts progress/finalization; A is rejected, only B can complete, and exactly one completion/result/artifact record survives
 - [ ] Retry regression: a failed retryable logical stage is atomically requeued once, completed upstream work stays untouched, and repeated retry while queued/running creates no duplicate active attempt
 - [ ] Cancel regression: cancel a running stage, prove no new claim is possible and the pre-cancel owner cannot renew, report progress, finalize, create a draft, or promote/register an artifact afterwards
+- [ ] Repeated-cancel regression: a second cancel returns the same cancelled state/no-op and leaves attempts/fence/history unchanged
 - [ ] `npm run lint`
 
 **Dependencies:** T03
@@ -167,7 +185,7 @@ Rules:
 
 ### Checkpoint A
 
-Before T06, run T01-T05 together. Do not continue if durable reopen/lease recovery, heartbeat/stale-owner fencing, retry/cancel controls, SSRF redirect/DNS controls, DNS-rebinding/check-to-connect regression, or credential-bearing URL rejection is unproven.
+Before T06, run T01-T05 together. Do not continue if standalone/root production-audit fail-closed behavior, durable reopen/lease recovery, heartbeat/stale-owner fencing, retry/cancel controls, approval/downstream lifecycle contract, SSRF redirect/DNS controls, DNS-rebinding/check-to-connect regression, or credential-bearing URL rejection is unproven.
 
 ---
 
@@ -230,8 +248,9 @@ Before T06, run T01-T05 together. Do not continue if durable reopen/lease recove
 **Acceptance criteria:**
 - [ ] `POST /api/projects` persists creator/topic, optional public URLs/instructions, and returns a stable project ID.
 - [ ] Research progresses through the T04 durable worker mechanism to `research_ready`, persisting normalized evidence/source provenance and explicit unavailable-source records under the current fenced claim.
-- [ ] `POST /api/projects/:id/retry` is legal only from `failed` when the recorded failed stage is retryable and no replacement attempt is already queued/running; it requeues the same logical stage transactionally and repeated retry is idempotent.
-- [ ] `POST /api/projects/:id/cancel` is legal only while a durable stage is queued/running; it marks the project run/stage cancelled, prevents new claims, invalidates the active fence, and returns without waiting for the underlying provider/download/render process to terminate.
+- [ ] `POST /api/projects/:id/retry` is legal from `failed` when the recorded failed stage is retryable and no replacement attempt is already queued/running; it requeues the same logical stage transactionally. A repeated retry after the replacement is already queued/running returns the current active state/no-op rather than creating another attempt.
+- [ ] `POST /api/projects/:id/cancel` is legal while a durable stage is queued/running; it marks the project run/stage cancelled, prevents new claims, invalidates the active fence, and returns without waiting for the underlying provider/download/render process to terminate.
+- [ ] A repeated `/cancel` on the already-cancelled current run returns the existing cancelled representation/no-op with no state/job/fence mutation. Other states where there is no active or already-cancelled run return the stable illegal-transition error.
 - [ ] A cancelled or pre-retry stale worker cannot later commit progress, draft/result state, or artifacts; already completed upstream work remains intact across retry.
 - [ ] Restarting the app/worker between create/research/read/control operations does not lose project or research state; API errors use stable sanitized JSON with request ID.
 
@@ -241,7 +260,8 @@ Before T06, run T01-T05 together. Do not continue if durable reopen/lease recove
 - [ ] Research worker uses T04 lease renewal/fencing and cannot commit from a stale reclaimed claim
 - [ ] Retry API regression: fail research in a retryable state, call `/retry`, verify one replacement attempt is queued and the project can reach `research_ready`; repeated `/retry` while active does not duplicate the job
 - [ ] Cancel API regression: block an in-flight fake research provider, call `/cancel`, verify project/stage remains cancelled after the provider is released and the old worker cannot commit normalized evidence or transition state
-- [ ] Illegal retry/cancel states return stable transition errors and do not mutate jobs/projects
+- [ ] Repeated cancel regression: call `/cancel` again and verify the same cancelled state is returned with no job/fence/history mutation
+- [ ] Illegal retry/cancel states other than the explicitly idempotent active/already-cancelled cases return stable transition errors and do not mutate jobs/projects
 - [ ] `npm run lint`
 
 **Dependencies:** T03, T04, T05, T07
@@ -259,7 +279,7 @@ Before T06, run T01-T05 together. Do not continue if durable reopen/lease recove
 
 ### Checkpoint B
 
-Using deterministic fake research, prove `creator/topic -> research_ready` survives restart and retains source provenance. Confirm research uses T04 claim renewal/fencing. Exercise one failed-retryable research stage through `/retry` and one blocked in-flight research stage through `/cancel`; cancellation must fence the old worker from any later commit. Then run the optional live OpenAI research smoke if credentials are available.
+Using deterministic fake research, prove `creator/topic -> research_ready` survives restart and retains source provenance. Confirm research uses T04 claim renewal/fencing. Exercise one failed-retryable research stage through `/retry` and one blocked in-flight research stage through `/cancel`; cancellation must fence the old worker from any later commit and repeated cancel must be a no-op read of cancelled state. Then run the optional live OpenAI research smoke if credentials are available.
 
 ---
 
@@ -298,9 +318,9 @@ Using deterministic fake research, prove `creator/topic -> research_ready` survi
 
 ---
 
-## T10: Add generation enqueue/status, persisted draft editing, and immutable approval gate
+## T10: Add generation enqueue/status, persisted draft editing, immutable approval gate, and downstream-work edit race policy
 
-**Description:** Expose the HTTP/API side of durable generation plus persisted review/edit/approve actions. The API requests generation work but never owns the long provider call, then operates on the worker-produced `review_required` draft and creates an immutable approved revision snapshot for downstream work.
+**Description:** Expose the HTTP/API side of durable generation plus persisted review/edit/approve actions. The API requests generation work but never owns the long provider call, then operates on the worker-produced `review_required` draft and creates an immutable approved revision snapshot for downstream work. Approval-relevant edits and descendant durable-stage creation must obey the T02 transactional race policy.
 
 **Acceptance criteria:**
 - [ ] Generate action is legal only from the appropriate `research_ready` state, enqueues/requests the T09 durable generation stage, returns without waiting for the provider call, and exposes persisted `generating`/failure/retry status.
@@ -308,12 +328,19 @@ Using deterministic fake research, prove `creator/topic -> research_ready` survi
 - [ ] Generic T08 `/retry` and `/cancel` semantics are reflected in generation status responses and UI-facing transition errors; no separate synchronous generation retry path is added.
 - [ ] Schema-valid draft edits persist without raw arbitrary JSON/file paths.
 - [ ] Approval rejects unknown source references and unverified claims unless each has an explicit stored override reason.
-- [ ] Approval creates immutable revision content/hash; approval-relevant edits afterwards return the project to `review_required` and render cannot start from an unapproved draft.
+- [ ] Approval creates immutable revision content/hash.
+- [ ] If an approval-relevant edit is submitted after approval and no descendant `media_ingest`/TTS/render logical stage exists for that approved revision, the edit atomically invalidates approval and returns the project to `review_required`.
+- [ ] If any descendant durable-stage record already exists for that approved revision, the edit is rejected with the stable downstream-work-started transition error; it does not modify draft/approval/project state and does not cancel or alter downstream work.
+- [ ] Edit acceptance/rejection and first descendant-stage creation are transactionally serialized. A race test must prove only two valid outcomes: edit wins first and downstream creation then fails because approval is no longer current, or descendant creation wins first and the edit is rejected. No outcome may leave `review_required` while descendant artifact-producing work remains authorized.
+- [ ] Render/media start cannot use an unapproved or superseded revision.
 
 **Verification:**
 - [ ] `node --test tests/integration/approval-api.test.mjs`
 - [ ] Generate API regression: request returns/enqueues while a controllable fake provider is still blocked; the HTTP handler does not wait for provider completion
 - [ ] Retry/idempotency regression: repeated generate request while the durable generation job is already active does not create duplicate active jobs/drafts
+- [ ] Post-approval edit-before-downstream regression: edit is accepted, approval invalidates, project returns to `review_required`, and later descendant-stage creation from the old approval is rejected
+- [ ] Post-approval edit-after-downstream regression: once a descendant stage exists, edit returns the stable downstream-work-started error and does not mutate approval/project state
+- [ ] Concurrent race regression using the same temp DB: force edit and descendant-stage creation to contend and prove one of the two allowed serialized outcomes with no mixed state
 - [ ] Regression: render request from mutable/unapproved state returns a stable transition error
 - [ ] `npm run lint`
 
@@ -331,7 +358,7 @@ Using deterministic fake research, prove `creator/topic -> research_ready` survi
 
 ### Checkpoint C
 
-Prove `research_ready -> generating -> review_required -> approved` with deterministic generation. Kill/expire/reclaim an in-flight generation and confirm recovery produces exactly one draft; stale/reclaimed/cancelled owners cannot finalize. Verify bad source references/unverified claims are blocked and post-approval edits invalidate approval.
+Prove `research_ready -> generating -> review_required -> approved` with deterministic generation. Kill/expire/reclaim an in-flight generation and confirm recovery produces exactly one draft; stale/reclaimed/cancelled owners cannot finalize. Verify bad source references/unverified claims are blocked. Then prove the approval-edit/downstream-start invariant: an edit may invalidate approval only before downstream work exists; after descendant creation it is rejected, and a forced race never produces mixed invalidated-approval + authorized-descendant state.
 
 ---
 
@@ -340,6 +367,7 @@ Prove `research_ready -> generating -> review_required -> approved` with determi
 **Description:** Execute approved remote-media download/validation through the T04 durable worker mechanism. The stage transitions `approved -> media_ingest -> tts`, downloads only through T05, writes per-attempt temporary files under project-owned paths, and promotes/registers a render-ready local artifact set only from the current fenced claim.
 
 **Acceptance criteria:**
+- [ ] Creating the first `media_ingest` logical stage is transactional with the T10 edit policy: it succeeds only if the referenced approved revision is still the current approved revision and no competing approval-invalidating edit has already committed.
 - [ ] Media ingest is a durable claimed stage with persisted attempt/error/retry state, heartbeat renewal, restart/lease recovery, and T04 retry/cancel semantics; it is never performed as a long synchronous HTTP/service step.
 - [ ] Remote filenames cannot influence local paths; path traversal, unsupported type, oversize response, and interrupted download are rejected/cleaned safely.
 - [ ] Every attempt writes to a unique temporary artifact area. Only the current fenced owner may atomically promote/register the completed artifact set, link it to source provenance and the immutable approved revision, transition the project to `tts`, and enqueue/enable the next TTS stage.
@@ -349,6 +377,7 @@ Prove `research_ready -> generating -> review_required -> approved` with determi
 **Verification:**
 - [ ] `node --test tests/integration/media-ingest.test.mjs`
 - [ ] Focused malicious filename/MIME/oversize/interruption cases
+- [ ] Approval race integration case: if T10 edit invalidates approval first, media-ingest stage creation from the old revision fails; if media-ingest creation commits first, the edit is rejected and ingest remains authorized
 - [ ] Restart/lease-recovery regression: interrupt media ingest mid-download, reclaim with another worker, and finish with exactly one authoritative artifact set
 - [ ] Stale-owner regression: worker B reclaims after A loses ownership; A's later promotion/registration/state transition is rejected and cannot overwrite B's artifact set
 - [ ] Cancel regression: cancel a blocked/in-flight media ingest, release the downloader, and prove no artifact is promoted/registered and no TTS stage becomes runnable
@@ -372,7 +401,7 @@ Prove `research_ready -> generating -> review_required -> approved` with determi
 **Description:** Connect the durable worker to the existing Google TTS and Remotion renderer. Only immutable approved revisions with a T11 authoritative media artifact set can enter TTS/render. Long-running work renews its lease and final artifacts are published only by the current fenced claim owner.
 
 **Acceptance criteria:**
-- [ ] Worker records TTS/render stage progress and cannot start them from an unapproved revision or missing/incomplete authoritative media ingest.
+- [ ] Worker records TTS/render stage progress and cannot start them from an unapproved/superseded revision or missing/incomplete authoritative media ingest.
 - [ ] TTS/render attempts use T04 heartbeat renewal and claim-token fencing. Partial outputs are isolated under per-attempt temporary paths; a stale/reclaimed/cancelled worker cannot update progress, mark completion, promote a temporary output, or register the final artifact.
 - [ ] Interrupted attempts can be retried after lease expiry without duplicate completed artifact records, and stale attempts cannot overwrite the current owner's result.
 - [ ] Generic T08 `/retry` and `/cancel` controls apply to TTS/render: cancel prevents further claims and fences current output publication; retry only requeues the failed retryable logical stage and preserves completed upstream media/TTS work where applicable.
@@ -425,7 +454,7 @@ Prove `research_ready -> generating -> review_required -> approved` with determi
 
 ### Checkpoint D
 
-Run a controlled approved fixture through durable media ingest -> TTS -> render -> output validation. Confirm restart/lease recovery/fencing for media ingest and exactly one authoritative ingested artifact set; confirm TTS/render lease renewal/recovery/fencing and stale/cancelled attempts cannot publish final artifacts; confirm no normal dependency on arbitrary remote URLs/default disabled browser security.
+Run a controlled approved fixture through durable media ingest -> TTS -> render -> output validation. Confirm restart/lease recovery/fencing for media ingest and exactly one authoritative ingested artifact set; confirm TTS/render lease renewal/recovery/fencing and stale/cancelled attempts cannot publish final artifacts; confirm the approved revision cannot be invalidated by approval-relevant edits after descendant work exists; confirm no normal dependency on arbitrary remote URLs/default disabled browser security.
 
 ---
 
@@ -436,7 +465,7 @@ Run a controlled approved fixture through durable media ingest -> TTS -> render 
 **Acceptance criteria:**
 - [ ] Operator can create a creator/topic project with optional public URLs/instructions and start/observe research.
 - [ ] Project list/status shows persisted stage, source/research progress, sanitized failure state, and retry/cancel controls only where legal according to T02/T08; controls surface stable transition errors instead of inventing client-side state changes.
-- [ ] Retry is offered only for an explicitly retryable failed stage; cancel is offered only while a durable stage is queued/running. Cancelled projects do not show a misleading resume action in the MVP.
+- [ ] Retry is offered only for an explicitly retryable failed stage; cancel is offered only while a durable stage is queued/running. Cancelled projects do not show a misleading resume action in the MVP; repeated cancel is not surfaced as a new action.
 - [ ] Loading/empty/error/pending states and keyboard-usable semantic controls are present; build output is reproducible.
 
 **Verification:**
@@ -465,12 +494,14 @@ Run a controlled approved fixture through durable media ingest -> TTS -> render 
 
 **Acceptance criteria:**
 - [ ] Review screen shows retained sources/evidence, conflicts/unverified claims, script, voiceover chunks, scene plan, and editable approval-relevant fields.
+- [ ] After approval but before downstream work exists, approval-relevant fields may still be edited with clear warning that approval will be invalidated. Once descendant media/TTS/render work exists, those fields become read-only/disabled and the UI surfaces the server's downstream-work-started rule rather than attempting a forbidden edit.
 - [ ] Approve/render/retry/cancel actions respect server state; disabled/error UI makes invalid transitions clear rather than bypassing them.
 - [ ] Completed state exposes the final MP4 download and approved revision summary without requiring raw project JSON.
 
 **Verification:**
 - [ ] `npm run build`
 - [ ] `node --test tests/unit/web-review.test.mjs`
+- [ ] UI tests include post-approval editable-before-downstream and locked-after-downstream states
 - [ ] `npm run lint`
 - [ ] Manual/available-browser walkthrough of create -> review -> approve -> render -> download plus one legal retry/cancel control against deterministic backend fixtures
 
@@ -488,15 +519,17 @@ Run a controlled approved fixture through durable media ingest -> TTS -> render 
 
 ## T16: Remove n8n dependency and prove the standalone MVP end-to-end in CI
 
-**Description:** Replace the current n8n-network Compose topology with app + worker + persistent data, retire the legacy in-memory orchestration path from the normal flow, add deterministic end-to-end/restart verification, and make the standalone application checks required CI gates before the MVP can be considered complete.
+**Description:** Replace the current n8n-network Compose topology with app + worker + persistent data, retire the legacy in-memory orchestration path from the normal flow, add deterministic end-to-end/restart verification, and make the standalone application quality/security checks required CI gates before the MVP can be considered complete.
 
 **Acceptance criteria:**
 - [ ] `compose.yml` has no external n8n network dependency; app and worker share the durable DB/artifact volume, worker publishes no port, and app is private/loopback by default.
 - [ ] Normal operator flow `creator/topic -> research -> generate -> review -> approve -> media ingest -> TTS -> render -> MP4` works using deterministic fake providers without n8n or manually supplied render JSON.
 - [ ] App restart preserves project state; research/generation/media-ingest/TTS/render use durable T04 claims with heartbeat renewal and stale-owner/cancellation fencing; worker lease expiry/recovery resumes supported work without duplicate drafts/completions/artifact sets.
-- [ ] Final deterministic E2E includes at least one explicit operator `/retry` path from a failed retryable stage to success and one `/cancel` path for an in-flight stage; cancelled/stale work must be unable to commit after the control action.
-- [ ] Pull-request CI gates the complete first-party standalone quality surface: aggregate `npm run lint`, `npm test`, frontend `npm run build`, main `docker compose config`, and deterministic standalone E2E. These checks must run without live/paid OpenAI calls.
-- [ ] Existing MCP-specific health/container verification is preserved or moved into an equivalent workflow; widening standalone CI must not silently delete existing MCP regression coverage.
+- [ ] Final deterministic E2E includes at least one explicit operator `/retry` path from a failed retryable stage to success and one `/cancel` path for an in-flight stage; cancelled/stale work must be unable to commit after the control action, and repeated cancel must remain a no-op.
+- [ ] Final deterministic E2E includes the post-approval edit/downstream-start race policy: accepted edit before descendant creation invalidates approval and blocks later start from the old revision; after descendant creation the same edit is rejected; forced concurrent attempts never produce mixed invalidated-approval + authorized-descendant state.
+- [ ] Pull-request CI gates the complete first-party standalone quality/security surface: aggregate `npm run lint`, `npm test`, standalone/root `npm run audit:standalone`, frontend `npm run build`, main `docker compose config`, and deterministic standalone E2E. These checks must run without live/paid OpenAI calls.
+- [ ] The standalone audit gate evaluates the actual app/worker root production graph and has its own reviewed-finding evidence. CI must not treat `docs/security/mcp-dependency-audit.md` as standalone risk acceptance. New high/critical findings fail closed unless explicitly reviewed for standalone reachability.
+- [ ] Existing MCP-specific audit/health/container verification is preserved or moved into an equivalent workflow; widening standalone CI must not silently delete or weaken existing MCP regression coverage.
 
 **Verification:**
 - [ ] `node --test tests/integration/standalone-e2e.test.mjs`
@@ -504,14 +537,16 @@ Run a controlled approved fixture through durable media ingest -> TTS -> render 
 - [ ] E2E includes media-ingest restart/reclaim and verifies exactly one authoritative ingested artifact set
 - [ ] E2E includes a long-running stage heartbeat/fencing scenario and verifies exactly one authoritative completion/artifact
 - [ ] E2E retry path: a deterministic stage reaches `failed` with `retryable=true`, `/retry` requeues only that stage, and the project later advances without duplicating upstream work
-- [ ] E2E cancel path: cancel a controllably blocked stage, release the old worker/provider, and verify the project remains cancelled with no late draft/artifact/state commit and no new stage claim
+- [ ] E2E cancel path: cancel a controllably blocked stage, release the old worker/provider, verify the project remains cancelled with no late draft/artifact/state commit and no new stage claim, then repeat `/cancel` and verify no mutation
+- [ ] E2E approval race path: contend post-approval edit with first descendant-stage creation and verify exactly one allowed serialized result
 - [ ] `docker compose config`
 - [ ] `npm test`
 - [ ] `npm run lint`
+- [ ] `npm run audit:standalone`
 - [ ] `npm run build`
 - [ ] `npm run render:smoke`
-- [ ] Exact-head GitHub Actions run shows aggregate lint/tests, frontend build, main Compose config, deterministic standalone E2E, and retained MCP regression gates all green
-- [ ] Project-wide Definition of Done review
+- [ ] Exact-head GitHub Actions run shows aggregate lint/tests, standalone production audit, frontend build, main Compose config, deterministic standalone E2E, and retained MCP regression/audit gates all green
+- [ ] Project-wide Definition of Done review includes dependency-security evidence for the actual standalone app/worker boundary
 
 **Dependencies:** T03, T04, T12, T13, T15
 
@@ -522,7 +557,7 @@ Run a controlled approved fixture through durable media ingest -> TTS -> render 
 - `tests/integration/standalone-e2e.test.mjs`
 - `README.md`
 
-**Estimated scope:** Medium (5 files); if CI migration and Compose changes become independently risky, split them into adjacent commits/PRs while keeping both required before MVP completion.
+**Estimated scope:** Medium (5 files); if standalone audit/CI migration and Compose/E2E changes become independently risky, split them into adjacent commits/PRs while keeping all required before MVP completion.
 
 ---
 
@@ -534,17 +569,19 @@ Do not declare the standalone MVP complete until all are observed:
 - [ ] Research produces persisted normalized evidence with provenance using the existing in-process normalizer.
 - [ ] Structured generation runs as a durable worker stage, persists provider attempt/failure state, survives restart/reclaim, and produces exactly one reviewable draft tied to stored sources.
 - [ ] Human approval produces an immutable approved revision.
+- [ ] Approval-relevant edits can invalidate approval only before any descendant media/TTS/render stage exists; once descendant work exists they are rejected, and the race is transactionally proven with no mixed state.
 - [ ] Approved media ingest runs as a durable fenced worker stage, survives restart/reclaim, and produces exactly one authoritative local artifact set before TTS/render.
 - [ ] TTS/render run through durable fenced worker stages and produce one validated authoritative MP4 artifact.
 - [ ] App restart does not lose project state; long-running jobs renew leases, expired worker leases recover safely, and stale/reclaimed/cancelled owners cannot commit after losing ownership.
 - [ ] `/retry` only requeues an explicitly retryable failed logical stage without duplicating completed upstream work or active attempts.
-- [ ] `/cancel` prevents new claims, invalidates current ownership, and guarantees no in-flight/stale worker can later publish state/drafts/artifacts; final deterministic E2E covers both retry and cancel.
+- [ ] `/cancel` prevents new claims, invalidates current ownership, and guarantees no in-flight/stale worker can later publish state/drafts/artifacts; a repeated cancel returns the same cancelled state/no-op. Final deterministic E2E covers retry and cancel.
 - [ ] T05 proves check-to-connect DNS safety: each outbound attempt connects only to an address resolved and validated for that attempt, including redirects; DNS-rebinding regression and credential-bearing URL rejection are green.
 - [ ] Normal render path does not depend on arbitrary remote media or default `disableWebSecurity`.
-- [ ] UI supports create/status/review/approve/render/download plus legal retry/cancel controls without raw JSON.
+- [ ] UI supports create/status/review/approve/render/download plus legal retry/cancel controls and locks approval-relevant editing once downstream work exists, without raw JSON.
 - [ ] `compose.yml` no longer depends on n8n.
 - [ ] Aggregate `npm run lint` covers all first-party standalone JS/JSX/MJS surfaces and runs in PR CI.
-- [ ] PR CI gates aggregate lint/tests, frontend build, main Compose config, deterministic standalone E2E, and retained MCP regressions.
+- [ ] Standalone/root production dependency audit covers the actual app/worker runtime graph; any accepted high has fresh standalone reachability evidence, new high/critical findings fail closed, and MCP-only risk acceptance is not reused as standalone proof.
+- [ ] PR CI gates aggregate lint/tests, standalone production audit, frontend build, main Compose config, deterministic standalone E2E, and retained MCP regressions/audit.
 - [ ] Existing Bright Evidence MCP integration/tests remain green but are not a runtime dependency of the standalone app.
 - [ ] No production/commercial/Codex/desktop-marketplace work was added outside scope.
 - [ ] Project-wide Definition of Done passes.
