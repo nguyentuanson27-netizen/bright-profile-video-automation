@@ -99,18 +99,22 @@ Rules:
 
 ---
 
-## T04: Implement durable stage claims, leases, retries, and recovery
+## T04: Implement durable stage claims, lease renewal/fencing, retries, and recovery
 
-**Description:** Replace the standalone workflow's in-memory scheduling model with SQLite-backed runnable stages and prove safe worker recovery before provider/render integration.
+**Description:** Replace the standalone workflow's in-memory scheduling model with SQLite-backed runnable stages and prove safe worker recovery before provider/render integration. Long-running work must renew ownership and all writes must be fenced so a stale worker cannot commit after its claim is lost or reclaimed.
 
 **Acceptance criteria:**
-- [ ] Only one worker can atomically claim a runnable stage; a live lease cannot be stolen.
+- [ ] Only one worker can atomically claim a runnable stage; each claim has a unique current owner/attempt fencing token and a live lease cannot be stolen.
+- [ ] A worker can heartbeat/renew only the lease it currently owns. Long-running work renews before expiry; renewal fails closed if the claim token is no longer current.
 - [ ] Expired work becomes recoverable after simulated worker death, with bounded retry/backoff and no duplicate completion records.
-- [ ] Graceful shutdown stops new claims while leaving current work recoverable.
+- [ ] Progress updates, terminal completion/failure, draft/result commits, and artifact registration/promotion APIs require the current claim token. After a stage is reclaimed, the previous owner cannot mutate state or publish a completed artifact/result even if it resumes later.
+- [ ] Graceful shutdown stops new claims while leaving current work either renewed until orderly completion or safely recoverable after lease expiry.
 
 **Verification:**
 - [ ] `node --test tests/integration/jobs.test.mjs`
 - [ ] Focused test with two competing claimant instances against the same temp DB
+- [ ] Heartbeat regression: worker A renews before expiry and worker B cannot reclaim while A's renewed lease is live
+- [ ] Stale-owner fencing regression: worker A holds a stage past its original lease, worker B recovers/reclaims it, then worker A attempts progress/finalization; A is rejected, only B can complete, and exactly one completion/result/artifact record survives
 - [ ] `npm run lint`
 
 **Dependencies:** T03
@@ -155,7 +159,7 @@ Rules:
 
 ### Checkpoint A
 
-Before T06, run T01-T05 together. Do not continue if durable reopen/lease recovery, SSRF redirect/DNS controls, DNS-rebinding/check-to-connect regression, or credential-bearing URL rejection is unproven.
+Before T06, run T01-T05 together. Do not continue if durable reopen/lease recovery, heartbeat/stale-owner fencing, SSRF redirect/DNS controls, DNS-rebinding/check-to-connect regression, or credential-bearing URL rejection is unproven.
 
 ---
 
@@ -217,12 +221,13 @@ Before T06, run T01-T05 together. Do not continue if durable reopen/lease recove
 
 **Acceptance criteria:**
 - [ ] `POST /api/projects` persists creator/topic, optional public URLs/instructions, and returns a stable project ID.
-- [ ] Research progresses through durable state to `research_ready`, persisting normalized evidence/source provenance and explicit unavailable-source records.
-- [ ] Restarting the app between create/research/read does not lose project or research state; API errors use stable sanitized JSON with request ID.
+- [ ] Research progresses through the T04 durable worker mechanism to `research_ready`, persisting normalized evidence/source provenance and explicit unavailable-source records under the current fenced claim.
+- [ ] Restarting the app/worker between create/research/read does not lose project or research state; API errors use stable sanitized JSON with request ID.
 
 **Verification:**
 - [ ] `node --test tests/integration/research-api.test.mjs`
 - [ ] Restart/reopen integration case using a temp DB/data directory
+- [ ] Research worker uses T04 lease renewal/fencing and cannot commit from a stale reclaimed claim
 - [ ] `npm run lint`
 
 **Dependencies:** T03, T04, T05, T07
@@ -240,56 +245,66 @@ Before T06, run T01-T05 together. Do not continue if durable reopen/lease recove
 
 ### Checkpoint B
 
-Using deterministic fake research, prove `creator/topic -> research_ready` survives restart and retains source provenance. Then run the optional live OpenAI research smoke if credentials are available.
+Using deterministic fake research, prove `creator/topic -> research_ready` survives restart and retains source provenance. Confirm research uses T04 claim renewal/fencing. Then run the optional live OpenAI research smoke if credentials are available.
 
 ---
 
-## T09: Implement structured generation from normalized evidence
+## T09: Implement structured generation as a durable worker stage
 
-**Description:** Add the generation provider contract/service and OpenAI Responses Structured Outputs adapter. Generation receives normalized application-owned evidence/source records only and produces a locally validated draft.
+**Description:** Add the generation provider contract/service and OpenAI Responses Structured Outputs adapter, then execute generation through the T04 durable worker mechanism. Generation receives normalized application-owned evidence/source records only, transitions `research_ready -> generating -> review_required`, and commits a locally validated draft only from the current fenced claim.
 
 **Acceptance criteria:**
 - [ ] Output schema contains claims/source references, script, voiceover chunks, and supported Remotion scene plan; local Ajv validation runs after provider output.
 - [ ] Unknown source IDs, unsupported scene types, invalid timing/render bounds, malformed/refused/incomplete output are rejected with stable errors.
-- [ ] Provider calls have configured timeout/token/retry bounds and do not log full prompts/responses by default.
+- [ ] The provider call runs in the worker, not inside the HTTP request. The generation stage persists attempt count, retryable/non-retryable provider failure classification, lease/claim ownership, and bounded retry/backoff state.
+- [ ] Generation uses T04 heartbeat renewal and fencing. A validated draft is created transactionally/idempotently for the current generation job/claim; a stale/reclaimed worker cannot create or replace the review draft.
+- [ ] Normal CI uses deterministic fake generation; live OpenAI generation is manual/gated and API keys/full prompts/responses are not logged by default.
 
 **Verification:**
 - [ ] Re-check current official OpenAI Structured Outputs/Responses docs and pinned SDK API before implementation commit
 - [ ] `node --test tests/unit/openai-generation.test.mjs`
+- [ ] `node --test tests/integration/generation-worker.test.mjs`
+- [ ] Restart/lease-recovery regression: generation enters `generating`, the first worker is interrupted or loses its lease, a replacement worker recovers, and exactly one valid `review_required` draft is persisted
+- [ ] Stale-owner regression: after worker B reclaims generation, worker A cannot finalize/create a duplicate draft or overwrite B's result
 - [ ] Optional live smoke with a controlled normalized evidence fixture produces a valid draft or a classified provider failure
 - [ ] `npm run lint`
 
-**Dependencies:** T06, T08
+**Dependencies:** T04, T06, T08
 
 **Files likely touched:**
 - `providers/generation/index.mjs`
 - `providers/generation/openai.mjs`
 - `app/services/generate-project.mjs`
 - `tests/unit/openai-generation.test.mjs`
+- `tests/integration/generation-worker.test.mjs`
 
-**Estimated scope:** Medium (4 files)
+**Estimated scope:** Medium (5 files); if provider-adapter and worker integration cannot stay reviewable together, split into adjacent commits while keeping both inside T09 before T10 starts.
 
 ---
 
-## T10: Add persisted draft editing and immutable approval gate
+## T10: Add generation enqueue/status, persisted draft editing, and immutable approval gate
 
-**Description:** Persist the review-required draft, expose edit/approve actions, block unsafe approval, and create an immutable approved revision snapshot for downstream work.
+**Description:** Expose the HTTP/API side of durable generation plus persisted review/edit/approve actions. The API requests generation work but never owns the long provider call, then operates on the worker-produced `review_required` draft and creates an immutable approved revision snapshot for downstream work.
 
 **Acceptance criteria:**
-- [ ] Generate action creates a persisted `review_required` draft; schema-valid edits persist without raw arbitrary JSON/file paths.
+- [ ] Generate action is legal only from the appropriate `research_ready` state, enqueues/requests the T09 durable generation stage, returns without waiting for the provider call, and exposes persisted `generating`/failure/retry status.
+- [ ] Only the T09 worker may transition a successful generation to `review_required` by committing the validated draft under the current fenced claim; HTTP retries do not create duplicate generation jobs/drafts for the same intended action.
+- [ ] Schema-valid draft edits persist without raw arbitrary JSON/file paths.
 - [ ] Approval rejects unknown source references and unverified claims unless each has an explicit stored override reason.
 - [ ] Approval creates immutable revision content/hash; approval-relevant edits afterwards return the project to `review_required` and render cannot start from an unapproved draft.
 
 **Verification:**
 - [ ] `node --test tests/integration/approval-api.test.mjs`
+- [ ] Generate API regression: request returns/enqueues while a controllable fake provider is still blocked; the HTTP handler does not wait for provider completion
+- [ ] Retry/idempotency regression: repeated generate request while the durable generation job is already active does not create duplicate active jobs/drafts
 - [ ] Regression: render request from mutable/unapproved state returns a stable transition error
 - [ ] `npm run lint`
 
 **Dependencies:** T03, T09
 
 **Files likely touched:**
-- `app/services/approve-project.mjs`
 - `app/http/revisions.mjs`
+- `app/services/approve-project.mjs`
 - `storage/revisions.mjs`
 - `tests/integration/approval-api.test.mjs`
 
@@ -299,7 +314,7 @@ Using deterministic fake research, prove `creator/topic -> research_ready` survi
 
 ### Checkpoint C
 
-Prove `research_ready -> review_required -> approved` with deterministic generation. Verify bad source references/unverified claims are blocked and post-approval edits invalidate approval.
+Prove `research_ready -> generating -> review_required -> approved` with deterministic generation. Kill/expire/reclaim an in-flight generation and confirm recovery produces exactly one draft; stale owners cannot finalize. Verify bad source references/unverified claims are blocked and post-approval edits invalidate approval.
 
 ---
 
@@ -328,19 +343,21 @@ Prove `research_ready -> review_required -> approved` with deterministic generat
 
 ---
 
-## T12: Execute TTS and render as durable worker stages
+## T12: Execute TTS and render as durable fenced worker stages
 
-**Description:** Connect the durable worker to the existing Google TTS and Remotion renderer. Only immutable approved revisions with completed required media ingest can enter TTS/render.
+**Description:** Connect the durable worker to the existing Google TTS and Remotion renderer. Only immutable approved revisions with completed required media ingest can enter TTS/render. Long-running work renews its lease and final artifacts are published only by the current fenced claim owner.
 
 **Acceptance criteria:**
 - [ ] Worker records TTS/render stage progress and cannot start them from an unapproved revision or missing required media.
-- [ ] Interrupted attempts isolate partial output and can be retried after lease expiry without duplicate completed artifact records.
-- [ ] A project reaches `completed` only after output MP4 exists, is non-zero, and passes ffprobe duration/readability validation.
+- [ ] TTS/render attempts use T04 heartbeat renewal and claim-token fencing. Partial outputs are isolated under per-attempt temporary paths; a stale/reclaimed worker cannot update progress, mark completion, promote a temporary output, or register the final artifact.
+- [ ] Interrupted attempts can be retried after lease expiry without duplicate completed artifact records, and stale attempts cannot overwrite the current owner's result.
+- [ ] A project reaches `completed` only after the current owner has atomically promoted/registered an output MP4 that exists, is non-zero, and passes ffprobe duration/readability validation.
 
 **Verification:**
 - [ ] `node --test tests/integration/render-worker.test.mjs`
 - [ ] Existing `npm run render:smoke`
 - [ ] Simulated worker termination/lease recovery integration case
+- [ ] Stale render owner regression: worker B reclaims after A loses ownership; A's later finalization/promotion is rejected and exactly one completed artifact record/file is authoritative
 - [ ] `npm run lint`
 
 **Dependencies:** T04, T11
@@ -382,7 +399,7 @@ Prove `research_ready -> review_required -> approved` with deterministic generat
 
 ### Checkpoint D
 
-Run a controlled approved fixture through media ingest -> TTS -> render -> output validation. Confirm retry/recovery and no normal dependency on arbitrary remote URLs/default disabled browser security.
+Run a controlled approved fixture through media ingest -> TTS -> render -> output validation. Confirm lease renewal/recovery/fencing, prove stale attempts cannot publish final artifacts, and confirm no normal dependency on arbitrary remote URLs/default disabled browser security.
 
 ---
 
@@ -447,13 +464,15 @@ Run a controlled approved fixture through media ingest -> TTS -> render -> outpu
 
 **Acceptance criteria:**
 - [ ] `compose.yml` has no external n8n network dependency; app and worker share the durable DB/artifact volume, worker publishes no port, and app is private/loopback by default.
-- [ ] Normal operator flow `creator/topic -> research -> review -> approve -> render -> MP4` works using deterministic fake providers without n8n or manually supplied render JSON.
-- [ ] App restart preserves project state and worker lease expiry/recovery resumes supported work; existing MCP and render regression suites remain green.
+- [ ] Normal operator flow `creator/topic -> research -> generate -> review -> approve -> render -> MP4` works using deterministic fake providers without n8n or manually supplied render JSON.
+- [ ] App restart preserves project state; research/generation/TTS/render use durable T04 claims with heartbeat renewal and stale-owner fencing; worker lease expiry/recovery resumes supported work without duplicate drafts/completions/artifacts.
 - [ ] Pull-request CI gates the complete first-party standalone quality surface: aggregate `npm run lint`, `npm test`, frontend `npm run build`, main `docker compose config`, and deterministic standalone E2E. These checks must run without live/paid OpenAI calls.
 - [ ] Existing MCP-specific health/container verification is preserved or moved into an equivalent workflow; widening standalone CI must not silently delete existing MCP regression coverage.
 
 **Verification:**
 - [ ] `node --test tests/integration/standalone-e2e.test.mjs`
+- [ ] E2E includes generation restart/reclaim and stale-owner rejection with exactly one review draft
+- [ ] E2E includes a long-running stage heartbeat/fencing scenario and verifies exactly one authoritative completion/artifact
 - [ ] `docker compose config`
 - [ ] `npm test`
 - [ ] `npm run lint`
@@ -481,11 +500,11 @@ Do not declare the standalone MVP complete until all are observed:
 
 - [ ] An internal operator can start from creator/topic + optional public URLs.
 - [ ] Research produces persisted normalized evidence with provenance using the existing in-process normalizer.
-- [ ] Structured generation produces a reviewable draft tied to stored sources.
+- [ ] Structured generation runs as a durable worker stage, persists provider attempt/failure state, survives restart/reclaim, and produces exactly one reviewable draft tied to stored sources.
 - [ ] Human approval produces an immutable approved revision.
 - [ ] Approved media is ingested safely before TTS/render.
-- [ ] TTS/render run through durable worker stages and produce a validated MP4.
-- [ ] App restart does not lose project state; expired worker lease recovers safely.
+- [ ] TTS/render run through durable fenced worker stages and produce one validated authoritative MP4 artifact.
+- [ ] App restart does not lose project state; long-running jobs renew leases, expired worker leases recover safely, and stale owners cannot commit after reclaim.
 - [ ] T05 proves check-to-connect DNS safety: each outbound attempt connects only to an address resolved and validated for that attempt, including redirects; DNS-rebinding regression and credential-bearing URL rejection are green.
 - [ ] Normal render path does not depend on arbitrary remote media or default `disableWebSecurity`.
 - [ ] UI supports create/status/review/approve/render/download without raw JSON.
