@@ -17,6 +17,16 @@ const baseEnv = {
   OPENAI_API_KEY: 'sk-test-secret',
 };
 
+const upperBounds = {
+  WORKER_LEASE_MS: 10 * 60 * 1000,
+  WORKER_MAX_RETRIES: 10,
+  FETCH_TIMEOUT_MS: 2 * 60 * 1000,
+  FETCH_MAX_BYTES: 256 * 1024 * 1024,
+  FETCH_MAX_REDIRECTS: 10,
+  OPENAI_API_TIMEOUT_MS: 10 * 60 * 1000,
+  OPENAI_API_MAX_RETRIES: 5,
+};
+
 test('loadConfig normalizes standalone paths and numeric runtime bounds', () => {
   const config = loadConfig(baseEnv, {cwd: '/workspace'});
   assert.equal(config.dataDir, resolve('/workspace', './var/bright'));
@@ -37,6 +47,21 @@ test('loadConfig accepts an explicit database path relative to cwd', () => {
   assert.equal(config.databasePath, '/workspace/state/app.sqlite');
 });
 
+test('loadConfig accepts each configured numeric upper boundary', () => {
+  const config = loadConfig({
+    ...baseEnv,
+    ...Object.fromEntries(Object.entries(upperBounds).map(([key, value]) => [key, String(value)])),
+  });
+
+  assert.equal(config.worker.leaseMs, upperBounds.WORKER_LEASE_MS);
+  assert.equal(config.worker.maxRetries, upperBounds.WORKER_MAX_RETRIES);
+  assert.equal(config.fetch.timeoutMs, upperBounds.FETCH_TIMEOUT_MS);
+  assert.equal(config.fetch.maxBytes, upperBounds.FETCH_MAX_BYTES);
+  assert.equal(config.fetch.maxRedirects, upperBounds.FETCH_MAX_REDIRECTS);
+  assert.equal(config.openai.timeoutMs, upperBounds.OPENAI_API_TIMEOUT_MS);
+  assert.equal(config.openai.maxRetries, upperBounds.OPENAI_API_MAX_RETRIES);
+});
+
 test('loadConfig rejects malformed or unsafe runtime bounds', () => {
   for (const [key, value] of [
     ['WORKER_LEASE_MS', '0'],
@@ -48,6 +73,21 @@ test('loadConfig rejects malformed or unsafe runtime bounds', () => {
     ['OPENAI_API_MAX_RETRIES', '-1'],
   ]) {
     assert.throws(() => loadConfig({...baseEnv, [key]: value}), new RegExp(key));
+  }
+});
+
+test('loadConfig rejects values above every numeric upper boundary', () => {
+  for (const [key, max] of Object.entries(upperBounds)) {
+    assert.throws(() => loadConfig({...baseEnv, [key]: String(max + 1)}), new RegExp(key));
+  }
+});
+
+test('loadConfig rejects absurdly large safe integers for bounded settings', () => {
+  for (const key of Object.keys(upperBounds)) {
+    assert.throws(
+      () => loadConfig({...baseEnv, [key]: String(Number.MAX_SAFE_INTEGER)}),
+      new RegExp(key),
+    );
   }
 });
 
