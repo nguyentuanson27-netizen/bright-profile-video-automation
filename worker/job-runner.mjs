@@ -11,7 +11,7 @@ export const createJobRunner = ({
   workerId,
   handlers,
   leaseMs,
-  heartbeatMs = Math.max(250, Math.floor(leaseMs / 3)),
+  heartbeatMs = Math.max(1, Math.floor(leaseMs / 3)),
   now = Date.now,
 }) => {
   if (!jobs || typeof jobs.claimNext !== 'function') throw new TypeError('jobs store is required');

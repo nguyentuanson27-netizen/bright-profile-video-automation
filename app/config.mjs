@@ -52,7 +52,7 @@ export const loadConfig = (env = process.env, {cwd = process.cwd()} = {}) => {
     dataDir,
     databasePath,
     worker: Object.freeze({
-      leaseMs: readInteger(env, 'WORKER_LEASE_MS', DEFAULTS.workerLeaseMs, {min: 1, max: MAXIMUMS.workerLeaseMs}),
+      leaseMs: readInteger(env, 'WORKER_LEASE_MS', DEFAULTS.workerLeaseMs, {min: 2, max: MAXIMUMS.workerLeaseMs}),
       maxRetries: readInteger(env, 'WORKER_MAX_RETRIES', DEFAULTS.workerMaxRetries, {min: 0, max: MAXIMUMS.workerMaxRetries}),
     }),
     fetch: Object.freeze({
