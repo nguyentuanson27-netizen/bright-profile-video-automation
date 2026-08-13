@@ -47,6 +47,9 @@ jobs:
           node --check domain/project.mjs
           node --check domain/schemas.mjs
           node --check storage/db.mjs
+          node --check storage/jobs.mjs
+          node --check worker/job-runner.mjs
+          node --check worker.mjs
           node --check scripts/db-migrate.mjs
           node --check security/standalone-audit-policy.mjs
           node --check mcp/server.mjs
