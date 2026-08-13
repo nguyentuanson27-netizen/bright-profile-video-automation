@@ -78,6 +78,15 @@ CREATE TABLE stages (
 CREATE INDEX stages_runnable_idx ON stages(state, available_at_ms, lease_expires_at_ms, created_at);
 CREATE INDEX stages_project_revision_idx ON stages(project_id, revision_id, stage_type);
 
+CREATE TRIGGER stage_cancel_cancels_project
+AFTER UPDATE OF state ON stages
+WHEN NEW.state = 'cancelled' AND OLD.state <> 'cancelled'
+BEGIN
+  UPDATE projects
+  SET status = 'cancelled', updated_at = NEW.updated_at
+  WHERE id = NEW.project_id;
+END;
+
 CREATE TABLE attempts (
   id TEXT PRIMARY KEY,
   stage_id TEXT NOT NULL REFERENCES stages(id) ON DELETE CASCADE,
