@@ -312,7 +312,7 @@ research_ready
   -> immutable approved revision
 ```
 
-**Checkpoint C:** prove generation restart/expired-lease recovery produces exactly one persisted draft, stale generation owners cannot finalize after reclaim/cancel, unknown source references are rejected, unverified claims block approval unless explicitly overridden, and approval-relevant edit/downstream-stage creation races obey the T07 policy: edit wins before downstream work exists or is rejected after downstream work exists, with no mixed state.
+**Checkpoint C:** prove generation restart/expired-lease recovery produces exactly one persisted draft, stale generation owners cannot finalize after reclaim/cancel, unknown source references are rejected, unverified claims block approval unless explicitly overridden, and approval-relevant edit/downstream-stage creation races obey Architecture Decision 7 / T10: edit wins before downstream work exists or is rejected after downstream work exists, with no mixed state.
 
 ### Slice D — Approved revision to valid MP4
 
