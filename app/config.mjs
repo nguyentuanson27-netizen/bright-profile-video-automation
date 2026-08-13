@@ -13,12 +13,22 @@ const DEFAULTS = Object.freeze({
   openaiMaxRetries: 2,
 });
 
-const readInteger = (env, name, fallback, {min = 0} = {}) => {
+const MAXIMUMS = Object.freeze({
+  workerLeaseMs: 10 * 60 * 1000,
+  workerMaxRetries: 10,
+  fetchTimeoutMs: 2 * 60 * 1000,
+  fetchMaxBytes: 256 * 1024 * 1024,
+  fetchMaxRedirects: 10,
+  openaiTimeoutMs: 10 * 60 * 1000,
+  openaiMaxRetries: 5,
+});
+
+const readInteger = (env, name, fallback, {min = 0, max = Number.MAX_SAFE_INTEGER} = {}) => {
   const raw = env[name];
   if (raw === undefined || raw === '') return fallback;
   const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value < min) {
-    throw new Error(`${name} must be an integer >= ${min}`);
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new Error(`${name} must be an integer between ${min} and ${max}`);
   }
   return value;
 };
@@ -42,20 +52,20 @@ export const loadConfig = (env = process.env, {cwd = process.cwd()} = {}) => {
     dataDir,
     databasePath,
     worker: Object.freeze({
-      leaseMs: readInteger(env, 'WORKER_LEASE_MS', DEFAULTS.workerLeaseMs, {min: 1}),
-      maxRetries: readInteger(env, 'WORKER_MAX_RETRIES', DEFAULTS.workerMaxRetries, {min: 0}),
+      leaseMs: readInteger(env, 'WORKER_LEASE_MS', DEFAULTS.workerLeaseMs, {min: 1, max: MAXIMUMS.workerLeaseMs}),
+      maxRetries: readInteger(env, 'WORKER_MAX_RETRIES', DEFAULTS.workerMaxRetries, {min: 0, max: MAXIMUMS.workerMaxRetries}),
     }),
     fetch: Object.freeze({
-      timeoutMs: readInteger(env, 'FETCH_TIMEOUT_MS', DEFAULTS.fetchTimeoutMs, {min: 1}),
-      maxBytes: readInteger(env, 'FETCH_MAX_BYTES', DEFAULTS.fetchMaxBytes, {min: 1}),
-      maxRedirects: readInteger(env, 'FETCH_MAX_REDIRECTS', DEFAULTS.fetchMaxRedirects, {min: 0}),
+      timeoutMs: readInteger(env, 'FETCH_TIMEOUT_MS', DEFAULTS.fetchTimeoutMs, {min: 1, max: MAXIMUMS.fetchTimeoutMs}),
+      maxBytes: readInteger(env, 'FETCH_MAX_BYTES', DEFAULTS.fetchMaxBytes, {min: 1, max: MAXIMUMS.fetchMaxBytes}),
+      maxRedirects: readInteger(env, 'FETCH_MAX_REDIRECTS', DEFAULTS.fetchMaxRedirects, {min: 0, max: MAXIMUMS.fetchMaxRedirects}),
     }),
     openai: Object.freeze({
       apiKey: env.OPENAI_API_KEY?.trim() || undefined,
       researchModel: readRequiredText(env, 'OPENAI_RESEARCH_MODEL', DEFAULTS.openaiResearchModel),
       generationModel: readRequiredText(env, 'OPENAI_GENERATION_MODEL', DEFAULTS.openaiGenerationModel),
-      timeoutMs: readInteger(env, 'OPENAI_API_TIMEOUT_MS', DEFAULTS.openaiTimeoutMs, {min: 1}),
-      maxRetries: readInteger(env, 'OPENAI_API_MAX_RETRIES', DEFAULTS.openaiMaxRetries, {min: 0}),
+      timeoutMs: readInteger(env, 'OPENAI_API_TIMEOUT_MS', DEFAULTS.openaiTimeoutMs, {min: 1, max: MAXIMUMS.openaiTimeoutMs}),
+      maxRetries: readInteger(env, 'OPENAI_API_MAX_RETRIES', DEFAULTS.openaiMaxRetries, {min: 0, max: MAXIMUMS.openaiMaxRetries}),
     }),
   });
 };
