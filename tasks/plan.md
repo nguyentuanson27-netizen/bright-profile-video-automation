@@ -84,7 +84,7 @@ Required properties:
 - parameterized statements;
 - short transactions;
 - immutable approved revisions;
-- durable jobs/stages with lease expiry and bounded retries.
+- durable jobs/stages with lease expiry, heartbeat renewal, bounded retries, and per-claim fencing tokens so stale owners cannot commit after reclaim.
 
 Large source/media/render blobs stay on the filesystem, not in SQLite.
 
@@ -123,6 +123,8 @@ Generation receives only application-owned normalized evidence/source records an
 
 Returned claims/script/voiceover/scene plan must be validated locally with the shared Ajv schema before persistence.
 
+Generation itself is a durable worker stage. The HTTP generate action only enqueues/requests the stage; it does not own the long provider call. The durable transition is `research_ready -> generating -> review_required`, with provider attempts/retryable failures persisted and the final validated draft committed only by the current fenced stage owner.
+
 ### 6. Application and worker are separate processes over the same durable store
 
 Use one HTTP/app process and one worker process.
@@ -132,13 +134,16 @@ The app:
 - serves the internal operator UI and API;
 - validates input and persists state;
 - enqueues durable stages;
-- never blocks an HTTP request on research, TTS, or rendering.
+- never blocks an HTTP request on research, generation, TTS, or rendering.
 
 The worker:
 
-- atomically claims runnable stages;
+- atomically claims runnable stages using a unique claim/attempt token;
+- renews/heartbeats leases while long-running work is still owned;
 - records attempt/lease/error state;
-- recovers expired work after restart;
+- fences progress, terminal state, draft creation, and artifact registration/promotion against the current claim token so a stale worker cannot commit after lease loss/reclaim;
+- recovers expired work after restart or worker loss;
+- runs research, generation, TTS, and render through the same durable stage mechanism;
 - runs render concurrency 1 by default;
 - consumes immutable approved revisions for media/TTS/render work.
 
@@ -203,7 +208,7 @@ T01 Config/dependency foundation
          |
          +--> T03 SQLite persistence
          |      |
-         |      +--> T04 Durable jobs/leases
+         |      +--> T04 Durable jobs/leases/renewal/fencing
          |
          +--> T05 Safe URL fetch boundary
                 |
@@ -213,7 +218,7 @@ T01 Config/dependency foundation
                               |
 T03 + T04 + T05 + T07 ------> T08 Research API vertical slice
                                       |
-                                      +--> T09 Structured generation adapter/service
+                                      +--> T09 Durable structured generation stage
                                              |
                                              +--> T10 Review + approval API
                                                     |
@@ -240,9 +245,10 @@ Prove the hardest invariants first:
 - project lifecycle/contracts are explicit;
 - state survives process reopen;
 - job claims recover after simulated worker failure;
+- long-running claims renew leases and stale owners are fenced from progress/final/artifact commits after reclaim;
 - every future remote fetch goes through one SSRF-safe boundary whose validated DNS result is the address actually used to connect.
 
-**Checkpoint A:** stop if SQLite persistence/lease recovery, safe-fetch redirect/DNS policy, DNS-rebinding/check-to-connect regression, or credential-bearing URL rejection is red.
+**Checkpoint A:** stop if SQLite persistence/lease recovery, heartbeat/fencing stale-owner regression, safe-fetch redirect/DNS policy, DNS-rebinding/check-to-connect regression, or credential-bearing URL rejection is red.
 
 ### Slice B — Creator/topic to normalized research
 
@@ -269,14 +275,16 @@ Deliver:
 
 ```text
 research_ready
-  -> structured generation
-  -> review_required draft
+  -> enqueue generation
+  -> generating
+  -> durable worker + structured generation provider
+  -> persisted review_required draft
   -> edit
   -> explicit approval
   -> immutable approved revision
 ```
 
-**Checkpoint C:** prove unknown source references are rejected, unverified claims block approval unless explicitly overridden, and post-approval edits invalidate approval.
+**Checkpoint C:** prove generation restart/expired-lease recovery produces exactly one persisted draft, stale generation owners cannot finalize after reclaim, unknown source references are rejected, unverified claims block approval unless explicitly overridden, and post-approval edits invalidate approval.
 
 ### Slice D — Approved revision to valid MP4
 
@@ -292,7 +300,7 @@ approved revision
   -> validated output.mp4
 ```
 
-**Checkpoint D:** render a controlled approved fixture using only trusted local/application-controlled assets; demonstrate retry/recovery and remove default `disableWebSecurity` dependency.
+**Checkpoint D:** render a controlled approved fixture using only trusted local/application-controlled assets; demonstrate lease renewal/recovery/fencing, prevent stale attempts from promoting/registering final artifacts, and remove default `disableWebSecurity` dependency.
 
 ### Slice E — Operator experience and n8n removal
 
@@ -309,7 +317,7 @@ browser
   -> download MP4
 ```
 
-**Final checkpoint:** deterministic E2E with fake providers, real local render smoke, app restart persistence, worker lease recovery, n8n-free Compose, and project-wide Definition of Done.
+**Final checkpoint:** deterministic E2E with fake providers, real local render smoke, app restart persistence, worker lease renewal/recovery/fencing, n8n-free Compose, and project-wide Definition of Done.
 
 ## Task summary
 
@@ -318,15 +326,15 @@ browser
 | T01 | Config/tooling/dependencies ready for standalone build | None | M |
 | T02 | Domain lifecycle and shared schemas | T01 | M |
 | T03 | SQLite migrations and repositories | T02 | M |
-| T04 | Durable jobs, leases, retry/recovery | T03 | M |
+| T04 | Durable jobs, lease renewal/fencing, retry/recovery | T03 | M |
 | T05 | Canonical SSRF-safe fetch boundary | T02 | M |
 | T06 | Research service, fakes, direct evidence-normalizer reuse | T02,T05 | M |
 | T07 | OpenAI Responses web-search adapter | T06 | M |
 | T08 | Create/research API vertical slice | T03,T04,T05,T07 | M |
-| T09 | Structured generation adapter/service | T06,T08 | M |
+| T09 | Durable structured generation worker stage | T04,T06,T08 | M |
 | T10 | Draft review/edit/approval API | T03,T09 | M |
 | T11 | Approved media ingest/artifact records | T05,T10 | M |
-| T12 | Durable TTS/render worker | T04,T11 | M |
+| T12 | Durable TTS/render worker with fenced artifact finalization | T04,T11 | M |
 | T13 | Trusted-local Remotion boundary | T11,T12 | M |
 | T14 | React/Vite create/status UI | T08 | M |
 | T15 | Review/approve/render/download UI | T10,T12,T14 | M |
@@ -355,7 +363,7 @@ GET    /health/live
 GET    /health/ready
 ```
 
-State-changing endpoints validate JSON schemas and lifecycle transitions. Errors return stable sanitized JSON with a request ID. No endpoint accepts arbitrary local filesystem paths, shell commands, provider tool selection, or unvalidated remote URLs.
+Long-running state-changing actions such as research, generation, TTS, and render enqueue/transition durable stages and return without owning the provider/render work in the HTTP request. State-changing endpoints validate JSON schemas and lifecycle transitions. Errors return stable sanitized JSON with a request ID. No endpoint accepts arbitrary local filesystem paths, shell commands, provider tool selection, or unvalidated remote URLs.
 
 ## Storage direction
 
@@ -379,6 +387,8 @@ Key invariants:
 - project/source/job state survives reopen;
 - approved revision content/hash is immutable;
 - jobs refer to project and approved revision where required;
+- each runnable claim has a current owner/attempt fencing token and lease expiry;
+- lease renewal, progress, completion, draft creation, and artifact registration/promotion require the current fencing token; a reclaimed/stale owner is rejected even if it later resumes;
 - source IDs are application-owned;
 - artifacts store safe relative paths and provenance;
 - secrets/provider tokens are never stored in project records.
@@ -407,6 +417,8 @@ Final runtime evidence must additionally cover:
 - one gated live OpenAI research smoke and one gated structured-generation smoke when credentials are available;
 - app restart without project-state loss;
 - simulated worker death and expired-lease recovery;
+- lease heartbeat/renewal for long-running work plus a stale-owner fencing regression where worker B reclaims a stage and worker A is then unable to commit progress/final state/artifacts;
+- generation restart/lease recovery from `generating` to exactly one `review_required` draft with persisted provider attempt/failure state and no duplicate draft/revision creation;
 - SSRF rejection for direct private targets, redirect-to-private targets, DNS rebinding/check-to-connect changes, and credential-bearing URLs;
 - deterministic proof that a blocked address is never connected to after a different address was validated for the same attempt;
 - approved-media path traversal/type/size failures;
@@ -427,19 +439,19 @@ Mitigation: web-search discovery, operator URLs, explicit unavailable status, al
 
 Research/generation can vary or fail due to rate limits, incomplete responses, pricing/model changes, or malformed output.
 
-Mitigation: narrow provider interfaces, deterministic fakes, strict local schemas, explicit model config, bounded retries/timeouts/tokens, and manual live smoke outside normal CI.
+Mitigation: narrow provider interfaces, deterministic fakes, strict local schemas, explicit model config, bounded retries/timeouts/tokens, durable attempt state, lease renewal/fencing, and manual live smoke outside normal CI.
 
 ### SQLite contention/recovery
 
 App and worker share one DB.
 
-Mitigation: short transactions, WAL, busy timeout, indexed runnable-job queries, one render worker, lease-based claims. Do not introduce Redis/PostgreSQL unless measured evidence shows SQLite cannot meet this single-host internal use case.
+Mitigation: short transactions, WAL, busy timeout, indexed runnable-job queries, one render worker, lease-based claims with heartbeat renewal and fencing tokens on all state/artifact commits. Do not introduce Redis/PostgreSQL unless measured evidence shows SQLite cannot meet this single-host internal use case.
 
 ### Renderer/resource pressure
 
 Chromium/FFmpeg/media can consume CPU/RAM/disk.
 
-Mitigation: render concurrency 1, current duration/scene bounds, bounded media ingest, partial-output isolation, and explicit output validation. Broader production capacity planning is out of scope.
+Mitigation: render concurrency 1, current duration/scene bounds, bounded media ingest, per-attempt partial-output isolation, fenced final artifact promotion, and explicit output validation. Broader production capacity planning is out of scope.
 
 ### Scope creep back into plugin/deployment work
 
@@ -457,6 +469,7 @@ Safe after contracts stabilize:
 Must remain sequential:
 
 - migrations before repositories/jobs that require them;
+- durable generation completion before review/approval;
 - approval before media/TTS/render;
 - media ingest before trusted-local renderer hardening can be considered complete;
 - T16 only after the full application path exists.
@@ -471,7 +484,8 @@ The standalone internal MVP is complete only when task acceptance criteria and t
 - app/worker/SQLite/artifact/provider/render paths integrate correctly;
 - docs describe current truth;
 - external input/model output/secrets/artifact boundaries are reviewed;
-- restart/retry behavior is demonstrated;
+- restart/retry behavior is demonstrated, including long-stage lease renewal and stale-owner fencing after reclaim;
+- generation is demonstrably durable across worker/process restart without duplicate drafts;
 - no n8n dependency or manual project JSON is required for the normal operator flow.
 
 ## Human gate
