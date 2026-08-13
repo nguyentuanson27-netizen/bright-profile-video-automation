@@ -11,23 +11,27 @@ Rules:
 - reuse existing Remotion/TTS/evidence-normalizer code instead of rewriting it;
 - do not reintroduce production/commercial/plugin/Codex scope;
 - verify current official docs before implementing version-sensitive OpenAI/library APIs;
+- `npm run lint` is the aggregate first-party lint gate for the standalone app, not an MCP-only check;
 - the project-wide Definition of Done still applies to every completed task.
 
 ---
 
-## T01: Establish standalone config, dependencies, and scripts
+## T01: Establish standalone config, dependencies, and aggregate lint scripts
 
-**Description:** Add the minimum runtime configuration and pinned dependencies required by the standalone architecture while preserving the existing MCP/render commands and tests.
+**Description:** Add the minimum runtime configuration and pinned dependencies required by the standalone architecture while preserving the existing MCP/render commands and tests. Expand the repository lint contract now so later standalone code cannot pass the documented quality gate without actually being linted.
 
 **Acceptance criteria:**
 - [ ] Config validates data/database paths, worker lease/retry limits, fetch bounds, and OpenAI model/API settings without logging secrets.
 - [ ] `better-sqlite3` and the official `openai` SDK are pinned in the lockfile after current upstream compatibility/API verification; existing dependency versions are not opportunistically upgraded.
-- [ ] Existing `npm test`, `npm run lint`, `npm run render:smoke`, and MCP verification behavior remains available.
+- [ ] `npm run lint` is an aggregate first-party gate covering the standalone JavaScript/JSX/MJS surfaces as they are introduced: `app/`, `domain/`, `storage/`, `security/`, `providers/`, worker/server entrypoints, `web/`, `scripts/`, plus the existing `lib/evidence`, `mcp`, and `tests` scopes. New standalone first-party directories must not be silently excluded from lint.
+- [ ] Pull-request CI invokes the aggregate `npm run lint` gate; the workflow step/name is updated so verification is not represented as MCP-only lint coverage.
+- [ ] Existing `npm test`, `npm run render:smoke`, and MCP verification behavior remains available.
 
 **Verification:**
 - [ ] `node --test tests/unit/config.test.mjs`
 - [ ] `npm test`
 - [ ] `npm run lint`
+- [ ] Inspect the PR workflow and confirm it invokes the aggregate `npm run lint`, not a narrower direct ESLint path
 - [ ] `npm run render:smoke`
 
 **Dependencies:** None
@@ -38,8 +42,9 @@ Rules:
 - `app/config.mjs`
 - `tests/unit/config.test.mjs`
 - `eslint.config.js`
+- `.github/workflows/mcp-verify.yml` or its standalone successor
 
-**Estimated scope:** Medium (5 files)
+**Estimated scope:** Medium; split the workflow-only edit into the same focused PR if needed rather than weakening the lint contract.
 
 ---
 
@@ -190,6 +195,7 @@ Before T06, run T01-T05 together. Do not continue if durable reopen/lease recove
 - [ ] Re-check current official OpenAI Responses/web-search docs and pinned SDK API before implementation commit
 - [ ] `node --test tests/unit/openai-research.test.mjs`
 - [ ] Optional live smoke with credentials returns at least one source candidate or a classified provider failure
+- [ ] `npm run lint`
 
 **Dependencies:** T06
 
@@ -248,6 +254,7 @@ Using deterministic fake research, prove `creator/topic -> research_ready` survi
 - [ ] Re-check current official OpenAI Structured Outputs/Responses docs and pinned SDK API before implementation commit
 - [ ] `node --test tests/unit/openai-generation.test.mjs`
 - [ ] Optional live smoke with a controlled normalized evidence fixture produces a valid draft or a classified provider failure
+- [ ] `npm run lint`
 
 **Dependencies:** T06, T08
 
@@ -331,6 +338,7 @@ Prove `research_ready -> review_required -> approved` with deterministic generat
 - [ ] `node --test tests/integration/render-worker.test.mjs`
 - [ ] Existing `npm run render:smoke`
 - [ ] Simulated worker termination/lease recovery integration case
+- [ ] `npm run lint`
 
 **Dependencies:** T04, T11
 
@@ -387,6 +395,7 @@ Run a controlled approved fixture through media ingest -> TTS -> render -> outpu
 **Verification:**
 - [ ] `npm run build`
 - [ ] `node --test tests/unit/web-status.test.mjs`
+- [ ] `npm run lint`
 - [ ] Manual/available-browser keyboard walkthrough; if no browser tool exists, record runtime browser verification as pending
 
 **Dependencies:** T08
@@ -414,6 +423,7 @@ Run a controlled approved fixture through media ingest -> TTS -> render -> outpu
 **Verification:**
 - [ ] `npm run build`
 - [ ] `node --test tests/unit/web-review.test.mjs`
+- [ ] `npm run lint`
 - [ ] Manual/available-browser walkthrough of create -> review -> approve -> render -> download against deterministic backend fixtures
 
 **Dependencies:** T10, T12, T14
@@ -428,31 +438,37 @@ Run a controlled approved fixture through media ingest -> TTS -> render -> outpu
 
 ---
 
-## T16: Remove n8n dependency and prove the standalone MVP end-to-end
+## T16: Remove n8n dependency and prove the standalone MVP end-to-end in CI
 
-**Description:** Replace the current n8n-network Compose topology with app + worker + persistent data, retire the legacy in-memory orchestration path from the normal flow, and add deterministic end-to-end/restart verification.
+**Description:** Replace the current n8n-network Compose topology with app + worker + persistent data, retire the legacy in-memory orchestration path from the normal flow, add deterministic end-to-end/restart verification, and make the standalone application checks required CI gates before the MVP can be considered complete.
 
 **Acceptance criteria:**
 - [ ] `compose.yml` has no external n8n network dependency; app and worker share the durable DB/artifact volume, worker publishes no port, and app is private/loopback by default.
 - [ ] Normal operator flow `creator/topic -> research -> review -> approve -> render -> MP4` works using deterministic fake providers without n8n or manually supplied render JSON.
 - [ ] App restart preserves project state and worker lease expiry/recovery resumes supported work; existing MCP and render regression suites remain green.
+- [ ] Pull-request CI gates the complete first-party standalone quality surface: aggregate `npm run lint`, `npm test`, frontend `npm run build`, main `docker compose config`, and deterministic standalone E2E. These checks must run without live/paid OpenAI calls.
+- [ ] Existing MCP-specific health/container verification is preserved or moved into an equivalent workflow; widening standalone CI must not silently delete existing MCP regression coverage.
 
 **Verification:**
 - [ ] `node --test tests/integration/standalone-e2e.test.mjs`
 - [ ] `docker compose config`
-- [ ] `npm test && npm run lint && npm run build && npm run render:smoke`
+- [ ] `npm test`
+- [ ] `npm run lint`
+- [ ] `npm run build`
+- [ ] `npm run render:smoke`
+- [ ] Exact-head GitHub Actions run shows aggregate lint/tests, frontend build, main Compose config, deterministic standalone E2E, and retained MCP regression gates all green
 - [ ] Project-wide Definition of Done review
 
 **Dependencies:** T03, T04, T12, T13, T15
 
 **Files likely touched:**
 - `compose.yml`
-- `server.mjs`
+- `.github/workflows/mcp-verify.yml` or a new `.github/workflows/standalone-verify.yml`
 - `scripts/standalone-smoke.mjs`
 - `tests/integration/standalone-e2e.test.mjs`
 - `README.md`
 
-**Estimated scope:** Medium (5 files)
+**Estimated scope:** Medium (5 files); if CI migration and Compose changes become independently risky, split them into adjacent commits/PRs while keeping both required before MVP completion.
 
 ---
 
@@ -470,6 +486,8 @@ Do not declare the standalone MVP complete until all are observed:
 - [ ] Normal render path does not depend on arbitrary remote media or default `disableWebSecurity`.
 - [ ] UI supports create/status/review/approve/render/download without raw JSON.
 - [ ] `compose.yml` no longer depends on n8n.
+- [ ] Aggregate `npm run lint` covers all first-party standalone JS/JSX/MJS surfaces and runs in PR CI.
+- [ ] PR CI gates aggregate lint/tests, frontend build, main Compose config, deterministic standalone E2E, and retained MCP regressions.
 - [ ] Existing Bright Evidence MCP integration/tests remain green but are not a runtime dependency of the standalone app.
 - [ ] No production/commercial/Codex/desktop-marketplace work was added outside scope.
 - [ ] Project-wide Definition of Done passes.
