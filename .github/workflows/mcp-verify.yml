@@ -32,6 +32,10 @@ jobs:
           set -e
           cat "$RUNNER_TEMP/npm-audit.json"
           node scripts/verify-mcp-prod-audit.mjs "$RUNNER_TEMP/npm-audit.json" "$audit_status"
+      - name: Build pinned SQLite native binding
+        run: npm rebuild better-sqlite3 --no-audit --no-fund
+      - name: Database migration smoke
+        run: npm run db:migrate -- --database "$RUNNER_TEMP/bright-profile.sqlite"
       - name: Unit and integration tests
         run: npm test
       - name: Aggregate first-party lint
@@ -39,6 +43,11 @@ jobs:
       - name: Syntax checks
         run: |
           node --check app/config.mjs
+          node --check domain/errors.mjs
+          node --check domain/project.mjs
+          node --check domain/schemas.mjs
+          node --check storage/db.mjs
+          node --check scripts/db-migrate.mjs
           node --check security/standalone-audit-policy.mjs
           node --check mcp/server.mjs
           node --check lib/evidence/primitives.mjs

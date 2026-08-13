@@ -7,6 +7,7 @@
     "test": "node --test",
     "lint": "eslint . --ext .js,.jsx,.mjs",
     "audit:standalone": "node security/standalone-audit-policy.mjs",
+    "db:migrate": "node scripts/db-migrate.mjs",
     "mcp": "node mcp/server.mjs",
     "render:smoke": "node scripts/render-smoke.mjs",
     "render:project": "node scripts/render-project.mjs"
