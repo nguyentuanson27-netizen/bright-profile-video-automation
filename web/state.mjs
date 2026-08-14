@@ -11,16 +11,29 @@ const ACTIONS = Object.freeze({
   tts: ['cancel'],
   render_queued: ['cancel'],
   rendering: ['cancel'],
-  failed: ['retry'],
   cancelled: [],
   completed: ['download'],
 });
 
-export const actionsForProject = (status) => [...(ACTIONS[status] ?? [])];
+const projectStatus = (project) => typeof project === 'string' ? project : project?.status;
 
-export const actionBlockedReason = (status, action, {draftDirty = false} = {}) => {
-  if (!actionsForProject(status).includes(action)) return 'Action is not available for the current project state.';
-  if (action === 'approve' && draftDirty) return 'Save review changes before approving this revision.';
+export const actionsForProject = (project) => {
+  const status = projectStatus(project);
+  if (status === 'failed') return project?.failureRetryable === true ? ['retry'] : [];
+  return [...(ACTIONS[status] ?? [])];
+};
+
+export const reviewModeForProject = (project) => {
+  const status = projectStatus(project);
+  if (status === 'review_required') return {visible: true, editable: true, invalidatesApproval: false};
+  if (status === 'approved') return {visible: true, editable: true, invalidatesApproval: true};
+  return {visible: false, editable: false, invalidatesApproval: false};
+};
+
+export const actionBlockedReason = (project, action, {draftDirty = false} = {}) => {
+  if (!actionsForProject(project).includes(action)) return 'Action is not available for the current project state.';
+  if (draftDirty && action === 'approve') return 'Save review changes before approving this revision.';
+  if (draftDirty && action === 'render') return 'Save or discard approval-relevant changes before starting downstream work.';
   return '';
 };
 
