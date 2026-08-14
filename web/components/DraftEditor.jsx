@@ -1,30 +1,40 @@
 import React, {useEffect, useState} from 'react';
 
 const clone = (value) => globalThis.structuredClone ? structuredClone(value) : JSON.parse(JSON.stringify(value));
-
 const replaceAt = (items, index, next) => items.map((item, itemIndex) => itemIndex === index ? next : item);
 
-export function DraftEditor({draft, onSave, pending}) {
+export function DraftEditor({draft, onSave, onDirtyChange, pending}) {
   const [working, setWorking] = useState(() => draft ? clone(draft) : null);
-  useEffect(() => setWorking(draft ? clone(draft) : null), [draft]);
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    setWorking(draft ? clone(draft) : null);
+    setDirty(false);
+  }, [draft]);
+  useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
+
   if (!working) return <p className="empty-state">Draft is loading…</p>;
 
-  const updateClaim = (index, patch) => setWorking((current) => ({
+  const mutate = (updater) => {
+    setWorking(updater);
+    setDirty(true);
+  };
+  const updateClaim = (index, patch) => mutate((current) => ({
     ...current,
     claims: replaceAt(current.claims, index, {...current.claims[index], ...patch}),
   }));
-  const updateTimedText = (key, index, text) => setWorking((current) => ({
+  const updateTimedText = (key, index, text) => mutate((current) => ({
     ...current,
     [key]: replaceAt(current[key], index, {...current[key][index], text}),
   }));
-  const updateVoiceover = (index, text) => setWorking((current) => ({
+  const updateVoiceover = (index, text) => mutate((current) => ({
     ...current,
     voiceover: {
       ...current.voiceover,
       chunks: replaceAt(current.voiceover.chunks, index, {...current.voiceover.chunks[index], text}),
     },
   }));
-  const updateScene = (index, key, value) => setWorking((current) => ({
+  const updateScene = (index, key, value) => mutate((current) => ({
     ...current,
     scenes: replaceAt(current.scenes, index, {...current.scenes[index], [key]: value}),
   }));
@@ -37,6 +47,7 @@ export function DraftEditor({draft, onSave, pending}) {
       else claim.overrideReason = claim.overrideReason.trim();
     }
     await onSave(sanitized);
+    setDirty(false);
   };
 
   return <form className="draft-editor" onSubmit={submit}>
@@ -44,7 +55,7 @@ export function DraftEditor({draft, onSave, pending}) {
       <label>
         Profile summary
         <textarea rows={4} value={working.summary} maxLength={20000} disabled={pending}
-          onChange={(event) => setWorking((current) => ({...current, summary: event.target.value}))} />
+          onChange={(event) => mutate((current) => ({...current, summary: event.target.value}))} />
       </label>
     </div>
 
@@ -104,7 +115,7 @@ export function DraftEditor({draft, onSave, pending}) {
 
     <div className="draft-footer">
       <p className="meta-line">Render: {working.render.duration}s · scale {working.render.renderScale ?? 1} · CRF {working.render.crf ?? 20}</p>
-      <button className="button secondary" type="submit" disabled={pending}>{pending ? 'Saving…' : 'Save review changes'}</button>
+      <button className="button secondary" type="submit" disabled={pending || !dirty}>{pending ? 'Saving…' : dirty ? 'Save review changes' : 'Review changes saved'}</button>
     </div>
   </form>;
 }
