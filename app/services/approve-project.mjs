@@ -69,6 +69,7 @@ export const createApprovalService = ({repos, now = Date.now, revisionIdFactory}
       const approved = repos.revisions.approve({
         projectId,
         revisionId: revision.id,
+        expectedPayloadHash: revision.payloadHash,
         approvedAt: new Date(now()).toISOString(),
       });
       return {project: requireProject(projectId), revision: approved};
