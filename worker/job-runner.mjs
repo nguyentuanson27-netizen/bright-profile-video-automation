@@ -49,12 +49,15 @@ export const createJobRunner = ({
     timer.unref?.();
 
     const finalize = (operation) => {
+      if (typeof operation !== 'function') throw new TypeError('finalize operation must be a function');
       const committed = operation();
       finalized = true;
       return committed;
     };
     const context = Object.freeze({
+      nowMs: () => now(),
       heartbeat,
+      finalize,
       progress: (progress) => jobs.updateProgress({
         stageId: claim.stageId, claimToken: claim.claimToken, progress, nowMs: now(),
       }),
