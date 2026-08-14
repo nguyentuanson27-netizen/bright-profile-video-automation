@@ -65,8 +65,11 @@ export const createProjectsApi = ({
   sourceIdFactory,
   researchMaxAttempts = 4,
   generationMaxAttempts = 4,
+  mediaIngestMaxAttempts = 4,
 } = {}) => {
-  if (!repos?.projects || !repos?.sources) throw new TypeError('repositories are required');
+  if (!repos?.projects || !repos?.sources || typeof repos?.approval?.createFirstDescendant !== 'function') {
+    throw new TypeError('repositories are required');
+  }
   if (!jobs || typeof jobs.startResearch !== 'function' || typeof jobs.startGeneration !== 'function') {
     throw new TypeError('jobs store is required');
   }
@@ -80,6 +83,7 @@ export const createProjectsApi = ({
   for (const [value, name] of [
     [researchMaxAttempts, 'researchMaxAttempts'],
     [generationMaxAttempts, 'generationMaxAttempts'],
+    [mediaIngestMaxAttempts, 'mediaIngestMaxAttempts'],
   ]) {
     if (!Number.isSafeInteger(value) || value < 1 || value > 100) {
       throw new TypeError(`${name} must be an integer between 1 and 100`);
@@ -150,6 +154,26 @@ export const createProjectsApi = ({
         maxAttempts: generationMaxAttempts,
       });
       return {changed: started.changed, project: requireProject(id), stage: started.stage};
+    },
+
+    startRender(id) {
+      const project = requireProject(id);
+      const stageId = generatedId(stageIdFactory, 'stageIdFactory');
+      const startedAtMs = nowMs();
+      if (!Number.isSafeInteger(startedAtMs) || startedAtMs < 0) throw new TypeError('nowMs must return a non-negative safe integer');
+      const timestamp = new Date(startedAtMs).toISOString();
+      const stage = repos.approval.createFirstDescendant({
+        id: stageId,
+        projectId: id,
+        revisionId: project.currentRevisionId,
+        type: 'media_ingest',
+        state: 'queued',
+        maxAttempts: mediaIngestMaxAttempts,
+        availableAtMs: startedAtMs,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+      return {changed: stage.id === stageId, project: requireProject(id), stage};
     },
 
     retry(id) {
