@@ -23,17 +23,24 @@ const sources = [{
   id: 'source-1',
   projectId: project.id,
   status: 'available',
-  url: 'https://cdn.example.test/../../remote-name.png?token=ignored-for-path',
+  url: 'https://news.example.test/profile/creator',
 }];
 const claim = {stageId: 'stage/../../unsafe', attemptId: 'attempt/../../unsafe', revisionId: 'revision-1'};
 
-test('media ingest derives local paths only from app-owned attempt identity and deduplicates scene sources', async () => {
+test('media ingest selects separate media from factual HTML provenance and persists an app-owned immutable selection', async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'bright-ingest-'));
   const seen = [];
+  const selectedMediaUrl = 'https://cdn.example.test/../../remote-name.png?token=ignored-for-path';
   const fetcher = {
     async fetchToFile(url, destination, options) {
       seen.push({url, destination, options});
       await mkdir(join(destination, '..'), {recursive: true});
+      if (url === sources[0].url) {
+        const html = `<html><head><meta property="og:image" content="${selectedMediaUrl}"></head></html>`;
+        await writeFile(destination, html);
+        return {url, mimeType: 'text/html', bytes: Buffer.byteLength(html), path: destination};
+      }
+      assert.equal(url, selectedMediaUrl);
       await writeFile(destination, Buffer.from('safe-image'));
       return {url, mimeType: 'image/png', bytes: 10, path: destination};
     },
@@ -45,25 +52,37 @@ test('media ingest derives local paths only from app-owned attempt identity and 
   });
   const result = await service.ingest({project, revision, sources, claim});
 
-  assert.equal(seen.length, 1);
+  assert.equal(seen.length, 2);
   assert.equal(seen[0].url, sources[0].url);
-  assert.equal(seen[0].destination.includes('..'), false);
-  assert.equal(seen[0].destination.includes('remote-name'), false);
-  assert.equal(seen[0].destination.startsWith(dataDir), true);
-  assert.deepEqual(result.manifest.media.map((item) => item.sourceId), ['source-1']);
-  assert.equal(result.manifest.scenes['scene-1'], 'source-1');
-  assert.equal(result.manifest.scenes['scene-2'], 'source-1');
+  assert.equal(seen[1].url, selectedMediaUrl);
+  assert.equal(seen[1].destination.includes('..'), false);
+  assert.equal(seen[1].destination.includes('remote-name'), false);
+  assert.equal(seen[1].destination.startsWith(dataDir), true);
+  assert.equal(result.manifest.media.length, 1);
+  assert.equal(result.manifest.media[0].sourceId, 'source-1');
+  assert.equal(result.manifest.media[0].sourceUrl, sources[0].url);
+  assert.equal(result.manifest.media[0].selectedMediaUrl, selectedMediaUrl);
+  assert.match(result.manifest.media[0].mediaSelectionId, /^media-selection-[a-f0-9]{24}$/);
+  assert.equal(result.manifest.scenes['scene-1'], result.manifest.media[0].mediaSelectionId);
+  assert.equal(result.manifest.scenes['scene-2'], result.manifest.media[0].mediaSelectionId);
   assert.equal((await stat(result.manifestAbsolutePath)).isFile(), true);
 });
 
-test('unsupported media response and interrupted fetch fail closed and leave no authoritative-ready manifest', async () => {
+test('unsupported selected media response and interrupted discovery fail closed and leave no authoritative-ready manifest', async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'bright-ingest-fail-'));
+  let call = 0;
   const unsupported = createMediaIngestService({
     fetcher: {
       async fetchToFile(_url, destination) {
+        call += 1;
         await mkdir(join(destination, '..'), {recursive: true});
+        if (call === 1) {
+          const html = '<meta property="og:image" content="https://cdn.example.test/not-media">';
+          await writeFile(destination, html);
+          return {url: sources[0].url, mimeType: 'text/html', bytes: Buffer.byteLength(html), path: destination};
+        }
         await writeFile(destination, 'html');
-        return {url: 'https://example.test/page', mimeType: 'text/html', bytes: 4, path: destination};
+        return {url: 'https://cdn.example.test/not-media', mimeType: 'text/html', bytes: 4, path: destination};
       },
     },
     dataDir,
