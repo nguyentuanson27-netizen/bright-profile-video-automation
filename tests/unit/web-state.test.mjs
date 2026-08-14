@@ -1,23 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import {actionBlockedReason, actionsForProject, normalizePublicUrls, shouldPollProject} from '../../web/state.mjs';
+import {
+  actionBlockedReason,
+  actionsForProject,
+  normalizePublicUrls,
+  reviewModeForProject,
+  shouldPollProject,
+} from '../../web/state.mjs';
 
 test('web workflow exposes only legal primary controls for each durable project state', () => {
-  assert.deepEqual(actionsForProject('draft'), ['research']);
-  assert.deepEqual(actionsForProject('researching'), ['cancel']);
-  assert.deepEqual(actionsForProject('research_ready'), ['generate']);
-  assert.deepEqual(actionsForProject('generating'), ['cancel']);
-  assert.deepEqual(actionsForProject('review_required'), ['approve']);
-  assert.deepEqual(actionsForProject('approved'), ['render']);
-  assert.deepEqual(actionsForProject('media_ingest'), ['cancel']);
-  assert.deepEqual(actionsForProject('tts'), ['cancel']);
-  assert.deepEqual(actionsForProject('render_queued'), ['cancel']);
-  assert.deepEqual(actionsForProject('rendering'), ['cancel']);
-  assert.deepEqual(actionsForProject('failed'), ['retry']);
-  assert.deepEqual(actionsForProject('cancelled'), []);
-  assert.deepEqual(actionsForProject('completed'), ['download']);
-  assert.deepEqual(actionsForProject('unknown'), []);
+  assert.deepEqual(actionsForProject({status: 'draft'}), ['research']);
+  assert.deepEqual(actionsForProject({status: 'researching'}), ['cancel']);
+  assert.deepEqual(actionsForProject({status: 'research_ready'}), ['generate']);
+  assert.deepEqual(actionsForProject({status: 'generating'}), ['cancel']);
+  assert.deepEqual(actionsForProject({status: 'review_required'}), ['approve']);
+  assert.deepEqual(actionsForProject({status: 'approved'}), ['render']);
+  assert.deepEqual(actionsForProject({status: 'media_ingest'}), ['cancel']);
+  assert.deepEqual(actionsForProject({status: 'tts'}), ['cancel']);
+  assert.deepEqual(actionsForProject({status: 'render_queued'}), ['cancel']);
+  assert.deepEqual(actionsForProject({status: 'rendering'}), ['cancel']);
+  assert.deepEqual(actionsForProject({status: 'failed', failureRetryable: true}), ['retry']);
+  assert.deepEqual(actionsForProject({status: 'failed', failureRetryable: false}), []);
+  assert.deepEqual(actionsForProject({status: 'cancelled'}), []);
+  assert.deepEqual(actionsForProject({status: 'completed'}), ['download']);
+  assert.deepEqual(actionsForProject({status: 'unknown'}), []);
 });
 
 test('web polling tracks only active asynchronous states', () => {
@@ -30,9 +37,17 @@ test('web polling tracks only active asynchronous states', () => {
 });
 
 test('approval stays blocked while structured review edits are unsaved', () => {
-  assert.match(actionBlockedReason('review_required', 'approve', {draftDirty: true}), /save/i);
-  assert.equal(actionBlockedReason('review_required', 'approve', {draftDirty: false}), '');
-  assert.match(actionBlockedReason('draft', 'approve', {draftDirty: false}), /not available/i);
+  assert.match(actionBlockedReason({status: 'review_required'}, 'approve', {draftDirty: true}), /save/i);
+  assert.equal(actionBlockedReason({status: 'review_required'}, 'approve', {draftDirty: false}), '');
+  assert.match(actionBlockedReason({status: 'draft'}, 'approve', {draftDirty: false}), /not available/i);
+});
+
+test('approved revision stays editable only before downstream work begins', () => {
+  assert.deepEqual(reviewModeForProject({status: 'review_required'}), {visible: true, editable: true, invalidatesApproval: false});
+  assert.deepEqual(reviewModeForProject({status: 'approved'}), {visible: true, editable: true, invalidatesApproval: true});
+  for (const status of ['media_ingest', 'tts', 'render_queued', 'rendering', 'completed']) {
+    assert.deepEqual(reviewModeForProject({status}), {visible: false, editable: false, invalidatesApproval: false}, status);
+  }
 });
 
 test('public URL textarea normalization is bounded, trimmed and stable', () => {
