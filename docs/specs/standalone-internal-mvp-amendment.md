@@ -1,46 +1,44 @@
-# Amendment: Standalone Bright Profile Internal MVP Scope
+# Spec: Standalone Bright Profile Internal MVP
 
-**Status:** Active  
-**Date:** 2026-08-13  
-**Applies to:** `docs/specs/standalone-production-app.md`, `tasks/plan.md`, `tasks/todo.md`, and `tasks/traceability.md`
+**Status:** Active — release-candidate contract  
+**Date:** 2026-08-14  
+**Branch:** `spec/standalone-production-app`  
+**Historical note:** this file began as a scope amendment. It is now the consolidated current spec and supersedes conflicting current-state language in `docs/specs/standalone-production-app.md` while preserving that file as historical design context.
 
-## Context
+## Assumptions
 
-The standalone spec and plan were originally framed around production hardening and deployment readiness. The current project goal is narrower: build a standalone **internal** application for one operator/small internal team and remove n8n from the workflow.
+1. The milestone serves one operator or a small internal team; public SaaS and multi-tenancy are out of scope.
+2. The standalone app remains private/loopback or behind a separately approved trusted access boundary. Public exposure is not part of this milestone.
+3. The required workflow starts from creator/topic plus optional public URLs and ends with an authoritative downloadable MP4.
+4. Human review and explicit approval remain mandatory before media ingest, TTS, and render work.
+5. SQLite metadata/state and the local application-owned artifact volume are acceptable for the current single-host internal MVP.
+6. OpenAI research/generation, Google Cloud TTS, Remotion, and public-source fetching remain external/untrusted boundaries; application validation and durable fencing remain authoritative.
+7. The current functional scope is frozen by `tasks/traceability.md`; historical requirements not retained there are deferred unless explicitly reintroduced.
+8. This spec does not introduce new runtime behavior. It consolidates the implemented T01–T16 contract for review and shipping.
 
-The project is not currently targeting commercial distribution, public SaaS operation, or a public production launch.
+## Objective
 
-## Decision
+Provide a standalone internal web application that lets an operator:
 
-The functional standalone workflow remains the target:
+1. create a project from creator/topic plus optional public URLs;
+2. research public sources and persist normalized evidence/provenance;
+3. generate a structured, schema-valid draft through a durable worker stage;
+4. review and edit claims, script, voiceover chunks, scene plan, and bounded render settings;
+5. explicitly approve an immutable revision;
+6. start downstream work through the application render-start control;
+7. ingest approved media through the SSRF-safe fetch boundary;
+8. run durable Google TTS and Remotion render stages;
+9. retry a retryable failed stage or cancel active durable work safely;
+10. download the one authoritative validated MP4;
+11. survive supported app/worker restarts without duplicate drafts, stages, or authoritative artifacts.
 
-```text
-creator/topic
-  -> public-source research
-  -> evidence normalization
-  -> structured generation
-  -> human review + approval
-  -> media ingest
-  -> TTS
-  -> Remotion render
-  -> MP4
-```
+The normal operator path must not require n8n, manually constructed project JSON, direct worker/service invocation, or arbitrary filesystem/media references.
 
-The following scope corrections supersede conflicting language in the older spec/plan:
+### Target user
 
-1. **Rename the milestone conceptually** from “Standalone Bright Profile Production App” to **“Standalone Bright Profile Internal MVP.”** The existing filenames may remain unchanged to preserve history and links.
-2. **Internal use is the release boundary.** A public/commercial production launch is not a Definition-of-Done requirement for this milestone.
-3. **No public SaaS requirements.** Multi-tenancy, public signup, customer isolation, billing, public legal/listing pages, and commercial launch operations are out of scope.
-4. **No plugin expansion requirement.** Direct ChatGPT ↔ Bright Evidence MCP use is accepted for the current scope. Codex-specific completion, ChatGPT desktop repo-marketplace installation, and public Plugins Directory publication are not required gates.
-5. **Security controls remain in scope where they protect real boundaries.** External input validation, SSRF protection, secret handling, auth for exposed internal endpoints, prompt-injection resistance, MCP Host/Origin/body/rate/deadline controls, non-root containers, dependency-risk review, and safe artifact handling remain required where applicable.
-6. **Deployment hardening is proportional to actual internal use.** TLS/public gateway, production observability, SLOs, multi-host failover, and public launch runbooks are only required if/when the app is intentionally exposed beyond the trusted internal environment.
-7. **Durability is still required for the standalone workflow.** Removing production launch scope does not remove the need for persisted project/job state and restart recovery because those are functional requirements of the standalone app.
-8. **Human review remains required before media ingest/TTS/render** for the current MVP unless explicitly changed later.
-9. **The current MVP contract is frozen through `tasks/traceability.md`.** Historical functional details are current requirements only when retained by the higher-precedence current-scope documents or explicitly listed in that matrix.
+An internal content operator or small internal team producing creator-profile videos.
 
-## Frozen observable flow
-
-The required operator-facing flow for this MVP is:
+### Frozen operator flow
 
 ```text
 create
@@ -55,73 +53,256 @@ create
   -> download
 ```
 
-The retained HTTP/application controls include project create/list/read, research, generation, draft edit, approval, render-start, retry/cancel, source read, authoritative completed-output download, and liveness/readiness. Exact route ownership and focused regressions are recorded in `tasks/traceability.md`.
+## Tech Stack
 
-## Traceability closure rule
+The repository currently pins:
 
-`tasks/traceability.md` is binding for planning closure. Every retained observable operation/state/security invariant must have:
+- Node.js ESM; CI runtime Node `24.18.0`;
+- React `19.1.0` + React DOM `19.1.0`;
+- Vite `8.1.5`;
+- Remotion `4.0.484` (`remotion`, bundler, renderer, transitions);
+- Google Cloud Text-to-Speech `6.4.1`;
+- OpenAI JavaScript SDK `6.49.0`;
+- `better-sqlite3` `13.0.1`;
+- Ajv `8.20.0` and Zod `4.4.3`;
+- Chromium and FFmpeg/ffprobe in the container runtime;
+- Docker / Docker Compose;
+- SQLite plus an application-owned persistent artifact volume.
 
-`requirement/source -> owner task -> implementation surface -> focused regression -> final E2E/CI gate`.
+### Runtime topology
 
-The plan is not ready for `/build` if any retained row is orphaned.
+- **app:** same-origin React UI + HTTP API; host port is loopback-only by default.
+- **worker:** claims durable stages and executes research, generation, media ingest, TTS, and rendering; publishes no HTTP port.
+- **shared state:** app and worker share `/app/data`, including `bright-profile.sqlite` and application-owned artifacts.
+- **Bright Evidence MCP:** remains a separate read-only ChatGPT integration and is not a runtime dependency of the standalone workflow.
 
-A historical requirement that appears only in `docs/specs/standalone-production-app.md` does not become a current MVP gate by omission. If it is not retained by `docs/project-status.md`, this amendment, or `tasks/traceability.md`, it is deferred until an explicit scope change.
+## Commands
 
-Examples explicitly deferred for this internal MVP:
+Use repository commands exactly as defined by `package.json` and CI:
 
-- add/remove public source URLs after creation and rerun research;
-- regenerate an already reviewable draft from the same source set;
-- rerender an already completed approved revision as a new run;
-- separate raw approved-manifest export/download;
-- full metrics/SLO/disk-pressure observability platform;
-- production retention/backup/cleanup policy and release/rollback operations;
-- public TLS/auth/OAuth/browser-account work while the app remains private/loopback/trusted-network only.
+```sh
+# frozen install
+npm ci --ignore-scripts --no-audit --no-fund
+npm rebuild better-sqlite3 --no-audit --no-fund
 
-## Current implementation status
+# quality gates
+npm test
+npm run lint
+npm run audit:standalone
+npm run build:web
+npm run render:smoke
 
-Completed foundation:
+# database
+npm run db:migrate -- --database <path-to-sqlite>
 
-- Remotion render core;
-- Google TTS integration;
-- current authenticated render job API baseline;
-- Bright Evidence MCP normalization service;
-- remote MCP deployment and ChatGPT tool discovery;
-- observed successful `normalize_evidence` invocation with deterministic duplicate removal.
+# local runtime
+node server.mjs
+node worker.mjs
+npm run dev:web
 
-Not yet implemented end-to-end:
+# container boundary
+docker compose -f compose.yml config
+docker compose up -d --build
+```
 
-- durable standalone project/job state;
-- research orchestration;
-- structured generation pipeline;
-- review/edit/approval persistence;
-- trusted approved-media ingest;
-- durable multi-stage worker flow;
-- standalone render-start/output-download/health API surface;
-- standalone operator UI;
-- complete n8n-independent creator/topic -> MP4 workflow.
+There is no `npm run build` script in the current package contract; the frontend production build command is `npm run build:web`.
 
-## Consequences for the existing task plan
+## Project Structure
 
-The current task plan remains the implementation decomposition. `tasks/traceability.md` supplies binding ownership addenda where an observable contract was previously advertised but lacked an explicit task owner, including:
+```text
+app/                 HTTP handlers, server composition, workflow services
+domain/              lifecycle, stable errors, JSON-schema/domain contracts
+storage/             SQLite repositories, migrations, durable jobs/artifacts
+security/            URL policy, SSRF-safe fetch, standalone audit policy
+providers/           research and generation provider contracts/adapters
+worker/               durable worker runner
+web/                  React/Vite operator UI
+lib/evidence/         canonical in-process evidence normalizer
+lib/                  Remotion/TTS execution helpers
+mcp/                  separate read-only Bright Evidence MCP service
+scripts/              migration, render, audit and smoke utilities
+tests/unit/           focused domain/provider/security/UI behavior tests
+tests/integration/    HTTP, persistence, fencing, E2E, Compose/MCP regressions
+docs/                 current status, specs, security/operation records
+tasks/                implementation plan, checklist, frozen traceability ledger
+```
 
-- T08: `/health/live` and `/health/ready` implementation;
-- T10: successful `POST /api/projects/:id/render` render-start transaction;
-- T12: authoritative `GET /api/projects/:id/artifacts/output` download contract;
-- T16: final deterministic E2E must use those real HTTP/application controls rather than bypassing them through direct service calls.
+## Code Style
 
-Prioritize functional milestones in this order:
+Follow the existing JavaScript ESM style: explicit named exports, small pure domain functions where practical, stable error codes at boundaries, early validation, and simple control flow rather than speculative abstractions.
 
-1. durable state/domain/workflow foundation;
-2. safe public-source research and evidence pipeline;
-3. structured generation and approval gate;
-4. render-start + media ingest + TTS/render worker integration;
-5. minimal internal operator UI;
-6. end-to-end restart/retry/download verification.
+Representative existing pattern:
 
-Do not spend project time on public launch, public plugin distribution, Codex/desktop marketplace packaging, or commercial hardening unless the user explicitly changes scope.
+```js
+export const transitionProject = (project, target) => {
+  assertProjectState(project);
+  if (nextState.get(project.status) !== target) {
+    throw invalidTransition(project.status, target);
+  }
+  return {...project, status: target, failure: null};
+};
+```
 
-## Success condition for the internal MVP
+Conventions:
 
-The milestone is functionally complete when an internal operator can start from a creator/topic and optional public URLs, review the researched/generated draft, approve it, start the downstream render workflow, and receive a valid MP4 through the standalone application without using n8n or manually constructing project JSON, with durable state and safe retry/recovery for the supported workflow.
+- ESM imports/exports; `.mjs` for Node modules and `.jsx` for React components.
+- Application-owned stable IDs/paths; external/model data cannot choose internal IDs or filesystem destinations.
+- Domain/state changes are explicit and transactionally persisted where concurrency matters.
+- Reuse canonical helpers (`lib/evidence`, URL/fetch policy, storage fencing) rather than duplicating business logic.
+- Do not mix unrelated refactors into release/bug changes.
 
-Completion also requires the frozen traceability matrix to have no orphan retained requirement and the project-wide Definition of Done to pass.
+## Functional Contract
+
+### Projects and research
+
+- Create/list/read projects through the HTTP application boundary.
+- Optional operator URLs are validated and fetched only through the canonical SSRF-safe boundary.
+- Research persists normalized evidence, source provenance, unavailable-source state, and stable application-owned source IDs.
+- Prompt-like source content is untrusted data and never becomes application instruction.
+
+### Generation and review
+
+- Generation runs as a durable worker stage; the HTTP request only enqueues/controls work.
+- Model output is locally schema/reference/timeline validated.
+- Model claims of human verification/override are ignored.
+- Review is structured; raw JSON editing is not the normal operator path.
+- Approval creates an immutable approved revision tied to the exact validated payload.
+
+### Approval/downstream race
+
+- Before any descendant media/TTS/render logical stage exists, an approval-relevant edit may invalidate approval and return the project to `review_required`.
+- Once descendant work exists, the edit is rejected with the stable downstream-work-started rule.
+- Edit and first descendant-stage creation are serialized; mixed invalidated-approval + authorized-descendant state is forbidden.
+
+### Media, TTS, render, output
+
+- Successful render-start creates exactly one first `media_ingest` logical stage for the current approved revision.
+- Media ingest uses safe public fetches and application-owned attempt paths; factual citations are not automatically render media.
+- TTS/render consume the immutable approved revision and verified local media only.
+- Normal Remotion execution keeps Chromium web security enabled and rejects arbitrary remote/file/traversal media references.
+- Completion occurs only after the current owner promotes a validated authoritative MP4.
+- `GET /api/projects/:id/artifacts/output` serves only that authoritative completed output after path/size/hash revalidation.
+
+### Durable controls
+
+- Long-running stages use lease renewal, claim-token fencing, restart/reclaim handling, and bounded attempts.
+- A stale/reclaimed/cancelled owner cannot publish progress, drafts, state, or authoritative artifacts.
+- `/retry` is legal only for an explicitly retryable failed logical stage and must not duplicate active/replacement attempts or rerun completed upstream work.
+- `/cancel` invalidates active ownership; repeated cancel of the already-cancelled run is a no-op returning the same cancelled state.
+
+## Testing Strategy
+
+The project uses Node's built-in test runner plus CI runtime/container verification.
+
+### Unit tests
+
+Cover domain transitions, schemas, provider parsing/classification, URL/security policies, audit policy, and UI state/control logic.
+
+### Integration tests
+
+Cover SQLite reopen/migrations, HTTP contracts, research/generation/approval flow, retry/cancel, stale-owner fencing, approval races, media ingest, render/output, static UI boundary, and MCP regressions.
+
+### Deterministic E2E
+
+`tests/integration/standalone-e2e.test.mjs` proves the retained standalone workflow without live/paid provider calls, including retry/cancel/reclaim/heartbeat and approval-race invariants.
+
+### CI gates
+
+Required verification includes:
+
+- frozen dependency install;
+- standalone and MCP production dependency audits;
+- SQLite native binding + migration smoke;
+- full unit/integration suite;
+- aggregate lint;
+- Vite production build;
+- syntax checks;
+- standalone API/UI liveness/readiness;
+- Remotion smoke render;
+- standalone Compose config + real app/worker image/runtime boundary;
+- retained MCP Compose/container checks;
+- teardown.
+
+Promotion to `main` must run the same workflow on the promotion PR and again on `main` push after merge.
+
+## Boundaries
+
+### Always do
+
+- Validate external/operator/model data at application boundaries.
+- Keep public URL/media fetching behind the SSRF-safe check-to-connect policy.
+- Preserve human approval before downstream artifact-producing work.
+- Keep durable write fencing and immutable approved-revision identity intact.
+- Keep secrets out of Git, project records, responses, and logs.
+- Run the full required verification workflow before promotion/merge.
+- Keep the app loopback/private unless a separate trusted access/auth/TLS task is approved.
+
+### Ask first
+
+- Any database schema change or destructive data migration.
+- New dependency or version upgrade.
+- Breaking API/schema/state-machine change.
+- Authentication/authorization or public network exposure change.
+- CI gate removal/weakening.
+- Scope expansion beyond the frozen internal MVP.
+
+### Never do
+
+- Commit provider credentials or local credential files.
+- Trust model/RAG/source content as authorization, human approval, or privileged instruction.
+- Bypass SSRF controls for operator/model-influenced URLs.
+- Use caller-controlled filenames/paths for authoritative artifacts.
+- Disable Chromium web security as the normal render solution.
+- Silence, skip, or weaken failing required tests/audits to make CI green.
+- Reintroduce n8n/manual project JSON as a required normal operator path.
+
+## Success Criteria
+
+The internal MVP is complete when all of the following are true:
+
+- [ ] An internal operator can complete the frozen create → download flow through supported application controls.
+- [ ] Research evidence/source provenance is persisted and model/application references are locally validated.
+- [ ] Generation, media ingest, TTS, and render use durable worker stages with restart/reclaim/fencing guarantees.
+- [ ] Human approval creates an immutable approved revision and the approval/downstream edit race has only the two allowed serialized outcomes.
+- [ ] Retry/cancel semantics are durable, bounded, idempotent where specified, and regression-covered.
+- [ ] Public URL/media fetches pass SSRF, DNS-rebinding, redirect, credential, MIME, size, and timeout protections.
+- [ ] Rendering consumes only application-controlled local approved media and publishes one validated authoritative MP4.
+- [ ] React/Vite UI supports create/status/research/review/edit/approve/render/retry/cancel/download without raw JSON.
+- [ ] `compose.yml` contains only the standalone app/worker topology for the normal workflow and does not depend on n8n.
+- [ ] Standalone root production dependency audit and retained MCP verification are green.
+- [ ] Exact promotion CI is green and the project-wide Definition of Done is satisfied.
+- [ ] A human approves the release candidate before promotion/merge.
+
+## Current Implementation Status
+
+T01–T16 are implemented on `spec/standalone-production-app`. PR #11 merged on 2026-08-14, completing the React/Vite UI, two-service app/worker Compose closure, deterministic standalone E2E, and final CI/container gates.
+
+The last verified source tree before the branch merge is tree `d2470ba4290930df35dee7e20be58c972f88c46b`; GitHub Actions run `31799285582` completed successfully on that same source tree. The branch merge commit is `9224107196606737c9b33c9788ef769376c628c7`.
+
+Implementation completion does not itself authorize promotion to `main`. Shipping is governed by the current ship audit, fresh promotion CI, and human approval.
+
+## Deferred / Out of Scope
+
+- Public SaaS, multi-tenancy, billing, public signup, or customer isolation.
+- Public Plugins Directory/commercial launch work.
+- Codex/desktop marketplace completion.
+- Add/remove source URLs after creation and rerun research.
+- Regenerate an already reviewable draft from the same source set.
+- Rerender an already completed revision as a new run.
+- Raw approved-manifest export as a separate operator artifact.
+- Full production SLO/metrics platform, multi-host failover, Kubernetes, or multi-region architecture.
+- Public TLS/OAuth/browser-account system while the app remains private/loopback/trusted-network only.
+
+## Open Questions
+
+No unresolved product-contract question blocks the frozen internal MVP.
+
+Release-only decisions are tracked by the ship audit:
+
+1. whether/when to merge the release-closure PR;
+2. whether/when to open and approve `spec/standalone-production-app -> main`;
+3. if the merged code will be deployed to a persistent internal host, which operator owns the pre-deploy data snapshot and rollback execution.
+
+## Traceability
+
+`tasks/traceability.md` remains the binding requirement → task → implementation → regression → final-gate ledger. If a future change adds a retained requirement, update that ledger before implementation.
