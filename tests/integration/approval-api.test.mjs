@@ -72,7 +72,16 @@ const generateDraft = async (ctx, base) => {
   assert.equal(await ctx.runner.runOnce(), true);
   const project = ctx.repos.projects.get('project-1');
   assert.equal(project.status, 'review_required');
+  assert.equal(ctx.repos.revisions.get(project.currentRevisionId).payload.claims[0].verified, false);
   return project.currentRevisionId;
+};
+
+const verifyDraftAndApprove = async (base) => {
+  const verified = validDraft();
+  assert.equal((await request(base, '/api/projects/project-1/draft', {method: 'PUT', body: {draft: verified}})).response.status, 200);
+  const approved = await request(base, '/api/projects/project-1/approve', {method: 'POST'});
+  assert.equal(approved.response.status, 200);
+  return approved;
 };
 
 test('generate HTTP action is nonblocking and repeated active request does not create duplicate generation stages', async () => {
@@ -87,6 +96,8 @@ test('generate HTTP action is nonblocking and repeated active request does not c
 
 test('draft editing is schema-checked and approval requires verified claims or explicit stored override reasons', async () => {
   const ctx = runtime(); const base = await listen(ctx.server); const revisionId = await generateDraft(ctx, base);
+  const generatedBlocked = await request(base, '/api/projects/project-1/approve', {method: 'POST'});
+  assert.equal(generatedBlocked.response.status, 409); assert.equal(generatedBlocked.json.error.code, 'APPROVAL_BLOCKED');
   const unknown = validDraft(); unknown.claims[0].sourceIds = ['missing-source'];
   const rejectedEdit = await request(base, '/api/projects/project-1/draft', {method: 'PUT', body: {draft: unknown}});
   assert.equal(rejectedEdit.response.status, 400); assert.equal(rejectedEdit.json.error.code, 'UNKNOWN_SOURCE_REFERENCE');
@@ -105,7 +116,7 @@ test('draft editing is schema-checked and approval requires verified claims or e
 
 test('post-approval edit before downstream clones a new review revision and leaves the approved snapshot immutable', async () => {
   const ctx = runtime(); const base = await listen(ctx.server); const approvedRevisionId = await generateDraft(ctx, base);
-  assert.equal((await request(base, '/api/projects/project-1/approve', {method: 'POST'})).response.status, 200);
+  await verifyDraftAndApprove(base);
   const approvedBefore = structuredClone(ctx.repos.revisions.get(approvedRevisionId));
   const editedDraft = validDraft(); editedDraft.summary = 'Edited after approval, before downstream work.';
   const edited = await request(base, '/api/projects/project-1/draft', {method: 'PUT', body: {draft: editedDraft}});
@@ -118,7 +129,7 @@ test('post-approval edit before downstream clones a new review revision and leav
 
 test('once downstream stage creation wins, approval-relevant edit is rejected without mixed state', async () => {
   const ctx = runtime(); const base = await listen(ctx.server); const revisionId = await generateDraft(ctx, base);
-  await request(base, '/api/projects/project-1/approve', {method: 'POST'});
+  await verifyDraftAndApprove(base);
   ctx.repos.approval.createFirstDescendant({id: 'media-stage', projectId: 'project-1', revisionId, type: 'media_ingest', maxAttempts: 3, availableAtMs: 1000});
   const before = ctx.repos.projects.get('project-1'); const editedDraft = validDraft(); editedDraft.summary = 'Forbidden late edit.';
   const edited = await request(base, '/api/projects/project-1/draft', {method: 'PUT', body: {draft: editedDraft}});
