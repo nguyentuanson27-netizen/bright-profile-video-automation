@@ -4,7 +4,7 @@
 **Target source branch:** `spec/standalone-production-app`  
 **Target destination:** `main`  
 **Promotion PR:** #13  
-**Current decision:** **HOLD / NO-GO for merge until the remaining promotion gates below are satisfied.**
+**Current decision:** **HOLD / NO-GO for merge until fresh exact-head CI and explicit human approval are satisfied.**
 
 ## Scope
 
@@ -23,7 +23,9 @@ The release has advanced beyond the original closure audit:
 - PR #12 exact-head workflow `31806106643` completed **SUCCESS**;
 - source-branch push workflow `31825258653` on merge commit `5594bc16d9ce30c5155a0f5ec4bb261bdaf431cf` completed **SUCCESS**;
 - promotion PR #13 is open from `spec/standalone-production-app` to `main`;
-- release-state documentation is synchronized on the promotion head itself;
+- promotion workflow `31826285093`, attempt 2, completed **SUCCESS** on exact head `07a079a6bb5ae44e66c15a8b248cde0e6e2a6868`;
+- the repository owner explicitly accepted the residual browser/UI risk and authorized a **one-time real-browser smoke waiver for PR #13** in PR comment `5297075013`;
+- release-state documentation is being synchronized to that owner decision on the promotion branch;
 - `main` has not yet received the standalone MVP.
 
 At promotion open, `main` was `54d7ce5bd4d72b376e923a2969297762e261b4fe`, and the source branch was ahead with no divergence from `main`.
@@ -37,6 +39,10 @@ PR #11 exact-head run `31799285582` completed **SUCCESS** and covered the integr
 ### Release-closure verification
 
 PR #12 exact-head run `31806106643` and post-merge source-branch push run `31825258653` both completed **SUCCESS**.
+
+### Promotion verification before waiver-doc sync
+
+PR #13 workflow `31826285093`, attempt 2, completed **SUCCESS** on exact head `07a079a6bb5ae44e66c15a8b248cde0e6e2a6868`. The initial attempt had a Chrome-connect timeout at the render smoke after earlier gates had passed; the same-head rerun passed the complete workflow, so no runtime change was made for that transient failure.
 
 The full verification gate covers:
 
@@ -60,7 +66,7 @@ The full verification gate covers:
 - retained MCP Compose and isolated MCP container checks;
 - teardown.
 
-Historical green runs are supporting evidence. PR #13 still requires the same workflow on its **final exact head**, including all documentation-sync commits.
+Because the owner-waiver documentation changes the promotion head, `31826285093` becomes supporting evidence only. The final documentation-sync head requires a fresh full workflow before merge.
 
 ## Closure findings and resolution
 
@@ -70,27 +76,23 @@ The workflow previously verified PRs only when targeting `spec/standalone-produc
 
 PR #12 and its source-branch post-merge push both passed after that change.
 
-### Current-state documentation drift — resolved for promotion head
+### Current-state documentation drift — resolved for promotion phase
 
-The previous docs still described PR #12 as pending after it had merged.
-
-The promotion head now records:
-
-- PR #12 merged;
-- closure and post-merge source CI green;
-- promotion PR #13 open;
-- `main` not yet promoted;
-- remaining exact-head/browser/human/main-push gates.
+The promotion documentation records PR #12 merged, closure/post-merge source CI green, PR #13 open, `main` not yet promoted, and the remaining promotion gates.
 
 ### Rollback plan — retained
 
 Repository and optional persistent-host rollback procedures remain defined below.
 
-### Real browser accessibility/interaction walkthrough — pending
+### Real browser accessibility/interaction walkthrough — one-time waived for PR #13, not verified
 
-Automated UI state/control regressions, semantic controls, Vite production build, and built-web health checks exist. A real interactive browser walkthrough for the complete supported operator flow and keyboard/focus behavior has not been recorded in this audit.
+Automated UI state/control regressions, semantic controls, Vite production build, and built-web health checks exist. A real interactive browser walkthrough for the complete supported operator flow and keyboard/focus behavior has **not** been recorded.
 
-**Required before final GO:** exercise the built UI for create/status/review/edit/approve/render/download plus legal retry/cancel, confirm no new console errors, and check keyboard reachability/focus for interactive controls. Record the outcome on PR #13.
+The repository owner explicitly accepted this residual browser/UI risk for the internal MVP promotion and authorized treating it as a **documented one-time waiver for PR #13**. This is **not** a passing browser result and must never be represented as one.
+
+The waived verification remains a follow-up item: when browser tooling is available, exercise the built UI for create/status/review/edit/approve/render/download plus legal retry/cancel, confirm no new console errors, and check keyboard reachability/focus for interactive controls. Any defect found returns through the normal debug -> test -> review flow.
+
+This waiver does not lower the standing browser/accessibility quality gate for future releases.
 
 ## Definition of Done audit
 
@@ -98,13 +100,13 @@ Automated UI state/control regressions, semantic controls, Vite production build
 
 - **Verified:** T01–T16 behavior has focused unit/integration regressions and deterministic standalone E2E evidence.
 - **Verified:** retry/cancel/reclaim/heartbeat/approval-race and output integrity paths are covered by closure evidence.
-- **Pending:** fresh full CI on the final exact PR #13 head.
+- **Pending after waiver-doc sync:** fresh full CI on the final exact PR #13 head.
 
 ### Quality
 
-- **Verified:** aggregate lint and syntax gates passed on implementation and release-closure evidence.
-- **Verified:** PR #12 closure delta was limited to CI/docs/ship state; no runtime feature was added there.
-- **Pending:** final promotion-head review after documentation synchronization.
+- **Verified:** aggregate lint and syntax gates passed on implementation and prior promotion evidence.
+- **Verified:** no runtime/provider/storage/schema/Compose feature delta is introduced by the waiver documentation sync.
+- **Pending:** final promotion-head review/approval after documentation synchronization.
 
 ### Integration
 
@@ -114,13 +116,13 @@ Automated UI state/control regressions, semantic controls, Vite production build
 
 ### Documentation
 
-- **Verified on promotion head:** `docs/project-status.md`, the active internal-MVP spec, and this ship audit have been updated to current release state.
+- **Verified/being synchronized on promotion head:** `docs/project-status.md` and this ship audit record the owner waiver truthfully as not-verified residual risk.
 - `tasks/traceability.md` remains the frozen requirement/implementation/verification ledger and does not need release-state mutation.
 - `tasks/plan.md`, `tasks/todo.md`, and the historical production spec are lower-precedence planning/history artifacts; current truth is governed by the authoritative documents above.
 
 ### Security
 
-- **Verified:** standalone and MCP dependency audits passed on release-closure evidence.
+- **Verified:** standalone and MCP dependency audits passed on release-closure and prior promotion evidence.
 - **Verified contract:** SSRF-safe fetch, model-output distrust, artifact path/ownership, non-root containers, loopback app publish, non-published worker and read-only worker credential mount remain required gates.
 - **No scope expansion:** promotion does not broaden auth, network, provider, data, or filesystem permissions.
 
@@ -133,7 +135,8 @@ If the app is intentionally exposed beyond the trusted internal boundary, a sepa
 ### Accessibility
 
 - **Automated/static evidence:** UI state/control tests and production build exist.
-- **Pending:** real browser keyboard/focus/console walkthrough.
+- **Not verified in a real browser for PR #13:** keyboard/focus/console walkthrough.
+- **Owner decision:** one-time waiver accepted for this internal MVP promotion; follow-up remains required and future release quality bars are unchanged.
 
 ## CI / promotion policy
 
@@ -142,12 +145,13 @@ Current sequence:
 1. **done** — merge PR #12 release closure after full CI;
 2. **done** — verify post-merge push on `spec/standalone-production-app`;
 3. **done** — open promotion PR #13 `spec/standalone-production-app -> main`;
-4. **done** — synchronize authoritative docs on the promotion head;
-5. **required** — full `Bright Profile Verification` passes on the final exact PR #13 head/merge result;
-6. **required** — record passing real-browser keyboard/focus/console evidence;
-7. **required** — human explicitly approves the final promotion head;
-8. **required** — merge PR #13 to `main` using an exact-head guard;
-9. **required** — `main` push verification completes successfully.
+4. **done** — synchronize authoritative docs to the promotion phase;
+5. **done on prior head** — full `Bright Profile Verification` passed on `07a079a6bb5ae44e66c15a8b248cde0e6e2a6868` via run `31826285093`, attempt 2;
+6. **waived for PR #13 only** — real-browser keyboard/focus/console smoke; explicitly not verified and retained as follow-up;
+7. **required after waiver-doc sync** — full `Bright Profile Verification` passes on the final exact PR #13 head;
+8. **required** — human explicitly approves the final promotion head;
+9. **required** — merge PR #13 to `main` using an exact-head guard;
+10. **required** — `main` push verification completes successfully.
 
 No feature work should be added to PR #13. Any runtime/code change after the final release review reopens the applicable verification/review gates.
 
@@ -192,7 +196,7 @@ Current migrations are additive, but this audit does **not** claim a tested auto
 
 ### Current verdict: HOLD / NO-GO for merge
 
-The release-closure and source-branch gates are green and promotion PR #13 is open, but final promotion evidence is not yet complete.
+The implementation, release-closure, source-branch, and prior exact-head promotion gates are green. The browser walkthrough is explicitly waived—not passed—for this one internal MVP promotion. The final documentation-sync head still requires fresh full CI and explicit human approval before merge.
 
 ### Gate status
 
@@ -201,12 +205,13 @@ The release-closure and source-branch gates are green and promotion PR #13 is op
 - [x] release-closure PR #12 merged into `spec/standalone-production-app`;
 - [x] source-branch post-merge workflow `31825258653` green;
 - [x] promotion PR #13 `spec/standalone-production-app -> main` opened;
-- [x] authoritative project-status/spec/ship documentation synchronized to the promotion phase;
-- [ ] final exact-head PR #13 full workflow green;
-- [ ] real browser keyboard/focus/console smoke recorded as passing;
+- [x] prior promotion head `07a079a6bb5ae44e66c15a8b248cde0e6e2a6868` full workflow `31826285093` attempt 2 green;
+- [x] owner explicitly accepted a one-time PR #13 waiver for missing real-browser keyboard/focus/console smoke; browser evidence remains **not verified**;
+- [ ] final waiver-documentation exact-head PR #13 full workflow green;
 - [ ] human explicitly approves the final PR #13 head;
 - [ ] PR #13 merged to `main`;
 - [ ] post-merge `main` push workflow green;
+- [ ] follow-up real-browser keyboard/focus/console verification closed with actual evidence;
 - [ ] rollback owner recorded if a persistent host deployment will follow.
 
-Only after the applicable remaining gates pass should repository promotion be called **SHIP-ready / complete**.
+Only after the applicable promotion gates pass should repository promotion be called **SHIP-ready / complete**. The browser follow-up may remain open after repository promotion because its residual risk was explicitly accepted for PR #13, but it must stay visible until actual evidence closes it.
