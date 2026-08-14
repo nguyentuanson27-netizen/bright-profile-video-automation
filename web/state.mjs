@@ -18,6 +18,12 @@ const ACTIONS = Object.freeze({
 
 export const actionsForProject = (status) => [...(ACTIONS[status] ?? [])];
 
+export const actionBlockedReason = (status, action, {draftDirty = false} = {}) => {
+  if (!actionsForProject(status).includes(action)) return 'Action is not available for the current project state.';
+  if (action === 'approve' && draftDirty) return 'Save review changes before approving this revision.';
+  return '';
+};
+
 export const shouldPollProject = (status) => ACTIVE.has(status);
 
 export const normalizePublicUrls = (value) => {
