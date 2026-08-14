@@ -13,6 +13,7 @@ import {matchRoute} from './http/router.mjs';
 
 const DEFAULT_MAX_BODY_BYTES = 64 * 1024;
 const WEB_ASSET_PATTERN = /^\/assets\/([A-Za-z0-9._-]+)$/;
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
 const WEB_MIME = new Map([
   ['.css', 'text/css; charset=utf-8'],
   ['.js', 'text/javascript; charset=utf-8'],
@@ -24,6 +25,37 @@ const WEB_MIME = new Map([
   ['.webp', 'image/webp'],
   ['.woff2', 'font/woff2'],
 ]);
+
+const hostnameFromAuthority = (value) => {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 300) return null;
+  try {
+    return new URL(`http://${value}`).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+};
+
+const assertBrowserBoundary = (req) => {
+  const host = hostnameFromAuthority(req.headers.host);
+  if (!host || !LOOPBACK_HOSTS.has(host)) {
+    throw new AppError('HOST_NOT_ALLOWED', 'Request Host is not allowed', {status: 403});
+  }
+  const method = String(req.method ?? 'GET').toUpperCase();
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return;
+  if (String(req.headers['sec-fetch-site'] ?? '').toLowerCase() === 'cross-site') {
+    throw new AppError('ORIGIN_NOT_ALLOWED', 'Cross-site mutation requests are not allowed', {status: 403});
+  }
+  const origin = req.headers.origin;
+  if (origin === undefined) return;
+  try {
+    const parsed = new URL(String(origin));
+    if (!['http:', 'https:'].includes(parsed.protocol) || !LOOPBACK_HOSTS.has(parsed.hostname.toLowerCase())) {
+      throw new Error('not loopback');
+    }
+  } catch {
+    throw new AppError('ORIGIN_NOT_ALLOWED', 'Mutation Origin is not allowed', {status: 403});
+  }
+};
 
 const json = (res, status, value, requestId) => {
   const body = JSON.stringify(value);
@@ -189,6 +221,7 @@ export const createAppServer = ({
       ? requestIdValue.slice(0, 200)
       : randomUUID();
     try {
+      assertBrowserBoundary(req);
       const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
       const route = matchRoute(req.method ?? 'GET', pathname);
       if (!route) {
