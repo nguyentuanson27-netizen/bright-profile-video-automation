@@ -31,6 +31,8 @@ services:
     restart: unless-stopped
     init: true
     command: ["node", "worker.mjs"]
+    healthcheck:
+      disable: true
     environment:
       BRIGHT_DATA_DIR: /app/data
       BRIGHT_DATABASE_PATH: /app/data/bright-profile.sqlite
