@@ -1,4 +1,4 @@
-const projectActionPattern = /^\/api\/projects\/([^/]+)\/(research|generate|retry|cancel|sources|draft|approve)$/;
+const projectActionPattern = /^\/api\/projects\/([^/]+)\/(research|generate|render|retry|cancel|sources|draft|approve)$/;
 const projectPattern = /^\/api\/projects\/([^/]+)$/;
 
 const decodeId = (value) => {
@@ -25,7 +25,7 @@ export const matchRoute = (method, pathname) => {
     if (method === 'GET' && name === 'sources') return {name: 'projects.sources', id};
     if (method === 'GET' && name === 'draft') return {name: 'projects.draft.get', id};
     if (method === 'PUT' && name === 'draft') return {name: 'projects.draft.edit', id};
-    if (method === 'POST' && ['research', 'generate', 'retry', 'cancel', 'approve'].includes(name)) {
+    if (method === 'POST' && ['research', 'generate', 'render', 'retry', 'cancel', 'approve'].includes(name)) {
       return {name: name === 'approve' ? 'projects.approve' : `projects.${name}`, id};
     }
     return null;
