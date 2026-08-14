@@ -41,7 +41,7 @@ The main Compose stack contains exactly two services:
 
 Both services share the named `/app/data` volume containing SQLite state and application-owned artifacts. The normal operator path does not require n8n or manually constructed project JSON.
 
-For Google Cloud TTS, use Application Default Credentials or provide a credential file to the worker through your deployment secret mechanism and set `GOOGLE_APPLICATION_CREDENTIALS` to the in-container path. Do not commit credential files.
+For Google Cloud TTS, keep the local credential file outside Git at `.secrets/google-application-credentials.json` or set `GOOGLE_APPLICATION_CREDENTIALS_FILE` in `.env` to another host path. Compose mounts that file read-only into the worker at `/run/secrets/google-application-credentials.json`; the app service does not receive the credential mount.
 
 ## Local development
 
