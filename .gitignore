@@ -3,6 +3,7 @@ data/
 .env
 .env.*
 !.env.example
+.secrets/
 *.log
 *.mp4
 *-contact.jpg

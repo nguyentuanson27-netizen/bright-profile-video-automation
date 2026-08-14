@@ -1,61 +1,110 @@
 # Bright Creator Profile
 
-Internal creator-profile video automation project built around Remotion, Google TTS, and a read-only Bright Evidence MCP integration for ChatGPT.
+Internal creator-profile video automation built around a standalone Node/SQLite app, durable worker stages, React/Vite review UI, Remotion, Google Cloud TTS, and the read-only Bright Evidence MCP integration for ChatGPT.
 
-## Current project status
+## Standalone internal MVP
 
-The project is **not yet a complete standalone app**.
+The retained operator flow is implemented as:
 
-Implemented and verified today:
+```text
+create
+  -> research
+  -> generate
+  -> review/edit
+  -> approve
+  -> render-start
+  -> media ingest
+  -> TTS
+  -> render
+  -> download MP4
+```
 
-- Remotion creator-profile renderer and reusable scene types;
-- Google Cloud TTS integration and MP4 render path;
-- authenticated internal job/status/download API baseline;
-- Bright Evidence MCP tool `normalize_evidence`;
-- remote ChatGPT connectivity to `https://video.lanadesign.tech/mcp`;
-- an observed live `normalize_evidence` call returning a structured `EvidenceBundle` and removing an exact duplicate as expected.
+The app owns project/revision/source/stage state in SQLite. Remote work runs only in the durable worker, which uses leases, claim fencing, bounded retry, cancel/reclaim handling, and application-owned artifact paths. Approved revisions are immutable; downstream media/TTS/render work stays bound to the same approved revision.
 
-Still required for the standalone MVP:
+The generated draft is never auto-approved. Model-provided verification flags and override reasons are not trusted as human attestations. The UI exposes structured claim/script/voiceover/scene-copy editing and an explicit approval gate before downstream media work can begin.
 
-- durable project/job state across process restarts;
-- creator/topic research orchestration;
-- structured generation of claims/script/scene plan;
-- human review and approval workflow;
-- approved-media ingest and durable worker stages;
-- operator UI for the end-to-end workflow;
-- removal of the remaining n8n-era orchestration assumptions from the application flow.
+## Run with Docker Compose
 
-See `docs/project-status.md` for the authoritative scope/status summary and `docs/specs/standalone-internal-mvp-amendment.md` for the scope correction that supersedes production/commercial assumptions in the older standalone spec.
+Copy the environment template and set the required provider credentials:
+
+```sh
+cp .env.example .env
+# edit .env
+
+docker compose up -d --build
+```
+
+The main Compose stack contains exactly two services:
+
+- `app`: serves the same-origin React UI and HTTP API; host publishing is loopback-only by default at `http://127.0.0.1:4180`;
+- `worker`: runs research, generation, approved-media ingest, TTS, and render stages and publishes no HTTP port.
+
+Both services share the named `/app/data` volume containing SQLite state and application-owned artifacts. The normal operator path does not require n8n or manually constructed project JSON.
+
+For Google Cloud TTS, keep the local credential file outside Git at `.secrets/google-application-credentials.json` or set `GOOGLE_APPLICATION_CREDENTIALS_FILE` in `.env` to another host path. Compose mounts that file read-only into the worker at `/run/secrets/google-application-credentials.json`; the app service does not receive the credential mount.
+
+## Local development
+
+Install the frozen dependency graph and rebuild the pinned SQLite native module when needed:
+
+```sh
+npm ci --ignore-scripts --no-audit --no-fund
+npm rebuild better-sqlite3 --no-audit --no-fund
+```
+
+Run the API on loopback:
+
+```sh
+node server.mjs
+```
+
+For frontend development, run Vite separately; `/api` and `/health` are proxied to the local API:
+
+```sh
+npm run dev:web
+```
+
+Build the frontend for same-origin serving from `dist/`:
+
+```sh
+npm run build:web
+```
+
+Run the durable worker in another process:
+
+```sh
+node worker.mjs
+```
+
+## Security boundaries
+
+- The standalone Compose HTTP port is published on host loopback by default. Add an explicit trusted access boundary before exposing it remotely.
+- Public-source/media fetching uses the SSRF-safe fetch path with DNS/IP validation, redirect revalidation, MIME limits, byte limits, and bounded timeouts.
+- Remote filenames never choose local artifact paths. Media and output files live under application-owned attempt directories and are bound to the immutable approved revision with size/SHA-256 metadata.
+- The normal Remotion path accepts only application-controlled local media references; arbitrary HTTP(S), `file:` and absolute/traversal references are rejected and Chromium web security is not disabled.
+- The output endpoint has no caller-controlled filesystem/artifact selector. It serves only the authoritative MP4 for a completed current approved revision after path/size/hash validation.
+- `.env`, local data, rendered videos, credential files, and QA artifacts must remain outside Git.
+
+## Verification
+
+The repository verification workflow covers frozen install, production dependency audit, SQLite migration smoke, unit/integration tests, aggregate lint, frontend build, syntax checks, standalone API/UI health, deterministic end-to-end pipeline coverage, Remotion smoke render, standalone app container/Compose boundaries, and the isolated MCP container boundary.
+
+The deterministic full-flow regression uses fake research/generation/media/TTS/render adapters and no remote provider calls; live provider credentials are not required in normal CI.
 
 ## Render core
 
-Render a JSON project directly:
+The lower-level render helper remains available for development/regression work:
 
 ```sh
 node scripts/render-project.mjs examples/sample-project.json data/output.mp4
 ```
 
-Supported scene types currently include `hero`, `claim`, `vertical`, `source`, `social`, and `stats`. `vertical` and `source` accept a `mediaUrl` pointing to an image or video.
-
-The render core remains the execution foundation while the standalone workflow is built around it.
+Supported scene types are `hero`, `claim`, `vertical`, `source`, `social`, and `stats`.
 
 ## Bright Evidence MCP for ChatGPT
 
-The repository contains the read-only Bright Evidence MCP tool `normalize_evidence`.
+The repository also contains the read-only Bright Evidence MCP tool `normalize_evidence`. The MCP Docker service remains independently published on host loopback and is expected to sit behind an HTTPS reverse proxy when used remotely. See `docs/mcp-remote.md` and `docs/mcp-evidence.md` for that boundary.
 
-Current remote endpoint:
+The current project scope is direct internal ChatGPT use. Public plugin distribution, Codex packaging, commercial launch readiness, and public Plugins Directory submission are not current goals.
 
-```text
-https://video.lanadesign.tech/mcp
-```
-
-The MCP Docker service remains published only on host loopback and is expected to sit behind an HTTPS reverse proxy. See `docs/mcp-remote.md` for deployment/security notes and `docs/mcp-evidence.md` for the normalization contract.
-
-The current project requirement is **direct internal ChatGPT use of this MCP workflow**. Public plugin distribution, Codex packaging, desktop repo-marketplace acceptance, commercial publication, and public Plugins Directory submission are not current project goals.
-
-## API security notes
-
-- Set a long random `BRIGHT_API_TOKEN`; all job/status/download endpoints require `x-bright-api-key`.
-- Keep the Docker Compose service private unless an explicit trusted access boundary is added.
-- Private/localhost media URLs are blocked by default to reduce SSRF risk. Only set `ALLOW_PRIVATE_MEDIA_URLS=true` when both caller and source network are trusted.
-- Generated videos, QA frames, `.env`, and local data are ignored by Git.
+See `docs/project-status.md`, `docs/specs/standalone-internal-mvp-amendment.md`, and `tasks/traceability.md` for the authoritative internal-MVP scope and closure ledger.

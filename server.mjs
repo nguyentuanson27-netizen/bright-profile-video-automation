@@ -1,4 +1,5 @@
 import {mkdirSync} from 'node:fs';
+import {resolve} from 'node:path';
 
 import {loadConfig} from './app/config.mjs';
 import {createAppServer} from './app/server.mjs';
@@ -11,6 +12,14 @@ const readPort = (value) => {
     throw new Error('PORT must be an integer between 1 and 65535');
   }
   return port;
+};
+
+const readBindHost = (value) => {
+  const host = value?.trim() || '127.0.0.1';
+  if (!['127.0.0.1', '0.0.0.0'].includes(host)) {
+    throw new Error('BRIGHT_BIND_HOST must be 127.0.0.1 or 0.0.0.0');
+  }
+  return host;
 };
 
 const config = loadConfig(process.env);
@@ -27,11 +36,13 @@ const server = createAppServer({
   repos,
   jobs,
   dataDir: config.dataDir,
+  webDir: resolve(process.env.BRIGHT_WEB_DIR?.trim() || './dist'),
   researchMaxAttempts: config.worker.maxRetries + 1,
   generationMaxAttempts: config.worker.maxRetries + 1,
   mediaIngestMaxAttempts: config.worker.maxRetries + 1,
 });
 const port = readPort(process.env.PORT);
+const bindHost = readBindHost(process.env.BRIGHT_BIND_HOST);
 
 let closing = false;
 const shutdown = () => {
@@ -53,6 +64,6 @@ server.once('error', (error) => {
   process.exitCode = 1;
 });
 
-server.listen(port, '127.0.0.1', () => {
-  console.log(`bright-profile-api listening on 127.0.0.1:${port}`);
+server.listen(port, bindHost, () => {
+  console.log(`bright-profile-api listening on ${bindHost}:${port}`);
 });
