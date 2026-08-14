@@ -1,9 +1,10 @@
 import React, {useEffect, useState} from 'react';
 
+const SCENE_TYPES = ['hero', 'claim', 'vertical', 'source', 'social', 'stats'];
 const clone = (value) => globalThis.structuredClone ? structuredClone(value) : JSON.parse(JSON.stringify(value));
 const replaceAt = (items, index, next) => items.map((item, itemIndex) => itemIndex === index ? next : item);
 
-export function DraftEditor({draft, onSave, onDirtyChange, pending}) {
+export function DraftEditor({draft, onSave, onDirtyChange, pending, availableSourceIds = []}) {
   const [working, setWorking] = useState(() => draft ? clone(draft) : null);
   const [dirty, setDirty] = useState(false);
 
@@ -37,6 +38,10 @@ export function DraftEditor({draft, onSave, onDirtyChange, pending}) {
   const updateScene = (index, key, value) => mutate((current) => ({
     ...current,
     scenes: replaceAt(current.scenes, index, {...current.scenes[index], [key]: value}),
+  }));
+  const updateRender = (patch) => mutate((current) => ({
+    ...current,
+    render: {...current.render, ...patch},
   }));
 
   const submit = async (event) => {
@@ -102,15 +107,67 @@ export function DraftEditor({draft, onSave, onDirtyChange, pending}) {
     </fieldset>
 
     <fieldset className="draft-section">
-      <legend>Scene copy</legend>
-      {working.scenes.map((scene, index) => <div className="scene-row" key={scene.id}>
-        <div className="scene-heading"><strong>{scene.type}</strong><span>{scene.start.toFixed(1)}s · {scene.duration.toFixed(1)}s</span></div>
-        {['chapter', 'subtitle', 'heading', 'quote', 'label', 'source'].filter((key) => key in scene).map((key) => <label key={key}>
-          {key}
-          <input value={scene[key] || ''} maxLength={key === 'quote' ? 20000 : 10000} disabled={pending}
-            onChange={(event) => updateScene(index, key, event.target.value)} />
-        </label>)}
-      </div>)}
+      <legend>Scene plan</legend>
+      {working.scenes.map((scene, index) => {
+        const sourceOptions = [...new Set([...availableSourceIds, ...scene.sourceIds])];
+        return <div className="scene-row" key={scene.id}>
+          <div className="scene-heading"><strong>{scene.id}</strong><span>{scene.start.toFixed(1)}s · {scene.duration.toFixed(1)}s</span></div>
+          <div className="scene-control-grid">
+            <label>
+              Scene type
+              <select name="scene-type" value={scene.type} disabled={pending}
+                onChange={(event) => updateScene(index, 'type', event.target.value)}>
+                {SCENE_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+              </select>
+            </label>
+            <label>
+              Start (seconds)
+              <input name="scene-start" type="number" min={0} step={0.1} value={scene.start} disabled={pending}
+                onChange={(event) => updateScene(index, 'start', Number(event.target.value))} />
+            </label>
+            <label>
+              Duration (seconds)
+              <input name="scene-duration" type="number" min={0.001} step={0.1} value={scene.duration} disabled={pending}
+                onChange={(event) => updateScene(index, 'duration', Number(event.target.value))} />
+            </label>
+            <label>
+              Evidence sources
+              <select name="scene-source-ids" multiple value={scene.sourceIds} disabled={pending}
+                onChange={(event) => updateScene(index, 'sourceIds', Array.from(event.target.selectedOptions, (option) => option.value))}>
+                {sourceOptions.map((sourceId) => <option key={sourceId} value={sourceId}>{sourceId}</option>)}
+              </select>
+              <span className="muted">Select at least one retained available source. The server rejects unknown source IDs.</span>
+            </label>
+          </div>
+          {['chapter', 'subtitle', 'heading', 'quote', 'label', 'source'].filter((key) => key in scene).map((key) => <label key={key}>
+            {key}
+            <input value={scene[key] || ''} maxLength={key === 'quote' ? 20000 : 10000} disabled={pending}
+              onChange={(event) => updateScene(index, key, event.target.value)} />
+          </label>)}
+        </div>;
+      })}
+    </fieldset>
+
+    <fieldset className="draft-section">
+      <legend>Render settings</legend>
+      <div className="scene-control-grid">
+        <label>
+          Duration (seconds)
+          <input name="render-duration" type="number" min={0.001} max={1800} step={0.1} value={working.render.duration} disabled={pending}
+            onChange={(event) => updateRender({duration: Number(event.target.value)})} />
+        </label>
+        <label>
+          Render scale
+          <input name="render-scale" type="number" min={0.25} max={2} step={0.05} value={working.render.renderScale ?? 1} disabled={pending}
+            onChange={(event) => updateRender({renderScale: Number(event.target.value)})} />
+        </label>
+        <label>
+          CRF
+          <input name="render-crf" type="number" min={16} max={35} step={1} value={working.render.crf ?? 20} disabled={pending}
+            onChange={(event) => updateRender({crf: Number(event.target.value)})} />
+        </label>
+      </div>
+      <p className="meta-line">Scene, script and voiceover timings must remain inside the render duration; server schema validation is authoritative.</p>
     </fieldset>
 
     <div className="draft-footer">
