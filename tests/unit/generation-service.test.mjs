@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {createGenerationService} from '../../app/services/generate-project.mjs';
 import {ErrorCodes} from '../../domain/errors.mjs';
+import {GenerationProviderErrorCodes} from '../../providers/generation/index.mjs';
 
 const project = {
   id: 'project-1',
@@ -68,6 +69,15 @@ test('generation service rejects invalid timelines after provider output', async
   await assert.rejects(
     serviceFor(draft).generate({project, sources}),
     (error) => error.code === ErrorCodes.INVALID_DOMAIN_DATA,
+  );
+});
+
+test('generation service rejects provider-supplied managed media URLs before review persistence', async () => {
+  const draft = validDraft();
+  draft.scenes[0].mediaUrl = '../../private/file.mp4';
+  await assert.rejects(
+    serviceFor(draft).generate({project, sources}),
+    (error) => error.code === GenerationProviderErrorCodes.INVALID_RESULT,
   );
 });
 
