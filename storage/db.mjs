@@ -128,12 +128,20 @@ export const createRepositories = (db) => {
     INSERT INTO revisions (id, project_id, revision_no, payload_json, payload_hash, created_at)
     VALUES (@id, @projectId, @revisionNo, @payloadJson, @payloadHash, @createdAt)
   `);
-  const setCurrentRevision = db.prepare(`
-    UPDATE projects SET current_revision_id = ?, updated_at = ? WHERE id = ?
-  `);
+  const setCurrentRevision = db.prepare('UPDATE projects SET current_revision_id = ?, updated_at = ? WHERE id = ?');
   const getRevision = db.prepare('SELECT * FROM revisions WHERE id = ?');
   const updateRevisionPayload = db.prepare(`
     UPDATE revisions SET payload_json = @payloadJson, payload_hash = @payloadHash WHERE id = @revisionId
+  `);
+  const updateUnapprovedRevisionPayload = db.prepare(`
+    UPDATE revisions SET payload_json = @payloadJson, payload_hash = @payloadHash
+    WHERE id = @revisionId AND project_id = @projectId AND approved_at IS NULL
+  `);
+  const cloneReviewProject = db.prepare(`
+    UPDATE projects
+    SET status = 'review_required', current_revision_id = @revisionId, approved_revision_id = NULL, updated_at = @updatedAt
+    WHERE id = @projectId AND status = 'approved'
+      AND current_revision_id = @expectedRevisionId AND approved_revision_id = @expectedRevisionId
   `);
   const approveRevisionRow = db.prepare(`
     UPDATE revisions SET approved_at = @approvedAt
@@ -169,9 +177,7 @@ export const createRepositories = (db) => {
     )
   `);
   const getStage = db.prepare('SELECT * FROM stages WHERE id = ?');
-  const getBarrierProject = db.prepare(`
-    SELECT status, current_revision_id, approved_revision_id FROM projects WHERE id = ?
-  `);
+  const getBarrierProject = db.prepare('SELECT status, current_revision_id, approved_revision_id FROM projects WHERE id = ?');
   const hasDescendant = db.prepare(`
     SELECT 1 FROM stages
     WHERE project_id = ? AND revision_id = ? AND stage_type IN ('media_ingest', 'tts', 'render')
@@ -181,22 +187,10 @@ export const createRepositories = (db) => {
   const createProjectTx = db.transaction(({project, sources = []}) => {
     const createdAt = project.createdAt ?? nowIso();
     const updatedAt = project.updatedAt ?? createdAt;
-    insertProject.run({
-      ...project,
-      instructions: project.instructions ?? '',
-      status: project.status ?? 'draft',
-      createdAt,
-      updatedAt,
-    });
+    insertProject.run({...project, instructions: project.instructions ?? '', status: project.status ?? 'draft', createdAt, updatedAt});
     for (const source of sources) {
       const sourceCreatedAt = source.createdAt ?? createdAt;
-      insertSource.run({
-        ...source,
-        status: source.status ?? 'pending',
-        payloadJson: JSON.stringify(source.payload ?? {}),
-        createdAt: sourceCreatedAt,
-        updatedAt: source.updatedAt ?? sourceCreatedAt,
-      });
+      insertSource.run({...source, status: source.status ?? 'pending', payloadJson: JSON.stringify(source.payload ?? {}), createdAt: sourceCreatedAt, updatedAt: source.updatedAt ?? sourceCreatedAt});
     }
     return projectFromRow(getProject.get(project.id));
   });
@@ -210,12 +204,8 @@ export const createRepositories = (db) => {
 
   const approveRevisionTx = db.transaction(({projectId, revisionId, approvedAt}) => {
     const timestamp = approvedAt ?? nowIso();
-    if (approveRevisionRow.run({projectId, revisionId, approvedAt: timestamp}).changes !== 1) {
-      throw new Error('revision cannot be approved');
-    }
-    if (approveProject.run({projectId, revisionId, updatedAt: timestamp}).changes !== 1) {
-      throw new Error('revision is not the current project revision');
-    }
+    if (approveRevisionRow.run({projectId, revisionId, approvedAt: timestamp}).changes !== 1) throw new Error('revision cannot be approved');
+    if (approveProject.run({projectId, revisionId, updatedAt: timestamp}).changes !== 1) throw new Error('revision is not the current project revision');
     return revisionFromRow(getRevision.get(revisionId));
   });
 
@@ -231,6 +221,41 @@ export const createRepositories = (db) => {
   };
   const readBarrierTx = db.transaction(readBarrier);
   const serializedBarrierTx = db.transaction((projectId, operation) => operation(readBarrier(projectId)));
+
+  const editCurrentRevisionTx = db.transaction(({projectId, revisionId, payload, payloadHash, updatedAt}) => {
+    const project = getProject.get(projectId);
+    if (!project?.current_revision_id) throw transitionError('Project has no review draft');
+    const current = getRevision.get(project.current_revision_id);
+    if (!current || current.project_id !== projectId) throw transitionError('Current revision is unavailable');
+    const timestamp = updatedAt ?? nowIso();
+    const payloadJson = JSON.stringify(payload);
+    if (project.status === 'review_required') {
+      if (updateUnapprovedRevisionPayload.run({projectId, revisionId: current.id, payloadJson, payloadHash}).changes !== 1) {
+        throw transitionError('Current review revision is not editable');
+      }
+      return {project: projectFromRow(getProject.get(projectId)), revision: revisionFromRow(getRevision.get(current.id))};
+    }
+    if (project.status !== 'approved' || project.approved_revision_id !== current.id) {
+      throw transitionError('Draft can only be edited from review_required or approved');
+    }
+    const barrier = readBarrier(projectId);
+    if (barrier.hasDescendantStage) throw downstreamStartedError();
+    if (typeof revisionId !== 'string' || revisionId.length === 0 || revisionId.length > 200 || revisionId === current.id) {
+      throw new TypeError('new revision id is invalid');
+    }
+    insertRevision.run({
+      id: revisionId,
+      projectId,
+      revisionNo: current.revision_no + 1,
+      payloadJson,
+      payloadHash,
+      createdAt: timestamp,
+    });
+    if (cloneReviewProject.run({projectId, revisionId, expectedRevisionId: current.id, updatedAt: timestamp}).changes !== 1) {
+      throw transitionError('Approval changed while applying the edit');
+    }
+    return {project: projectFromRow(getProject.get(projectId)), revision: revisionFromRow(getRevision.get(revisionId))};
+  });
 
   const invalidateForEditTx = db.transaction(({projectId, expectedRevisionId, updatedAt}) => {
     const barrier = readBarrier(projectId);
@@ -249,28 +274,13 @@ export const createRepositories = (db) => {
   const createFirstDescendantTx = db.transaction((record) => {
     if (record.type !== 'media_ingest') throw transitionError('The first downstream stage must be media_ingest');
     const barrier = readBarrier(record.projectId);
-    if (
-      !barrier
-      || barrier.status !== 'approved'
-      || barrier.currentRevisionId !== record.revisionId
-      || barrier.approvedRevisionId !== record.revisionId
-      || barrier.hasDescendantStage
-    ) {
+    if (!barrier || barrier.status !== 'approved' || barrier.currentRevisionId !== record.revisionId || barrier.approvedRevisionId !== record.revisionId || barrier.hasDescendantStage) {
       throw transitionError('Downstream stage requires the same current approved revision and no existing descendant stage');
     }
     const createdAt = record.createdAt ?? nowIso();
     const updatedAt = record.updatedAt ?? createdAt;
     const logicalKey = record.logicalKey ?? `${record.projectId}:${record.revisionId}:media_ingest`;
-    insertStage.run({
-      ...record,
-      logicalKey,
-      state: record.state ?? 'queued',
-      retryable: record.retryable ? 1 : 0,
-      maxAttempts: record.maxAttempts,
-      availableAtMs: record.availableAtMs ?? 0,
-      createdAt,
-      updatedAt,
-    });
+    insertStage.run({...record, logicalKey, state: record.state ?? 'queued', retryable: record.retryable ? 1 : 0, maxAttempts: record.maxAttempts, availableAtMs: record.availableAtMs ?? 0, createdAt, updatedAt});
     if (enterMediaIngest.run({projectId: record.projectId, revisionId: record.revisionId, updatedAt}).changes !== 1) {
       throw transitionError('Approval changed while creating the first downstream stage');
     }
@@ -279,18 +289,10 @@ export const createRepositories = (db) => {
 
   return Object.freeze({
     projects: Object.freeze({
-      create(record) {
-        return createProjectTx.immediate({project: record});
-      },
-      createWithSources(project, sources) {
-        return createProjectTx.immediate({project, sources});
-      },
-      get(id) {
-        return projectFromRow(getProject.get(id));
-      },
-      list() {
-        return listProjects.all().map(projectFromRow);
-      },
+      create(record) { return createProjectTx.immediate({project: record}); },
+      createWithSources(project, sources) { return createProjectTx.immediate({project, sources}); },
+      get(id) { return projectFromRow(getProject.get(id)); },
+      list() { return listProjects.all().map(projectFromRow); },
     }),
     sources: Object.freeze({
       create(record) {
@@ -299,63 +301,36 @@ export const createRepositories = (db) => {
         insertSource.run({...record, payloadJson: JSON.stringify(record.payload ?? {}), createdAt, updatedAt});
         return sourceFromRow(getSource.get(record.id));
       },
-      list(projectId) {
-        return listSources.all(projectId).map(sourceFromRow);
-      },
+      list(projectId) { return listSources.all(projectId).map(sourceFromRow); },
     }),
     revisions: Object.freeze({
-      create(record) {
-        return createRevisionTx.immediate(record);
-      },
-      get(id) {
-        return revisionFromRow(getRevision.get(id));
-      },
+      create(record) { return createRevisionTx.immediate(record); },
+      get(id) { return revisionFromRow(getRevision.get(id)); },
       updatePayload({revisionId, payload, payloadHash}) {
-        if (updateRevisionPayload.run({revisionId, payloadJson: JSON.stringify(payload), payloadHash}).changes !== 1) {
-          throw new Error('revision not found');
-        }
+        if (updateRevisionPayload.run({revisionId, payloadJson: JSON.stringify(payload), payloadHash}).changes !== 1) throw new Error('revision not found');
         return revisionFromRow(getRevision.get(revisionId));
       },
-      approve(record) {
-        return approveRevisionTx.immediate(record);
-      },
+      editCurrent(record) { return editCurrentRevisionTx.immediate(record); },
+      approve(record) { return approveRevisionTx.immediate(record); },
     }),
     stages: Object.freeze({
       create(record) {
         const createdAt = record.createdAt ?? nowIso();
         const updatedAt = record.updatedAt ?? createdAt;
         const logicalKey = record.logicalKey ?? `${record.projectId}:${record.revisionId ?? 'none'}:${record.type}`;
-        insertStage.run({
-          ...record,
-          logicalKey,
-          revisionId: record.revisionId ?? null,
-          state: record.state ?? 'queued',
-          retryable: record.retryable ? 1 : 0,
-          maxAttempts: record.maxAttempts,
-          availableAtMs: record.availableAtMs ?? 0,
-          createdAt,
-          updatedAt,
-        });
+        insertStage.run({...record, logicalKey, revisionId: record.revisionId ?? null, state: record.state ?? 'queued', retryable: record.retryable ? 1 : 0, maxAttempts: record.maxAttempts, availableAtMs: record.availableAtMs ?? 0, createdAt, updatedAt});
         return stageFromRow(getStage.get(record.id));
       },
-      get(id) {
-        return stageFromRow(getStage.get(id));
-      },
+      get(id) { return stageFromRow(getStage.get(id)); },
     }),
     approval: Object.freeze({
-      getBarrier(projectId) {
-        return readBarrierTx.deferred(projectId);
-      },
+      getBarrier(projectId) { return readBarrierTx.deferred(projectId); },
       withSerializedBarrier(projectId, operation) {
         if (typeof operation !== 'function') throw new TypeError('operation must be a function');
         return serializedBarrierTx.immediate(projectId, operation);
       },
-      invalidateForEdit(record) {
-        return invalidateForEditTx.immediate(record);
-      },
-      createFirstDescendant(record) {
-        return createFirstDescendantTx.immediate(record);
-      },
+      invalidateForEdit(record) { return invalidateForEditTx.immediate(record); },
+      createFirstDescendant(record) { return createFirstDescendantTx.immediate(record); },
     }),
   });
 };
