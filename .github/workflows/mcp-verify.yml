@@ -43,6 +43,12 @@ jobs:
       - name: Syntax checks
         run: |
           node --check app/config.mjs
+          node --check app/server.mjs
+          node --check app/http/router.mjs
+          node --check app/http/projects.mjs
+          node --check app/services/research-project.mjs
+          node --check providers/research/index.mjs
+          node --check providers/research/openai.mjs
           node --check domain/errors.mjs
           node --check domain/project.mjs
           node --check domain/schemas.mjs
@@ -52,6 +58,7 @@ jobs:
           node --check security/safe-fetch.mjs
           node --check worker/job-runner.mjs
           node --check worker.mjs
+          node --check server.mjs
           node --check scripts/db-migrate.mjs
           node --check security/standalone-audit-policy.mjs
           node --check mcp/server.mjs
@@ -59,6 +66,23 @@ jobs:
           node --check lib/evidence/normalize-evidence.mjs
           node --check lib/evidence/schema-validator.mjs
           node --check scripts/verify-mcp-prod-audit.mjs
+      - name: Verify standalone API local health
+        run: |
+          BRIGHT_DATA_DIR="$RUNNER_TEMP/standalone-data" \
+          BRIGHT_DATABASE_PATH="$RUNNER_TEMP/standalone-data/app.sqlite" \
+          PORT=4182 node server.mjs >standalone.stdout.log 2>standalone.stderr.log &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:4182/health/live >/dev/null; then break; fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              cat standalone.stderr.log
+              exit 1
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:4182/health/live >/dev/null
+          curl -fsS http://127.0.0.1:4182/health/ready >/dev/null
       - name: Verify MCP process health
         env:
           MCP_PORT: 4191
