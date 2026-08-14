@@ -4,7 +4,7 @@ import {api} from './api.mjs';
 import {CreateProjectForm} from './components/CreateProjectForm.jsx';
 import {ProjectList} from './components/ProjectList.jsx';
 import {ProjectWorkspace} from './components/ProjectWorkspace.jsx';
-import {shouldPollProject} from './state.mjs';
+import {reviewModeForProject, shouldPollProject} from './state.mjs';
 
 const actionCalls = {
   research: api.research,
@@ -14,6 +14,10 @@ const actionCalls = {
   retry: api.retry,
   cancel: api.cancel,
 };
+
+const errorText = (error) => error?.code && error.code !== 'REQUEST_FAILED'
+  ? `[${error.code}] ${error.message}`
+  : error?.message ?? 'Request failed';
 
 export default function App() {
   const [projects, setProjects] = useState([]);
@@ -44,7 +48,7 @@ export default function App() {
     setProject(nextProject);
     const nextSources = await api.getSources(id);
     setSources(nextSources);
-    if (nextProject.status === 'review_required') {
+    if (reviewModeForProject(nextProject).visible) {
       setDraft(await api.getDraft(id));
     } else {
       setDraft(null);
@@ -58,7 +62,7 @@ export default function App() {
   useEffect(() => {
     let active = true;
     refreshList()
-      .catch((nextError) => active && setError(nextError.message))
+      .catch((nextError) => active && setError(errorText(nextError)))
       .finally(() => active && setLoadingProjects(false));
     return () => { active = false; };
   }, [refreshList]);
@@ -70,14 +74,14 @@ export default function App() {
       return () => { active = false; };
     }
     setError('');
-    refreshProject(selectedId).catch((nextError) => active && setError(nextError.message));
+    refreshProject(selectedId).catch((nextError) => active && setError(errorText(nextError)));
     return () => { active = false; };
   }, [selectedId, refreshProject]);
 
   useEffect(() => {
     if (!project || !shouldPollProject(project.status)) return undefined;
     const timer = setInterval(() => {
-      refreshAll(project.id).catch((nextError) => setError(nextError.message));
+      refreshAll(project.id).catch((nextError) => setError(errorText(nextError)));
     }, 1500);
     return () => clearInterval(timer);
   }, [project, refreshAll]);
@@ -92,7 +96,7 @@ export default function App() {
       setSelectedId(created.id);
       setNotice('Project created. Start research when the inputs are ready.');
     } catch (nextError) {
-      setError(nextError.message);
+      setError(errorText(nextError));
       throw nextError;
     } finally {
       setPendingAction('');
@@ -109,7 +113,7 @@ export default function App() {
       await refreshAll(project.id);
       setNotice(`${action[0].toUpperCase()}${action.slice(1)} accepted by the durable workflow.`);
     } catch (nextError) {
-      setError(nextError.message);
+      setError(errorText(nextError));
     } finally {
       setPendingAction('');
     }
@@ -123,9 +127,12 @@ export default function App() {
     try {
       await api.editDraft(project.id, nextDraft);
       await refreshAll(project.id);
-      setNotice('Structured review changes saved.');
+      setNotice(project.status === 'approved'
+        ? 'Changes saved. The prior approval was invalidated; review and approve the new revision.'
+        : 'Structured review changes saved.');
     } catch (nextError) {
-      setError(nextError.message);
+      if (nextError?.code === 'DOWNSTREAM_WORK_STARTED') await refreshAll(project.id).catch(() => {});
+      setError(errorText(nextError));
       throw nextError;
     } finally {
       setPendingAction('');
