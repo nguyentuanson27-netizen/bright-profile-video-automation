@@ -112,7 +112,7 @@ export const createJobStore = (db, {
   `);
   const getStageRow = db.prepare('SELECT * FROM stages WHERE id = ?');
   const getLatestProjectStageRow = db.prepare(`
-    SELECT * FROM stages WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT 1
+    SELECT * FROM stages WHERE project_id = ? ORDER BY rowid DESC LIMIT 1
   `);
   const listAttemptRows = db.prepare('SELECT * FROM attempts WHERE stage_id = ? ORDER BY attempt_no');
   const insertAttempt = db.prepare(`
