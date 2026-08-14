@@ -78,6 +78,7 @@ export const createAppServer = ({
   requestIdFactory = randomUUID,
   researchMaxAttempts = 4,
   generationMaxAttempts = 4,
+  mediaIngestMaxAttempts = 4,
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
 } = {}) => {
   if (!db || typeof db.prepare !== 'function') throw new TypeError('database is required');
@@ -97,6 +98,7 @@ export const createAppServer = ({
     sourceIdFactory,
     researchMaxAttempts,
     generationMaxAttempts,
+    mediaIngestMaxAttempts,
   });
   const revisions = createRevisionsApi({repos, now, revisionIdFactory});
   const readinessQuery = db.prepare('SELECT 1 AS ok');
@@ -150,6 +152,10 @@ export const createAppServer = ({
       }
       if (route.name === 'projects.generate') {
         const result = projects.startGeneration(route.id);
+        return json(res, 202, {...result, requestId}, requestId);
+      }
+      if (route.name === 'projects.render') {
+        const result = projects.startRender(route.id);
         return json(res, 202, {...result, requestId}, requestId);
       }
       if (route.name === 'projects.retry') {
