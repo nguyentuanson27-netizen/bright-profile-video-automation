@@ -121,7 +121,7 @@ test('a reclaimed or cancelled media owner cannot publish artifacts or enqueue T
     mediaArtifacts: [],
     nextMaxAttempts: 3,
   }), (error) => error?.code === 'STALE_CLAIM');
-  assert.equal(artifacts.getAuthoritative('project-1', 'revision-1', 'media_manifest'), null);
+  assert.equal(artifacts.getAuthoritative('project-1', 'revision-1', 'media_manifest'), undefined);
   assert.equal(jobs.getCurrentStage('project-1').type, 'media_ingest');
   db.close();
 });
