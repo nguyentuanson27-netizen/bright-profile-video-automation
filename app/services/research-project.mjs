@@ -84,13 +84,26 @@ const sourceScore = (source) => [
   source.sourceRelationship,
 ].filter(Boolean).length;
 
+const requestedUrlsOf = (source) => Array.isArray(source?.requestedUrls)
+  ? source.requestedUrls.filter((value) => typeof value === 'string')
+  : [];
+
+const mergeSourceMetadata = (left, right) => {
+  const preferred = sourceScore(right) > sourceScore(left) ? {...right} : {...left};
+  const requestedUrls = [...new Set([...requestedUrlsOf(left), ...requestedUrlsOf(right)])]
+    .sort((a, b) => a.localeCompare(b));
+  if (left.operatorInput === true || right.operatorInput === true) preferred.operatorInput = true;
+  if (requestedUrls.length > 0) preferred.requestedUrls = requestedUrls;
+  return preferred;
+};
+
 const mergeSources = (...groups) => {
   const byUrl = new Map();
   for (const group of groups) {
     for (const source of group) {
       if (!source?.url) continue;
       const existing = byUrl.get(source.url);
-      if (!existing || sourceScore(source) > sourceScore(existing)) byUrl.set(source.url, {...source});
+      byUrl.set(source.url, existing ? mergeSourceMetadata(existing, source) : {...source});
     }
   }
   return [...byUrl.values()].sort((left, right) => left.url.localeCompare(right.url));
@@ -172,8 +185,19 @@ export const createResearchService = ({
         researchedAt: new Date(nowMs).toISOString(),
         items: validated.candidates,
       });
+      if (!Array.isArray(bundle.evidence) || bundle.evidence.length === 0) {
+        throw new ResearchProviderError(
+          ResearchProviderErrorCodes.NO_EVIDENCE,
+          'Research normalization retained no usable evidence',
+          {retryable: false},
+        );
+      }
 
-      const operatorSourceMetadata = operatorSources.map(({url}) => ({url}));
+      const operatorSourceMetadata = operatorSources.map(({requestedUrl, url}) => ({
+        url,
+        operatorInput: true,
+        requestedUrls: [requestedUrl],
+      }));
       const candidateSources = validated.candidates.map(sourceFromCandidate);
       return {
         bundle,
