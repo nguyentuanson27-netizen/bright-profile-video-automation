@@ -32,13 +32,14 @@ export const createJobRunner = ({
     if (!claim) return false;
 
     let heartbeatError = null;
+    let finalized = false;
     const heartbeat = () => jobs.heartbeat({
       stageId: claim.stageId,
       claimToken: claim.claimToken,
       nowMs: now(),
     });
     const timer = setInterval(() => {
-      if (heartbeatError) return;
+      if (heartbeatError || finalized) return;
       try {
         heartbeat();
       } catch (error) {
@@ -55,6 +56,16 @@ export const createJobRunner = ({
       persistDraft: (record) => jobs.persistDraft({
         ...record, stageId: claim.stageId, claimToken: claim.claimToken, nowMs: now(),
       }),
+      commitResearch: (result) => {
+        const committed = jobs.commitResearch({
+          stageId: claim.stageId,
+          claimToken: claim.claimToken,
+          result,
+          nowMs: now(),
+        });
+        finalized = true;
+        return committed;
+      },
       registerArtifact: (record) => jobs.registerArtifact({
         ...record, stageId: claim.stageId, claimToken: claim.claimToken, nowMs: now(),
       }),
@@ -65,8 +76,10 @@ export const createJobRunner = ({
 
     try {
       await handlers[claim.type](claim, context);
-      if (heartbeatError) throw heartbeatError;
-      jobs.complete({stageId: claim.stageId, claimToken: claim.claimToken, nowMs: now()});
+      if (!finalized) {
+        if (heartbeatError) throw heartbeatError;
+        jobs.complete({stageId: claim.stageId, claimToken: claim.claimToken, nowMs: now()});
+      }
     } catch (error) {
       if (error?.code !== ErrorCodes.STALE_CLAIM) {
         try {
