@@ -59,14 +59,18 @@ That verification covered frozen install, standalone/MCP production audits, SQLi
 PR #12 (`ship: close standalone MVP release gates`) merged into `spec/standalone-production-app` as commit `5594bc16d9ce30c5155a0f5ec4bb261bdaf431cf`.
 
 - PR #12 exact-head workflow `31806106643`: **SUCCESS**.
-- post-merge push workflow `31825258653` on `5594bc16d9ce30c5155a0f5ec4bb261bdaf431cf`: **SUCCESS**.
+- post-merge source-branch push workflow `31825258653` on `5594bc16d9ce30c5155a0f5ec4bb261bdaf431cf`: **SUCCESS**.
 - the workflow now verifies PRs targeting `main` and pushes to `main` in addition to the retained integration/build gates.
 
 ### Promotion
 
 Promotion PR #13 is open from `spec/standalone-production-app` to `main`.
 
-The promotion PR must be judged on its **final exact head**, including these documentation-sync commits. Historical green runs are supporting evidence only; fresh promotion CI is required after the final docs head is established.
+Promotion workflow `31826285093`, attempt 2, completed **SUCCESS** on exact head `07a079a6bb5ae44e66c15a8b248cde0e6e2a6868`, including the full test/audit/build/render/Compose/container gate. The earlier attempt-1 Chrome-connect timeout did not reproduce, so no runtime change was made for that transient failure.
+
+The repository owner then explicitly accepted the residual browser/UI risk and authorized a **one-time browser-smoke waiver for PR #13** in PR conversation comment `5297075013`. The real-browser keyboard/focus/console walkthrough was **not run and must not be recorded as passed**. It remains a visible follow-up verification item after promotion.
+
+Because this waiver/status synchronization changes the promotion documentation head, the resulting final exact head must receive a fresh full `Bright Profile Verification` before merge. Historical green runs, including `31826285093`, remain supporting evidence only after the head moves.
 
 ## Security and integrity boundaries retained
 
@@ -101,6 +105,12 @@ Unless explicitly reintroduced later, the MVP does **not** require:
 - ChatGPT desktop repo-marketplace acceptance;
 - Kubernetes, multi-region infrastructure, or other scale architecture not needed by the internal workflow.
 
+## Follow-up verification retained after promotion
+
+The real-browser walkthrough remains an explicit follow-up because it was waived rather than passed for PR #13. When browser tooling is available, exercise create/status/review/edit/approve/render/download plus legal retry/cancel, confirm no new console errors, and verify keyboard reachability/focus. Any defect found must return through the normal debug -> test -> review flow.
+
+The PR #13 waiver is limited to this internal MVP repository promotion and does not lower the standing browser/accessibility quality gate for future releases.
+
 ## Documentation precedence
 
 When documentation conflicts, use this order for the current milestone:
@@ -117,7 +127,8 @@ When documentation conflicts, use this order for the current milestone:
 - PR #12 release closure is merged and both exact-head and post-merge source-branch CI are green.
 - Promotion PR #13 (`spec/standalone-production-app -> main`) is open.
 - `main` has **not** yet received the standalone MVP.
-- Do not merge PR #13 until its final exact head receives fresh full `Bright Profile Verification` and explicit human approval; the browser keyboard/focus/console ship evidence remains governed by the ship audit.
+- Browser keyboard/focus/console smoke is **not verified** for PR #13; the owner explicitly accepted that residual risk as a one-time waiver and the follow-up remains open.
+- Do not merge PR #13 until the final documentation-sync head receives fresh full `Bright Profile Verification` and explicit human approval.
 - After merge, the `main` push workflow must complete successfully before repository promotion is called complete.
 - No deployment is implied by merging to `main`; runtime deployment/rollback must follow the ship audit if/when an internal host is updated.
 
