@@ -102,6 +102,7 @@ export const draftSchema = {
           text: {type: 'string', minLength: 1, maxLength: 10000},
           sourceIds,
           verified: {type: 'boolean'},
+          overrideReason: {type: 'string', minLength: 1, maxLength: 1000},
         },
       },
     },
