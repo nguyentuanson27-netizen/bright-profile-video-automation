@@ -144,35 +144,51 @@ jobs:
           assert worker['environment']['BRIGHT_DATABASE_PATH'] == '/app/data/bright-profile.sqlite'
           assert app['environment']['BRIGHT_DATA_DIR'] == '/app/data'
           assert worker['environment']['BRIGHT_DATA_DIR'] == '/app/data'
+          assert worker['environment']['GOOGLE_APPLICATION_CREDENTIALS'] == '/run/secrets/google-application-credentials.json'
+          health = worker.get('healthcheck') or {}
+          assert health.get('disable') is True or health.get('test') == ['NONE']
           for service in (app, worker):
             mounts = service.get('volumes') or []
             assert any(m.get('target') == '/app/data' and m.get('type') == 'volume' for m in mounts)
+          credential_mounts = [m for m in (worker.get('volumes') or []) if m.get('target') == '/run/secrets/google-application-credentials.json']
+          assert len(credential_mounts) == 1
+          assert credential_mounts[0].get('read_only') is True
           assert 'n8n' not in json.dumps(data).lower()
           PY
-      - name: Build and verify standalone app image
+      - name: Build and verify standalone app and worker image
         run: |
-          OPENAI_API_KEY=test-key docker compose -f compose.yml build app
-          OPENAI_API_KEY=test-key docker compose -f compose.yml up -d app
-          container="$(docker compose -f compose.yml ps -q app)"
-          test -n "$container"
+          mkdir -p .secrets
+          printf '{}\n' > .secrets/google-application-credentials.json
+          OPENAI_API_KEY=test-key docker compose -f compose.yml build app worker
+          OPENAI_API_KEY=test-key docker compose -f compose.yml up -d app worker
+          app_container="$(docker compose -f compose.yml ps -q app)"
+          worker_container="$(docker compose -f compose.yml ps -q worker)"
+          test -n "$app_container"
+          test -n "$worker_container"
           for attempt in $(seq 1 30); do
-            status="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container")"
+            status="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$app_container")"
             if [ "$status" = healthy ]; then break; fi
             if [ "$status" = unhealthy ]; then
               docker compose -f compose.yml logs --no-color app
-              docker inspect --format='{{json .State.Health}}' "$container"
+              docker inspect --format='{{json .State.Health}}' "$app_container"
               exit 1
             fi
             sleep 1
           done
-          test "$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container")" = healthy
+          test "$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$app_container")" = healthy
           test "$(docker compose -f compose.yml exec -T app id -u)" != 0
-          docker inspect "$container" | node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const c=JSON.parse(s)[0];const p=(c.HostConfig.PortBindings||{})['4180/tcp'];if(!Array.isArray(p)||p.length!==1||p[0].HostIp!=='127.0.0.1')process.exit(1)})"
+          test "$(docker inspect --format='{{.State.Running}}' "$worker_container")" = true
+          test "$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$worker_container")" = none
+          test "$(docker compose -f compose.yml exec -T worker id -u)" != 0
+          docker inspect "$app_container" | node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const c=JSON.parse(s)[0];const p=(c.HostConfig.PortBindings||{})['4180/tcp'];if(!Array.isArray(p)||p.length!==1||p[0].HostIp!=='127.0.0.1')process.exit(1)})"
+          docker inspect "$worker_container" | node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const c=JSON.parse(s)[0];if(Object.keys(c.HostConfig.PortBindings||{}).length)process.exit(1);const mount=(c.Mounts||[]).find(m=>m.Destination==='/run/secrets/google-application-credentials.json');if(!mount||mount.RW!==false)process.exit(1)})"
           curl -fsS http://127.0.0.1:4180/health/ready >/dev/null
           curl -fsS http://127.0.0.1:4180/ | grep -q 'id="root"'
       - name: Tear down standalone Compose
         if: always()
-        run: OPENAI_API_KEY=test-key docker compose -f compose.yml down -v --remove-orphans
+        run: |
+          OPENAI_API_KEY=test-key docker compose -f compose.yml down -v --remove-orphans
+          rm -f .secrets/google-application-credentials.json
       - name: Validate MCP Compose boundary
         run: |
           docker compose -f compose.mcp.yml config --format json > "$RUNNER_TEMP/mcp-compose.json"
