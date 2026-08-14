@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync} from 'node:fs';
+import {readFileSync, mkdtempSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 
@@ -20,9 +20,27 @@ const seedRevision = (repos) => repos.revisions.create({
 test('fresh database migrates explicitly from user_version 0', () => {
   const db = openDatabase(tempDatabasePath());
   assert.equal(db.pragma('user_version', {simple: true}), 0);
-  assert.equal(migrateDatabase(db), 1);
-  assert.equal(db.pragma('user_version', {simple: true}), 1);
-  assert.equal(migrateDatabase(db), 1);
+  assert.equal(migrateDatabase(db), 2);
+  assert.equal(db.pragma('user_version', {simple: true}), 2);
+  assert.equal(migrateDatabase(db), 2);
+  db.close();
+});
+
+test('schema v1 upgrades to v2 without losing existing projects', () => {
+  const db = openDatabase(tempDatabasePath());
+  const initialSql = readFileSync(new URL('../../storage/migrations/001_initial.sql', import.meta.url), 'utf8');
+  db.exec(initialSql);
+  db.pragma('user_version = 1');
+  db.prepare(`
+    INSERT INTO projects (id, creator, topic, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run('project-old', 'Old Creator', 'Old topic', 'draft', '2026-08-13T00:00:00.000Z', '2026-08-13T00:00:00.000Z');
+
+  assert.equal(migrateDatabase(db), 2);
+  const project = createRepositories(db).projects.get('project-old');
+  assert.equal(project.creator, 'Old Creator');
+  assert.equal(project.instructions, '');
+  assert.equal(project.research, null);
   db.close();
 });
 
