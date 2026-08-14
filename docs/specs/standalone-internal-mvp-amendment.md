@@ -273,17 +273,19 @@ Implementation/runtime criteria already evidenced by T01–T16 and closure CI:
 - [x] `compose.yml` contains the standalone app/worker topology for the normal workflow and does not depend on n8n.
 - [x] Standalone root production dependency audit and retained MCP verification are green on the release-closure source state.
 
-Release/promotion criteria still governed by `/ship`:
+Release/promotion criteria governed by `/ship`:
 
 - [x] PR #12 release-closure exact-head CI passed.
 - [x] PR #12 merged into `spec/standalone-production-app`.
 - [x] Post-merge source-branch push CI `31825258653` passed on merge commit `5594bc16d9ce30c5155a0f5ec4bb261bdaf431cf`.
 - [x] Promotion PR #13 `spec/standalone-production-app -> main` is open.
-- [ ] Fresh full promotion CI is green on the **final exact promotion head**, including documentation-sync commits.
-- [ ] Real-browser keyboard/focus/console smoke evidence required by the ship audit is recorded as passing.
+- [x] Promotion workflow `31826285093`, attempt 2, passed on prior exact head `07a079a6bb5ae44e66c15a8b248cde0e6e2a6868`.
+- [x] The repository owner explicitly accepted a **one-time PR #13 waiver** for the missing real-browser keyboard/focus/console smoke. This records accepted residual risk only; browser smoke remains **not verified** and must stay as a follow-up.
+- [ ] Fresh full promotion CI is green on the **final exact promotion head** after waiver-documentation synchronization.
 - [ ] A human explicitly approves the final promotion head.
 - [ ] PR #13 is merged to `main`.
 - [ ] Post-merge `main` push verification completes successfully.
+- [ ] The follow-up real-browser keyboard/focus/console walkthrough is eventually executed and closed with actual evidence.
 
 ## Current Implementation and Release Status
 
@@ -293,7 +295,7 @@ PR #11 completed the React/Vite UI, two-service app/worker Compose closure, dete
 
 PR #12 merged as `5594bc16d9ce30c5155a0f5ec4bb261bdaf431cf`; its post-merge source-branch workflow `31825258653` completed **SUCCESS**.
 
-Promotion PR #13 is now the active repository-integration gate. `main` has not yet received this MVP.
+Promotion PR #13 is now the active repository-integration gate. Prior exact-head promotion CI passed, and the owner has accepted a one-time browser-smoke waiver for this internal MVP promotion. The waiver is not a passing browser result. The documentation-sync head must receive fresh full CI and explicit human approval before merge. `main` has not yet received this MVP.
 
 ## Deferred / Out of Scope
 
@@ -311,11 +313,13 @@ Promotion PR #13 is now the active repository-integration gate. `main` has not y
 
 No unresolved product-contract question blocks the frozen internal MVP.
 
-Remaining release-only actions are:
+Remaining release/follow-up actions are:
 
-1. record passing real-browser keyboard/focus/console smoke evidence on PR #13;
-2. obtain explicit human approval and merge PR #13 after fresh exact-head CI;
-3. if the merged code will be deployed to a persistent internal host, record which operator owns the pre-deploy data snapshot and rollback execution.
+1. complete fresh full CI on the final exact PR #13 head after waiver-documentation synchronization;
+2. obtain explicit human approval and merge PR #13;
+3. verify the post-merge `main` push workflow;
+4. keep the waived real-browser keyboard/focus/console walkthrough visible as a follow-up until actual evidence closes it;
+5. if the merged code will be deployed to a persistent internal host, record which operator owns the pre-deploy data snapshot and rollback execution.
 
 ## Traceability
 
