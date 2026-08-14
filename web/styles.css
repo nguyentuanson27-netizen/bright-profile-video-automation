@@ -79,7 +79,7 @@ input:disabled, textarea:disabled, button:disabled { cursor: not-allowed; opacit
 .button.secondary { background: #fff; }
 .button.danger { color: var(--danger); border-color: #c98278; background: var(--danger-bg); }
 
-.project-list { display: grid; gap: 8px; }
+.project-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
 .project-row { width: 100%; border: 1px solid transparent; background: #f5f3ed; padding: 12px; text-align: left; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; cursor: pointer; }
 .project-row:hover { border-color: #aaa79d; }
 .project-row.selected { background: #fff; border-color: var(--ink); box-shadow: inset 4px 0 0 var(--accent-strong); }
