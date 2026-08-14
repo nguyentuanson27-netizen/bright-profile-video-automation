@@ -150,12 +150,17 @@ export const createRepositories = (db) => {
   `);
   const approveRevisionRow = db.prepare(`
     UPDATE revisions SET approved_at = @approvedAt
-    WHERE id = @revisionId AND project_id = @projectId AND approved_at IS NULL
+    WHERE id = @revisionId
+      AND project_id = @projectId
+      AND approved_at IS NULL
+      AND payload_hash = @expectedPayloadHash
   `);
   const approveProject = db.prepare(`
     UPDATE projects
     SET status = 'approved', approved_revision_id = @revisionId, updated_at = @updatedAt
-    WHERE id = @projectId AND current_revision_id = @revisionId
+    WHERE id = @projectId
+      AND status = 'review_required'
+      AND current_revision_id = @revisionId
   `);
   const invalidateApprovalProject = db.prepare(`
     UPDATE projects
@@ -221,13 +226,16 @@ export const createRepositories = (db) => {
     return revisionFromRow(getRevision.get(record.id));
   });
 
-  const approveRevisionTx = db.transaction(({projectId, revisionId, approvedAt}) => {
+  const approveRevisionTx = db.transaction(({projectId, revisionId, expectedPayloadHash, approvedAt}) => {
+    if (typeof expectedPayloadHash !== 'string' || !/^[a-f0-9]{64}$/.test(expectedPayloadHash)) {
+      throw transitionError('Expected revision hash is required for approval');
+    }
     const timestamp = approvedAt ?? nowIso();
-    if (approveRevisionRow.run({projectId, revisionId, approvedAt: timestamp}).changes !== 1) {
-      throw new Error('revision cannot be approved');
+    if (approveRevisionRow.run({projectId, revisionId, expectedPayloadHash, approvedAt: timestamp}).changes !== 1) {
+      throw transitionError('Revision changed before approval');
     }
     if (approveProject.run({projectId, revisionId, updatedAt: timestamp}).changes !== 1) {
-      throw new Error('revision is not the current project revision');
+      throw transitionError('Revision is not the current review revision');
     }
     return revisionFromRow(getRevision.get(revisionId));
   });
