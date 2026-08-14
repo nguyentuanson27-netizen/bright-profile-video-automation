@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - build/mcp-public-research-evidence
+      - 'build/standalone-*'
   pull_request:
     branches:
       - spec/standalone-production-app
