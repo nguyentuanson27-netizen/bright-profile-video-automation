@@ -280,7 +280,7 @@ Release/promotion criteria still governed by `/ship`:
 - [x] Post-merge source-branch push CI `31825258653` passed on merge commit `5594bc16d9ce30c5155a0f5ec4bb261bdaf431cf`.
 - [x] Promotion PR #13 `spec/standalone-production-app -> main` is open.
 - [ ] Fresh full promotion CI is green on the **final exact promotion head**, including documentation-sync commits.
-- [ ] Real-browser keyboard/focus/console smoke evidence required by the ship audit is recorded as passing, or the human release owner explicitly resolves that gate.
+- [ ] Real-browser keyboard/focus/console smoke evidence required by the ship audit is recorded as passing.
 - [ ] A human explicitly approves the final promotion head.
 - [ ] PR #13 is merged to `main`.
 - [ ] Post-merge `main` push verification completes successfully.
@@ -311,11 +311,11 @@ Promotion PR #13 is now the active repository-integration gate. `main` has not y
 
 No unresolved product-contract question blocks the frozen internal MVP.
 
-Remaining release-only decisions are:
+Remaining release-only actions are:
 
-1. whether the final promotion-head browser keyboard/focus/console ship gate is satisfied by recorded evidence or explicitly resolved by the human release owner;
-2. when the human release owner approves and merges PR #13 after fresh exact-head CI;
-3. if the merged code will be deployed to a persistent internal host, which operator owns the pre-deploy data snapshot and rollback execution.
+1. record passing real-browser keyboard/focus/console smoke evidence on PR #13;
+2. obtain explicit human approval and merge PR #13 after fresh exact-head CI;
+3. if the merged code will be deployed to a persistent internal host, record which operator owns the pre-deploy data snapshot and rollback execution.
 
 ## Traceability
 
