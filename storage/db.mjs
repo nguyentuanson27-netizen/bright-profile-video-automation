@@ -4,8 +4,11 @@ import Database from 'better-sqlite3';
 
 import {AppError, ErrorCodes} from '../domain/errors.mjs';
 
-const LATEST_VERSION = 1;
-const INITIAL_MIGRATION = readFileSync(new URL('./migrations/001_initial.sql', import.meta.url), 'utf8');
+const LATEST_VERSION = 2;
+const MIGRATIONS = Object.freeze({
+  1: readFileSync(new URL('./migrations/001_initial.sql', import.meta.url), 'utf8'),
+  2: readFileSync(new URL('./migrations/002_research_api.sql', import.meta.url), 'utf8'),
+});
 const nowIso = () => new Date().toISOString();
 const parseJson = (value) => JSON.parse(value);
 
@@ -35,8 +38,12 @@ export const migrateDatabase = (db) => {
   if (version === LATEST_VERSION) return version;
 
   const migrate = db.transaction(() => {
-    db.exec(INITIAL_MIGRATION);
-    db.pragma(`user_version = ${LATEST_VERSION}`);
+    for (let next = version + 1; next <= LATEST_VERSION; next += 1) {
+      const sql = MIGRATIONS[next];
+      if (!sql) throw new Error(`Missing database migration ${next}`);
+      db.exec(sql);
+      db.pragma(`user_version = ${next}`);
+    }
   });
   migrate.immediate();
   return LATEST_VERSION;
@@ -46,12 +53,14 @@ const projectFromRow = (row) => row && ({
   id: row.id,
   creator: row.creator,
   topic: row.topic,
+  instructions: row.instructions ?? '',
   status: row.status,
   currentRevisionId: row.current_revision_id,
   approvedRevisionId: row.approved_revision_id,
   failedStage: row.failed_stage,
   failureRetryable: row.failure_retryable === null ? null : Boolean(row.failure_retryable),
   failureCode: row.failure_code,
+  research: row.research_json ? parseJson(row.research_json) : null,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -104,14 +113,16 @@ const downstreamStartedError = () => new AppError(
 
 export const createRepositories = (db) => {
   const insertProject = db.prepare(`
-    INSERT INTO projects (id, creator, topic, status, created_at, updated_at)
-    VALUES (@id, @creator, @topic, @status, @createdAt, @updatedAt)
+    INSERT INTO projects (id, creator, topic, instructions, status, created_at, updated_at)
+    VALUES (@id, @creator, @topic, @instructions, @status, @createdAt, @updatedAt)
   `);
   const getProject = db.prepare('SELECT * FROM projects WHERE id = ?');
+  const listProjects = db.prepare('SELECT * FROM projects ORDER BY created_at, id');
   const insertSource = db.prepare(`
     INSERT INTO sources (id, project_id, url, status, payload_json, created_at, updated_at)
     VALUES (@id, @projectId, @url, @status, @payloadJson, @createdAt, @updatedAt)
   `);
+  const getSource = db.prepare('SELECT * FROM sources WHERE id = ?');
   const listSources = db.prepare('SELECT * FROM sources WHERE project_id = ? ORDER BY created_at, id');
   const insertRevision = db.prepare(`
     INSERT INTO revisions (id, project_id, revision_no, payload_json, payload_hash, created_at)
@@ -166,6 +177,29 @@ export const createRepositories = (db) => {
     WHERE project_id = ? AND revision_id = ? AND stage_type IN ('media_ingest', 'tts', 'render')
     LIMIT 1
   `);
+
+  const createProjectTx = db.transaction(({project, sources = []}) => {
+    const createdAt = project.createdAt ?? nowIso();
+    const updatedAt = project.updatedAt ?? createdAt;
+    insertProject.run({
+      ...project,
+      instructions: project.instructions ?? '',
+      status: project.status ?? 'draft',
+      createdAt,
+      updatedAt,
+    });
+    for (const source of sources) {
+      const sourceCreatedAt = source.createdAt ?? createdAt;
+      insertSource.run({
+        ...source,
+        status: source.status ?? 'pending',
+        payloadJson: JSON.stringify(source.payload ?? {}),
+        createdAt: sourceCreatedAt,
+        updatedAt: source.updatedAt ?? sourceCreatedAt,
+      });
+    }
+    return projectFromRow(getProject.get(project.id));
+  });
 
   const createRevisionTx = db.transaction((record) => {
     const createdAt = record.createdAt ?? nowIso();
@@ -246,13 +280,16 @@ export const createRepositories = (db) => {
   return Object.freeze({
     projects: Object.freeze({
       create(record) {
-        const createdAt = record.createdAt ?? nowIso();
-        const updatedAt = record.updatedAt ?? createdAt;
-        insertProject.run({...record, createdAt, updatedAt});
-        return projectFromRow(getProject.get(record.id));
+        return createProjectTx.immediate({project: record});
+      },
+      createWithSources(project, sources) {
+        return createProjectTx.immediate({project, sources});
       },
       get(id) {
         return projectFromRow(getProject.get(id));
+      },
+      list() {
+        return listProjects.all().map(projectFromRow);
       },
     }),
     sources: Object.freeze({
@@ -260,7 +297,7 @@ export const createRepositories = (db) => {
         const createdAt = record.createdAt ?? nowIso();
         const updatedAt = record.updatedAt ?? createdAt;
         insertSource.run({...record, payloadJson: JSON.stringify(record.payload ?? {}), createdAt, updatedAt});
-        return sourceFromRow(db.prepare('SELECT * FROM sources WHERE id = ?').get(record.id));
+        return sourceFromRow(getSource.get(record.id));
       },
       list(projectId) {
         return listSources.all(projectId).map(sourceFromRow);
