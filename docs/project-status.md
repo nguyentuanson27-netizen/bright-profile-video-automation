@@ -1,63 +1,13 @@
 # Bright Profile — Current Project Status
 
-**Status date:** 2026-08-13  
+**Status date:** 2026-08-14  
 **Authoritative scope:** internal standalone app MVP for one operator/small internal team.
 
 ## Current objective
 
-Replace the remaining n8n-era orchestration with a standalone internal workflow that starts from a creator name/topic plus optional public URLs and ends with a reviewed, rendered MP4.
+The retained standalone internal-MVP workflow is implemented in the repository and is under the normal human PR review/merge gate.
 
-Target flow:
-
-```text
-creator/topic
-  -> public-source research
-  -> normalized evidence
-  -> structured claims/script/scene plan
-  -> human review + approval
-  -> approved media ingest
-  -> Google TTS
-  -> Remotion render
-  -> MP4
-```
-
-## Completed foundation
-
-The repository already has a usable execution foundation:
-
-- Remotion creator-profile composition and reusable scene types;
-- Google Cloud TTS integration;
-- MP4 rendering through Remotion/Chromium/FFmpeg;
-- Docker/runtime baseline and render smoke coverage;
-- API-key protected render job/status/download endpoints;
-- Bright Evidence MCP `normalize_evidence`;
-- remote MCP deployment at `https://video.lanadesign.tech/mcp`;
-- live ChatGPT tool discovery and an observed successful `normalize_evidence` invocation;
-- deterministic evidence normalization/deduplication with structured `EvidenceBundle` output.
-
-The ChatGPT ↔ MCP integration is considered complete for the current internal scope.
-
-## Standalone MVP work still missing
-
-The project is **not yet complete end-to-end**. The remaining functional work is:
-
-1. durable project/job state that survives process/container restart;
-2. creator/topic public-source research orchestration;
-3. structured generation of claims, script, voiceover chunks, and Remotion scene plan;
-4. persisted human review/edit/approval workflow;
-5. approved media ingest into trusted local artifacts;
-6. durable worker orchestration for research/generation/media-ingest/TTS/render stages;
-7. operator UI for create/status/review/approve/render/download;
-8. standalone render-start/output-download/health HTTP operations required by the operator flow;
-9. removal of the remaining dependency on manually constructed project JSON and n8n-era orchestration assumptions.
-
-## Frozen MVP contract and traceability
-
-`tasks/traceability.md` is the closure ledger for this milestone. It maps every retained observable operation and cross-cutting invariant to:
-
-`requirement/source -> owner task -> implementation surface -> focused regression -> final E2E/CI gate`.
-
-The current required operator flow is frozen to:
+Frozen operator flow:
 
 ```text
 create
@@ -72,13 +22,53 @@ create
   -> download
 ```
 
-It also retains retry/cancel, approval/downstream race safety, SSRF-safe fetch, source provenance, provider/schema validation, durable lease/recovery/fencing, safe artifact handling, standalone dependency audit, aggregate lint/build/E2E, private Compose, health endpoints, and existing MCP regressions.
+## Implemented standalone surface
 
-Historical functional ideas that are not retained in the traceability matrix are deferred for this MVP rather than silently becoming completion gates. Examples include post-create source-list editing/rerun research, regenerate-from-same-sources, rerender of an already completed revision, raw approved-manifest export, and full production metrics/operations work.
+The current implementation includes:
+
+- durable SQLite project/source/revision/stage/attempt/artifact state with migrations and restart-safe reopen;
+- lease, heartbeat, claim-token fencing, bounded retry, cancel, reclaim and stale-owner rejection;
+- creator/topic public-source research and normalized evidence/source provenance;
+- structured generation of claims, script, voiceover chunks and supported Remotion scenes;
+- local schema/reference/timeline validation of model output and explicit distrust of model verification/override assertions;
+- structured human review/edit and immutable approval with edit-vs-downstream serialization;
+- approved-media ingest through the SSRF-safe fetch boundary into application-owned attempt paths;
+- source/revision-bound media manifests plus authoritative artifact size/SHA-256 metadata;
+- durable Google TTS and Remotion render stages with retry/cancel/recovery semantics;
+- normal renderer inputs restricted to application-controlled local media with Chromium web security enabled;
+- authoritative completed-output MP4 download with fixed route and path/size/hash revalidation;
+- React/Vite same-origin operator UI for create, status, research, evidence/conflicts, draft review/edit, approve, render, retry, cancel and download;
+- standalone Docker image and two-service Compose topology: loopback-published app + non-published worker sharing one named data volume;
+- removal of n8n and manually constructed project JSON from the normal operator workflow;
+- deterministic fake-provider full-flow regression that reaches a downloadable authoritative MP4 without remote provider calls;
+- frontend build, aggregate lint, dependency audit, health, render smoke, Compose/container and MCP regression gates in CI.
+
+The Bright Evidence MCP `normalize_evidence` integration remains available as a separate read-only ChatGPT boundary and is not required to expose the standalone app publicly.
+
+## Security and integrity boundaries retained
+
+The internal scope still requires fail-closed security at external and persistence boundaries:
+
+- public URL/media fetches are SSRF-safe and bounded by DNS/IP, redirect, MIME, byte and timeout policies;
+- provider/model output is untrusted and cannot own application IDs, claim human verification, or inject managed media paths;
+- remote filenames never choose local storage paths;
+- approved revision identity and artifact provenance are carried through media/TTS/render;
+- stale/reclaimed/cancelled workers cannot publish authoritative artifacts;
+- every approved media file is revalidated by byte size and SHA-256 before render;
+- the completed MP4 is published only after successful current-owner validation and is revalidated before download;
+- normal Remotion execution does not disable Chromium web security and does not accept arbitrary remote/file media refs;
+- the main standalone Compose host port is loopback-only by default and the worker publishes no HTTP port;
+- provider credentials remain environment/deployment-secret concerns and are not persisted in application records or committed to Git.
+
+## Frozen MVP contract and traceability
+
+`tasks/traceability.md` is the closure ledger for the milestone and maps retained operations/invariants to owner tasks, implementation surfaces, focused regressions and final E2E/CI gates.
+
+Historical ideas not retained by that ledger remain deferred, including post-create source-list editing/rerun research, regenerate-from-same-sources, rerender of an already completed revision, raw approved-manifest export, multi-tenant/public SaaS behavior and full production metrics/operations work.
 
 ## Current non-goals
 
-Unless explicitly reintroduced later, the current MVP does **not** require:
+Unless explicitly reintroduced later, the MVP does **not** require:
 
 - public SaaS or multi-tenant behavior;
 - commercial launch readiness;
@@ -88,26 +78,16 @@ Unless explicitly reintroduced later, the current MVP does **not** require:
 - ChatGPT desktop repo-marketplace acceptance;
 - Kubernetes, multi-region infrastructure, or other scale architecture not needed by the internal workflow.
 
-Security boundaries that protect external input, secrets, MCP requests, URL fetching, rendered artifacts, and dependencies executed by the app/worker remain required even though public production launch is not a current goal.
-
 ## Documentation precedence
-
-`docs/specs/standalone-production-app.md` was written when the project was framed as a production-hardening initiative. Its historical functional detail is retained only where the active internal scope explicitly keeps it.
 
 When documentation conflicts, use this order for the current milestone:
 
 1. `docs/project-status.md`
 2. `docs/specs/standalone-internal-mvp-amendment.md`
-3. `tasks/traceability.md` for the frozen retained-operation/invariant ledger
-4. `tasks/plan.md` and `tasks/todo.md` for implementation decomposition
-5. `docs/specs/standalone-production-app.md` only as historical detail that is not superseded and is explicitly retained by the current scope ledger
+3. `tasks/traceability.md`
+4. `tasks/plan.md` and `tasks/todo.md`
+5. `docs/specs/standalone-production-app.md` only as historical detail explicitly retained by the higher-precedence current-scope documents.
 
-A requirement present only in the historical production spec is **not** a current MVP gate unless it is retained by the higher-precedence current-scope documents above.
+## Merge / release state
 
-## Next implementation focus
-
-Do not add more plugin/Codex/marketplace surface. After the revised plan and traceability closure are approved, the next engineering work should resume the standalone application lifecycle from durable state/domain foundations and build toward:
-
-```text
-creator/topic -> research -> review -> render -> MP4
-```
+Implementation completion does not bypass review. The current T11-T13 and T14-T16 changes remain subject to their exact-head CI evidence and fresh human approval before merge. A green test suite alone is not the merge gate.
