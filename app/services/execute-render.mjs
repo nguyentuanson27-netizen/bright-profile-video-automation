@@ -32,13 +32,17 @@ const readVerifiedArtifact = async (dataDir, artifact) => {
 const readVerifiedManifestMedia = async (dataDir, item) => {
   if (
     !item
+    || typeof item.mediaSelectionId !== 'string'
+    || !/^media-selection-[a-f0-9]{24}$/.test(item.mediaSelectionId)
     || typeof item.sourceId !== 'string'
+    || typeof item.sourceUrl !== 'string'
+    || typeof item.selectedMediaUrl !== 'string'
     || !Number.isSafeInteger(item.byteSize)
     || item.byteSize < 1
     || typeof item.sha256 !== 'string'
     || !/^[a-f0-9]{64}$/.test(item.sha256)
   ) {
-    throw new AppError('ARTIFACT_CORRUPT', 'Media manifest contains an invalid artifact record');
+    throw new AppError('ARTIFACT_CORRUPT', 'Media manifest contains an invalid immutable selection record');
   }
   const bytes = await readFile(absoluteArtifactPath(dataDir, item.relativePath));
   if (bytes.length !== item.byteSize || sha256(bytes) !== item.sha256) {
@@ -113,14 +117,27 @@ const loadMediaManifest = async ({artifactStore, dataDir, projectId, revisionId}
   }
   if (
     !manifest
+    || manifest.version !== 2
     || manifest.projectId !== projectId
     || manifest.revisionId !== revisionId
     || !Array.isArray(manifest.media)
     || !manifest.scenes
+    || typeof manifest.scenes !== 'object'
+    || Array.isArray(manifest.scenes)
   ) {
     throw new AppError('ARTIFACT_CORRUPT', 'Media manifest does not match the approved revision');
   }
-  for (const item of manifest.media) assertRelativeArtifactPath(item.relativePath);
+  const selectionIds = new Set();
+  for (const item of manifest.media) {
+    assertRelativeArtifactPath(item.relativePath);
+    if (typeof item.mediaSelectionId !== 'string' || selectionIds.has(item.mediaSelectionId)) {
+      throw new AppError('ARTIFACT_CORRUPT', 'Media manifest selection IDs are invalid or duplicated');
+    }
+    selectionIds.add(item.mediaSelectionId);
+  }
+  for (const selectionId of Object.values(manifest.scenes)) {
+    if (!selectionIds.has(selectionId)) throw new AppError('ARTIFACT_CORRUPT', 'Scene references an unknown media selection');
+  }
   return manifest;
 };
 
@@ -186,7 +203,7 @@ const buildRenderPublicDir = async ({dataDir, claim, manifest, audioArtifact}) =
     const filename = `media-${String(index).padStart(3, '0')}${extension}`;
     const bytes = await readVerifiedManifestMedia(dataDir, item);
     await writeFile(resolve(publicDir, 'media', filename), bytes, {flag: 'wx'});
-    mediaRefs.set(item.sourceId, `media/${filename}`);
+    mediaRefs.set(item.mediaSelectionId, `media/${filename}`);
   }
   await readVerifiedArtifact(dataDir, audioArtifact);
   await copyFile(absoluteArtifactPath(dataDir, audioArtifact.relativePath), resolve(publicDir, 'audio', 'voice.mp3'));
@@ -195,11 +212,11 @@ const buildRenderPublicDir = async ({dataDir, claim, manifest, audioArtifact}) =
 
 export const buildLocalRenderInputProps = ({revision, manifest, mediaRefs, audioRef}) => {
   const scenes = revision.payload.scenes.map((scene) => {
-    const sourceId = manifest.scenes[scene.id];
-    const mediaUrl = sourceId ? mediaRefs.get(sourceId) : undefined;
+    const mediaSelectionId = manifest.scenes[scene.id];
+    const mediaUrl = mediaSelectionId ? mediaRefs.get(mediaSelectionId) : undefined;
     return {...scene, ...(mediaUrl ? {mediaUrl} : {})};
   });
-  const heroImage = manifest.media.length > 0 ? mediaRefs.get(manifest.media[0].sourceId) ?? '' : '';
+  const heroImage = manifest.media.length > 0 ? mediaRefs.get(manifest.media[0].mediaSelectionId) ?? '' : '';
   return {
     duration: revision.payload.render.duration,
     creatorName: revision.payload.creatorName,
