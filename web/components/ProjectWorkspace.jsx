@@ -2,7 +2,7 @@ import React, {useEffect, useState} from 'react';
 
 import {DraftEditor} from './DraftEditor.jsx';
 import {EvidencePanel} from './EvidencePanel.jsx';
-import {actionBlockedReason, actionsForProject, statusLabel} from '../state.mjs';
+import {actionBlockedReason, actionsForProject, reviewModeForProject, statusLabel} from '../state.mjs';
 
 const actionCopy = {
   research: 'Start research',
@@ -23,7 +23,8 @@ export function ProjectWorkspace({project, sources, draft, pendingAction, onActi
     <p className="empty-state">Choose a project from the workspace list to inspect its durable pipeline state.</p>
   </section>;
 
-  const actions = actionsForProject(project.status);
+  const actions = actionsForProject(project);
+  const reviewMode = reviewModeForProject(project);
   return <section className="panel workspace-panel" aria-labelledby="workspace-title">
     <header className="workspace-header">
       <div>
@@ -41,7 +42,7 @@ export function ProjectWorkspace({project, sources, draft, pendingAction, onActi
 
     <div className="action-bar" aria-label="Project actions">
       {actions.filter((action) => action !== 'download').map((action) => {
-        const blockedReason = actionBlockedReason(project.status, action, {draftDirty});
+        const blockedReason = actionBlockedReason(project, action, {draftDirty});
         return <button
           key={action}
           type="button"
@@ -54,7 +55,7 @@ export function ProjectWorkspace({project, sources, draft, pendingAction, onActi
       {actions.includes('download') ? <a className="button primary" href={`/api/projects/${encodeURIComponent(project.id)}/artifacts/output`} download>
         Download MP4
       </a> : null}
-      {draftDirty ? <span className="pending-copy" role="status">Save review changes before approval.</span> : null}
+      {draftDirty ? <span className="pending-copy" role="status">Save review changes before continuing.</span> : null}
       {pendingAction ? <span className="pending-copy" role="status" aria-live="polite">Updating durable state…</span> : null}
     </div>
 
@@ -66,16 +67,23 @@ export function ProjectWorkspace({project, sources, draft, pendingAction, onActi
 
     <EvidencePanel project={project} sources={sources} />
 
-    {project.status === 'review_required' ? <section className="review-shell" aria-labelledby="review-title">
+    {reviewMode.visible ? <section className="review-shell" aria-labelledby="review-title">
       <div className="section-heading compact">
-        <div><p className="eyebrow">Human gate</p><h3 id="review-title">Review generated draft</h3></div>
+        <div>
+          <p className="eyebrow">Human gate</p>
+          <h3 id="review-title">{reviewMode.invalidatesApproval ? 'Edit approved revision before downstream work' : 'Review generated draft'}</h3>
+        </div>
         <span className="step-chip">Review</span>
       </div>
+      {reviewMode.invalidatesApproval ? <div className="approval-warning" role="note">
+        This revision is approved. Saving any approval-relevant change invalidates that approval and returns the project to Review required. If downstream work starts first, the server rejects the edit with DOWNSTREAM_WORK_STARTED.
+      </div> : null}
       <DraftEditor
         draft={draft?.draft ?? draft?.revision?.payload ?? draft}
         onSave={onSaveDraft}
         onDirtyChange={setDraftDirty}
         pending={Boolean(pendingAction)}
+        availableSourceIds={sources.filter((source) => source.status === 'available').map((source) => source.id)}
       />
     </section> : null}
   </section>;
