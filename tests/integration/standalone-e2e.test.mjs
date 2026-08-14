@@ -116,10 +116,10 @@ test('final standalone E2E retries a retryable failed stage through HTTP exactly
 
     ctx.setNow(2);
     const retried = await request(ctx.base, '/api/projects/project-1/retry', {method: 'POST'});
-    assert.equal(retried.response.status, 200);
+    assert.equal(retried.response.status, 202);
     assert.equal(retried.json.changed, true);
     const repeated = await request(ctx.base, '/api/projects/project-1/retry', {method: 'POST'});
-    assert.equal(repeated.response.status, 200);
+    assert.equal(repeated.response.status, 202);
     assert.equal(repeated.json.changed, false);
 
     ctx.setNow(3);
@@ -275,11 +275,12 @@ test('final standalone E2E reclaims media ingest with exactly one authoritative 
     const jobsB = createJobStore(dbB, {leaseMs: 100000, baseBackoffMs: 1, maxBackoffMs: 1});
     const artifactsB = createArtifactStore(dbB);
     const replacementHandler = createMediaIngestStageHandler({repos: reposB, artifactStore: artifactsB, service, nextMaxAttempts: 3});
-    const replacementRunner = createJobRunner({
-      jobs: jobsB, workerId: 'replacement-media-worker', leaseMs: 100000, heartbeatMs: 99999, now: () => 100002,
-      handlers: {media_ingest: replacementHandler},
-    });
     try {
+      assert.deepEqual(jobsB.recoverExpired({nowMs: 100002}), {recovered: 1, exhausted: 0});
+      const replacementRunner = createJobRunner({
+        jobs: jobsB, workerId: 'replacement-media-worker', leaseMs: 100000, heartbeatMs: 99999, now: () => 100003,
+        handlers: {media_ingest: replacementHandler},
+      });
       assert.equal(await replacementRunner.runOnce(), true);
       staleRelease.resolve();
       assert.equal(await staleRun, true);
