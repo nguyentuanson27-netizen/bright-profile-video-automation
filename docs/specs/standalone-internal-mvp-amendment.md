@@ -1,9 +1,10 @@
 # Spec: Standalone Bright Profile Internal MVP
 
-**Status:** Active — release-candidate contract  
-**Date:** 2026-08-14  
+**Status:** Active — promotion release-candidate contract  
+**Date:** 2026-08-15  
 **Branch:** `spec/standalone-production-app`  
-**Historical note:** this file began as a scope amendment. It is now the consolidated current spec and supersedes conflicting current-state language in `docs/specs/standalone-production-app.md` while preserving that file as historical design context.
+**Promotion PR:** #13 → `main`  
+**Historical note:** this file began as a scope amendment. It is now the consolidated current spec and supersedes conflicting current-state language in `docs/specs/standalone-production-app.md`, which remains historical design context.
 
 ## Assumptions
 
@@ -14,7 +15,7 @@
 5. SQLite metadata/state and the local application-owned artifact volume are acceptable for the current single-host internal MVP.
 6. OpenAI research/generation, Google Cloud TTS, Remotion, and public-source fetching remain external/untrusted boundaries; application validation and durable fencing remain authoritative.
 7. The current functional scope is frozen by `tasks/traceability.md`; historical requirements not retained there are deferred unless explicitly reintroduced.
-8. This spec does not introduce new runtime behavior. It consolidates the implemented T01–T16 contract for review and shipping.
+8. Promotion to `main` is repository integration only. It does not deploy the application or broaden the runtime trust boundary.
 
 ## Objective
 
@@ -115,16 +116,16 @@ domain/              lifecycle, stable errors, JSON-schema/domain contracts
 storage/             SQLite repositories, migrations, durable jobs/artifacts
 security/            URL policy, SSRF-safe fetch, standalone audit policy
 providers/           research and generation provider contracts/adapters
-worker/               durable worker runner
-web/                  React/Vite operator UI
-lib/evidence/         canonical in-process evidence normalizer
-lib/                  Remotion/TTS execution helpers
-mcp/                  separate read-only Bright Evidence MCP service
-scripts/              migration, render, audit and smoke utilities
-tests/unit/           focused domain/provider/security/UI behavior tests
-tests/integration/    HTTP, persistence, fencing, E2E, Compose/MCP regressions
-docs/                 current status, specs, security/operation records
-tasks/                implementation plan, checklist, frozen traceability ledger
+worker/              durable worker runner
+web/                 React/Vite operator UI
+lib/evidence/        canonical in-process evidence normalizer
+lib/                 Remotion/TTS execution helpers
+mcp/                 separate read-only Bright Evidence MCP service
+scripts/             migration, render, audit and smoke utilities
+tests/unit/          focused domain/provider/security/UI behavior tests
+tests/integration/   HTTP, persistence, fencing, E2E, Compose/MCP regressions
+docs/                current status, specs, security/operation records
+tasks/               implementation plan, checklist, frozen traceability ledger
 ```
 
 ## Code Style
@@ -206,9 +207,9 @@ Cover SQLite reopen/migrations, HTTP contracts, research/generation/approval flo
 
 `tests/integration/standalone-e2e.test.mjs` proves the retained standalone workflow without live/paid provider calls, including retry/cancel/reclaim/heartbeat and approval-race invariants.
 
-### CI gates
+### Required CI gates
 
-Required verification includes:
+The `Bright Profile Verification` workflow includes:
 
 - frozen dependency install;
 - standalone and MCP production dependency audits;
@@ -218,12 +219,13 @@ Required verification includes:
 - Vite production build;
 - syntax checks;
 - standalone API/UI liveness/readiness;
+- MCP process health;
 - Remotion smoke render;
 - standalone Compose config + real app/worker image/runtime boundary;
 - retained MCP Compose/container checks;
 - teardown.
 
-Promotion to `main` must run the same workflow on the promotion PR and again on `main` push after merge.
+The same workflow is configured for PRs targeting `main` and pushes to `main`.
 
 ## Boundaries
 
@@ -258,28 +260,40 @@ Promotion to `main` must run the same workflow on the promotion PR and again on 
 
 ## Success Criteria
 
-The internal MVP is complete when all of the following are true:
+Implementation/runtime criteria already evidenced by T01–T16 and closure CI:
 
-- [ ] An internal operator can complete the frozen create → download flow through supported application controls.
-- [ ] Research evidence/source provenance is persisted and model/application references are locally validated.
-- [ ] Generation, media ingest, TTS, and render use durable worker stages with restart/reclaim/fencing guarantees.
-- [ ] Human approval creates an immutable approved revision and the approval/downstream edit race has only the two allowed serialized outcomes.
-- [ ] Retry/cancel semantics are durable, bounded, idempotent where specified, and regression-covered.
-- [ ] Public URL/media fetches pass SSRF, DNS-rebinding, redirect, credential, MIME, size, and timeout protections.
-- [ ] Rendering consumes only application-controlled local approved media and publishes one validated authoritative MP4.
-- [ ] React/Vite UI supports create/status/research/review/edit/approve/render/retry/cancel/download without raw JSON.
-- [ ] `compose.yml` contains only the standalone app/worker topology for the normal workflow and does not depend on n8n.
-- [ ] Standalone root production dependency audit and retained MCP verification are green.
-- [ ] Exact promotion CI is green and the project-wide Definition of Done is satisfied.
-- [ ] A human approves the release candidate before promotion/merge.
+- [x] The frozen create → download workflow is implemented through supported application controls.
+- [x] Research evidence/source provenance is persisted and model/application references are locally validated.
+- [x] Generation, media ingest, TTS, and render use durable worker stages with restart/reclaim/fencing guarantees.
+- [x] Human approval creates an immutable approved revision and the approval/downstream edit race has only the two allowed serialized outcomes.
+- [x] Retry/cancel semantics are durable, bounded, idempotent where specified, and regression-covered.
+- [x] Public URL/media fetches are covered by SSRF, DNS-rebinding, redirect, credential, MIME, size, and timeout protections.
+- [x] Rendering consumes application-controlled local approved media and publishes one validated authoritative MP4.
+- [x] React/Vite UI supports create/status/research/review/edit/approve/render/retry/cancel/download without raw JSON.
+- [x] `compose.yml` contains the standalone app/worker topology for the normal workflow and does not depend on n8n.
+- [x] Standalone root production dependency audit and retained MCP verification are green on the release-closure source state.
 
-## Current Implementation Status
+Release/promotion criteria still governed by `/ship`:
 
-T01–T16 are implemented on `spec/standalone-production-app`. PR #11 merged on 2026-08-14, completing the React/Vite UI, two-service app/worker Compose closure, deterministic standalone E2E, and final CI/container gates.
+- [x] PR #12 release-closure exact-head CI passed.
+- [x] PR #12 merged into `spec/standalone-production-app`.
+- [x] Post-merge source-branch push CI `31825258653` passed on merge commit `5594bc16d9ce30c5155a0f5ec4bb261bdaf431cf`.
+- [x] Promotion PR #13 `spec/standalone-production-app -> main` is open.
+- [ ] Fresh full promotion CI is green on the **final exact promotion head**, including documentation-sync commits.
+- [ ] Real-browser keyboard/focus/console smoke evidence required by the ship audit is recorded as passing, or the human release owner explicitly resolves that gate.
+- [ ] A human explicitly approves the final promotion head.
+- [ ] PR #13 is merged to `main`.
+- [ ] Post-merge `main` push verification completes successfully.
 
-The last verified source tree before the branch merge is tree `d2470ba4290930df35dee7e20be58c972f88c46b`; GitHub Actions run `31799285582` completed successfully on that same source tree. The branch merge commit is `9224107196606737c9b33c9788ef769376c628c7`.
+## Current Implementation and Release Status
 
-Implementation completion does not itself authorize promotion to `main`. Shipping is governed by the current ship audit, fresh promotion CI, and human approval.
+T01–T16 are implemented on `spec/standalone-production-app`.
+
+PR #11 completed the React/Vite UI, two-service app/worker Compose closure, deterministic standalone E2E, and final CI/container gates. PR #12 then synchronized the current spec/status, added the ship audit/rollback plan, and extended verification to promotion PRs/pushes.
+
+PR #12 merged as `5594bc16d9ce30c5155a0f5ec4bb261bdaf431cf`; its post-merge source-branch workflow `31825258653` completed **SUCCESS**.
+
+Promotion PR #13 is now the active repository-integration gate. `main` has not yet received this MVP.
 
 ## Deferred / Out of Scope
 
@@ -297,10 +311,10 @@ Implementation completion does not itself authorize promotion to `main`. Shippin
 
 No unresolved product-contract question blocks the frozen internal MVP.
 
-Release-only decisions are tracked by the ship audit:
+Remaining release-only decisions are:
 
-1. whether/when to merge the release-closure PR;
-2. whether/when to open and approve `spec/standalone-production-app -> main`;
+1. whether the final promotion-head browser keyboard/focus/console ship gate is satisfied by recorded evidence or explicitly resolved by the human release owner;
+2. when the human release owner approves and merges PR #13 after fresh exact-head CI;
 3. if the merged code will be deployed to a persistent internal host, which operator owns the pre-deploy data snapshot and rollback execution.
 
 ## Traceability
