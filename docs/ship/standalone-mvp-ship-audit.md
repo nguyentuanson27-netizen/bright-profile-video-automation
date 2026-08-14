@@ -1,35 +1,44 @@
 # Ship Audit: Standalone Bright Profile Internal MVP
 
-**Audit date:** 2026-08-14  
+**Audit updated:** 2026-08-15  
 **Target source branch:** `spec/standalone-production-app`  
 **Target destination:** `main`  
-**Current decision:** **HOLD / NO-GO for promotion until the remaining gates below are satisfied.**
+**Promotion PR:** #13  
+**Current decision:** **HOLD / NO-GO for merge until the remaining promotion gates below are satisfied.**
 
 ## Scope
 
-This audit is for shipping the frozen **internal standalone MVP** into the repository default branch. It is not a public/commercial production launch and does not authorize broader network exposure or deployment to an external environment.
+This audit governs repository promotion of the frozen **internal standalone MVP** into the default branch. It is not a public/commercial production launch and does not authorize broader network exposure or deployment to an external environment.
 
-The retained flow is:
+Retained flow:
 
 `create -> research -> generate -> review/edit -> approve -> render-start -> media ingest -> TTS -> render -> download`
 
-## Exact baseline
+## Current release state
 
-At audit start:
+The release has advanced beyond the original closure audit:
 
-- `spec/standalone-production-app` head: `9224107196606737c9b33c9788ef769376c628c7`;
-- source tree: `d2470ba4290930df35dee7e20be58c972f88c46b`;
-- `main` head: `54d7ce5bd4d72b376e923a2969297762e261b4fe`;
-- `spec/standalone-production-app` is ahead of `main` by 392 commits and behind by 0;
-- no promotion PR to `main` existed at audit start.
+- T01–T16 implementation is complete on `spec/standalone-production-app`;
+- PR #12 (`ship: close standalone MVP release gates`) merged into the source branch as commit `5594bc16d9ce30c5155a0f5ec4bb261bdaf431cf`;
+- PR #12 exact-head workflow `31806106643` completed **SUCCESS**;
+- source-branch push workflow `31825258653` on merge commit `5594bc16d9ce30c5155a0f5ec4bb261bdaf431cf` completed **SUCCESS**;
+- promotion PR #13 is open from `spec/standalone-production-app` to `main`;
+- release-state documentation is being synchronized on the promotion head itself;
+- `main` has not yet received the standalone MVP.
 
-The branch head is the merge commit for PR #11. Its tree is identical to PR #11 exact head `ec82a6fe551d34b1128fe9fa920b5edd0fe412bd`.
+At promotion open, `main` was `54d7ce5bd4d72b376e923a2969297762e261b4fe`, and the source branch was ahead with no divergence from `main`.
 
 ## Verified evidence
 
-GitHub Actions run `31799285582` completed **SUCCESS** on PR #11 exact head `ec82a6fe551d34b1128fe9fa920b5edd0fe412bd`, which has the same source tree as the integrated branch head.
+### Implementation verification
 
-The successful job covered:
+PR #11 exact-head run `31799285582` completed **SUCCESS** and covered the integrated T14–T16 closure together with the retained earlier implementation.
+
+### Release-closure verification
+
+PR #12 exact-head run `31806106643` and post-merge source-branch push run `31825258653` both completed **SUCCESS**.
+
+The full verification gate covers:
 
 - frozen `npm ci` install;
 - standalone production dependency audit;
@@ -48,133 +57,126 @@ The successful job covered:
 - app non-root + loopback-only host publishing;
 - worker non-root + no published port + no inherited HTTP healthcheck;
 - read-only Google ADC credential mount into worker only;
-- teardown;
-- retained MCP Compose and isolated MCP container checks.
+- retained MCP Compose and isolated MCP container checks;
+- teardown.
 
-PR #11's final independent re-review reported P0=0, P1=0, P2=0 and **APPROVE** on the verified exact tree.
+Historical green runs are supporting evidence. PR #13 still requires the same workflow on its **final exact head**, including all documentation-sync commits.
 
-## Findings and closure work
+## Closure findings and resolution
 
-### Required — promotion PR did not trigger the verification workflow
+### Promotion CI trigger gap — resolved
 
-Before this audit, `.github/workflows/mcp-verify.yml` ran pull-request verification only when the PR base was `spec/standalone-production-app`. A promotion PR targeting `main` therefore would not receive the same fresh release gate.
+The workflow previously verified PRs only when targeting `spec/standalone-production-app`. PR #12 extended it to PRs targeting `main` and pushes to `main`, while retaining source/build gates.
 
-**Closure:** the release-closure branch updates the workflow to run on:
+PR #12 and its source-branch post-merge push both passed after that change.
 
-- pull requests targeting `spec/standalone-production-app`;
-- pull requests targeting `main`;
-- pushes to `spec/standalone-production-app`;
-- pushes to `main`;
-- the existing standalone/MCP build branches.
+### Current-state documentation drift — resolved for promotion head
 
-This change must itself pass the existing full workflow before it is merged into the source branch.
+The previous docs still described PR #12 as pending after it had merged.
 
-### Required — current spec contained stale pre-implementation status
+The promotion head now records:
 
-The active internal-MVP amendment still described durable state, research, generation, UI, and the n8n-independent workflow as not yet implemented even though T01–T16 are now integrated.
+- PR #12 merged;
+- closure and post-merge source CI green;
+- promotion PR #13 open;
+- `main` not yet promoted;
+- remaining exact-head/browser/human/main-push gates.
 
-**Closure:** the legacy amendment path is converted into a consolidated active spec with objective, current stack, exact commands, project structure, code style, testing strategy, boundaries, success criteria, implementation status, and open release questions.
+### Rollback plan — retained
 
-### Required — project status contained stale merge state
+Repository and optional persistent-host rollback procedures remain defined below.
 
-`docs/project-status.md` still said T11–T16 were awaiting merge even though PR #10 and PR #11 had already merged.
+### Real browser accessibility/interaction walkthrough — pending
 
-**Closure:** current status is updated to BUILD/VERIFY/REVIEW complete and SHIP closure in progress.
+Automated UI state/control regressions, semantic controls, Vite production build, and built-web health checks exist. A real interactive browser walkthrough for the complete supported operator flow and keyboard/focus behavior has not been recorded in this audit.
 
-### Required for `/ship` — rollback plan was intentionally deferred until a real ship task
-
-The frozen planning ledger explicitly deferred a release/rollback runbook while the project was not being shipped. `/ship` has now been invoked, so a rollback path is required.
-
-**Closure:** the rollback procedure is defined below.
-
-### Pending evidence — real browser accessibility/interaction walkthrough
-
-The repository has UI state/control regressions, semantic keyboard behavior in the reviewed implementation, Vite production build, and built-web health checks. However this audit did not find evidence of a real interactive browser walkthrough covering the complete supported operator flow and keyboard/focus behavior.
-
-The current ChatGPT environment does not expose a local browser/DevTools session for this repository, so this check is **not executed here**.
-
-**Required before final GO:** a human or available browser runner should exercise the built UI at minimum for create/status/review/edit/approve/render/download plus legal retry/cancel, confirm no new console errors, and check keyboard reachability/focus for interactive controls. Record the result on the release-closure or promotion PR.
+**Required before final GO unless explicitly resolved by the human release owner:** exercise the built UI for create/status/review/edit/approve/render/download plus legal retry/cancel, confirm no new console errors, and check keyboard reachability/focus for interactive controls. Record the outcome on PR #13.
 
 ## Definition of Done audit
 
 ### Correctness
 
-- **Verified:** T01–T16 behavior has focused unit/integration regressions and deterministic standalone E2E evidence on the integrated source tree.
-- **Verified:** retry/cancel/reclaim/heartbeat/approval-race and output integrity paths were part of PR #11 closure evidence.
-- **Pending:** fresh CI for the release-closure head and later for the exact promotion head.
+- **Verified:** T01–T16 behavior has focused unit/integration regressions and deterministic standalone E2E evidence.
+- **Verified:** retry/cancel/reclaim/heartbeat/approval-race and output integrity paths are covered by closure evidence.
+- **Pending:** fresh full CI on the final exact PR #13 head.
 
 ### Quality
 
-- **Verified:** aggregate lint and syntax checks passed on the integrated source tree.
-- **Verified:** final PR review found no remaining correctness/security/architecture/simplicity/performance blocker.
-- **Pending:** closure diff review after documentation/workflow changes.
+- **Verified:** aggregate lint and syntax gates passed on implementation and release-closure evidence.
+- **Verified:** PR #12 closure delta was limited to CI/docs/ship state; no runtime feature was added there.
+- **Pending:** final promotion-head review after documentation synchronization.
 
 ### Integration
 
 - **Verified:** standalone app/worker Compose topology, SQLite migrations, shared volume, health endpoints, Remotion smoke and MCP regression boundary passed CI.
-- **Pending:** promotion PR merge-result CI against `main`.
+- **Pending:** PR #13 exact-head merge-result verification against `main`.
+- **Pending after merge:** `main` push verification.
 
 ### Documentation
 
-- **Previously stale:** current spec and merge state.
-- **Closure branch:** consolidated spec, current status, and this ship audit align documentation to the release candidate.
+- **Verified on promotion head:** `docs/project-status.md`, the active internal-MVP spec, and this ship audit have been updated to current release state.
+- `tasks/traceability.md` remains the frozen requirement/implementation/verification ledger and does not need release-state mutation.
+- `tasks/plan.md`, `tasks/todo.md`, and the historical production spec are lower-precedence planning/history artifacts; current truth is governed by the authoritative documents above.
 
 ### Security
 
-- **Verified:** standalone and MCP dependency audits passed on the integrated source tree.
-- **Verified:** SSRF-safe fetch, model-output distrust, artifact path/ownership, non-root containers, loopback app publish, non-published worker and read-only worker credential mount are retained contract/verification gates.
-- **No scope expansion:** closure work does not broaden auth, network, provider, data, or filesystem permissions.
+- **Verified:** standalone and MCP dependency audits passed on release-closure evidence.
+- **Verified contract:** SSRF-safe fetch, model-output distrust, artifact path/ownership, non-root containers, loopback app publish, non-published worker and read-only worker credential mount remain required gates.
+- **No scope expansion:** promotion does not broaden auth, network, provider, data, or filesystem permissions.
 
 ### Observability / operations
 
-For this internal private/loopback milestone, the retained contract uses health endpoints, persisted stage/error state, request IDs, and deterministic recovery rather than a full production SLO/metrics platform. Full public-production observability remains out of scope.
+For this internal private/loopback milestone, health endpoints, persisted stage/error state, request IDs, and deterministic recovery are the retained operational contract. Full public-production SLO/metrics infrastructure remains out of scope.
 
-If the app is intentionally exposed beyond the trusted internal boundary, a new auth/TLS/observability ship task is required first.
+If the app is intentionally exposed beyond the trusted internal boundary, a separate auth/TLS/observability ship task is required first.
 
 ### Accessibility
 
 - **Automated/static evidence:** UI state/control tests and production build exist.
-- **Not verified in this audit:** real browser keyboard/focus/console walkthrough.
-- **Ship gate:** pending manual/browser evidence as described above.
+- **Pending:** real browser keyboard/focus/console walkthrough or explicit release-owner resolution.
 
 ## CI / promotion policy
 
-The release sequence is:
+Current sequence:
 
-1. merge the release-closure PR into `spec/standalone-production-app` only after its full verification workflow is green and a human approves the exact head;
-2. open `spec/standalone-production-app -> main`;
-3. require the same full `Bright Profile Verification` workflow to pass on the promotion PR merge result;
-4. review the promotion as a frozen release delta; no feature work should be added there;
-5. merge to `main` only with exact-head human approval;
-6. require the `push` verification workflow on `main` to complete successfully after merge.
+1. **done** — merge PR #12 release closure after full CI;
+2. **done** — verify post-merge push on `spec/standalone-production-app`;
+3. **done** — open promotion PR #13 `spec/standalone-production-app -> main`;
+4. **in progress** — synchronize authoritative docs on the promotion head;
+5. **required** — full `Bright Profile Verification` passes on the final exact PR #13 head/merge result;
+6. **required** — resolve/record the real-browser keyboard/focus/console gate;
+7. **required** — human explicitly approves the final promotion head;
+8. **required** — merge PR #13 to `main` using an exact-head guard;
+9. **required** — `main` push verification completes successfully.
 
-A green historical PR run is supporting evidence, not a substitute for steps 1–6.
+No feature work should be added to PR #13. Any runtime/code change after the final release review reopens the applicable verification/review gates.
 
 ## Rollback plan
 
 ### Repository integration rollback
 
-Merging to `main` is repository integration only; no deployment workflow exists in `.github/workflows` at audit time.
+Merging PR #13 to `main` is repository integration only; no deployment workflow exists in `.github/workflows` for this milestone.
 
 Before promotion merge, record:
 
-- current `main` SHA;
-- promotion PR exact head SHA;
-- merge method used.
+- pre-merge `main` SHA;
+- final PR #13 exact head SHA;
+- merge method used;
+- resulting merge commit SHA.
 
-If the merged default-branch change must be rolled back:
+If the default-branch promotion must be rolled back:
 
 1. do not force-push shared `main`;
-2. create a revert PR that reverses the promotion merge/squash commit;
+2. create a revert PR that reverses the promotion merge commit;
 3. run the same full verification workflow on the revert PR;
 4. merge the revert only after green CI and human review;
 5. verify the post-revert `main` push workflow.
 
 ### Runtime deployment rollback
 
-No runtime deployment is performed by this audit.
+No runtime deployment is performed by this repository promotion.
 
-If a persistent internal host is later updated to this release:
+If a persistent internal host is later updated:
 
 1. record the currently deployed commit/image before changing it;
 2. stop application writers and take a consistent backup/snapshot of the `bright-data` volume, including `bright-profile.sqlite` and authoritative artifacts;
@@ -188,20 +190,23 @@ Current migrations are additive, but this audit does **not** claim a tested auto
 
 ## GO / NO-GO gate
 
-### Current verdict: HOLD / NO-GO
+### Current verdict: HOLD / NO-GO for merge
 
-The implementation tree has strong prior verification and review evidence, but promotion is not yet authorized because release-specific evidence is incomplete.
+The release-closure and source-branch gates are green and promotion PR #13 is open, but final promotion evidence is not yet complete.
 
-### GO requires all of the following
+### Gate status
 
-- [ ] release-closure PR full workflow is green on its exact head/merge result;
-- [ ] release-closure diff receives human approval;
-- [ ] real browser keyboard/focus/console smoke is recorded as passing;
-- [ ] release-closure PR is merged into `spec/standalone-production-app`;
-- [ ] promotion PR `spec/standalone-production-app -> main` is opened with no unrelated feature delta;
-- [ ] promotion PR full workflow is green on the exact merge result;
-- [ ] human approves the exact promotion head;
-- [ ] rollback owner is known if a persistent host deployment will follow;
-- [ ] post-merge `main` push workflow completes successfully.
+- [x] release-closure PR #12 full workflow green on exact head;
+- [x] release-closure decision explicitly authorized by the human release owner;
+- [x] release-closure PR #12 merged into `spec/standalone-production-app`;
+- [x] source-branch post-merge workflow `31825258653` green;
+- [x] promotion PR #13 `spec/standalone-production-app -> main` opened;
+- [x] authoritative project-status/spec/ship documentation synchronized to the promotion phase;
+- [ ] final exact-head PR #13 full workflow green;
+- [ ] real browser keyboard/focus/console smoke recorded as passing, or explicitly resolved by the human release owner;
+- [ ] human explicitly approves the final PR #13 head;
+- [ ] PR #13 merged to `main`;
+- [ ] post-merge `main` push workflow green;
+- [ ] rollback owner recorded if a persistent host deployment will follow.
 
-Only after these gates pass should the repository promotion be called **SHIP-ready**.
+Only after the applicable remaining gates pass should repository promotion be called **SHIP-ready / complete**.
