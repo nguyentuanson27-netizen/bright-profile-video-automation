@@ -21,7 +21,14 @@ jobs:
         with:
           node-version: '24.18.0'
           package-manager-cache: false
-      - name: Install frozen dependencies
+      - name: Generate lockfile checkpoint
+        run: |
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          echo BRIGHT_LOCKFILE_GZIP_BASE64_BEGIN
+          gzip -c package-lock.json | base64 -w0
+          echo
+          echo BRIGHT_LOCKFILE_GZIP_BASE64_END
+      - name: Install synchronized dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Standalone production dependency audit
         run: npm run audit:standalone
