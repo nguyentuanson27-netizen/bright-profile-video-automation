@@ -24,6 +24,19 @@ const input = {
   evidence: [{id: 'ev-1', claim: 'Creator reached 100 followers.', confidence: 'high', conflictGroupId: null, sourceIds: ['source-1']}],
 };
 
+const collectSchemaKeywords = (value, output = new Set()) => {
+  if (!value || typeof value !== 'object') return output;
+  if (Array.isArray(value)) {
+    for (const entry of value) collectSchemaKeywords(entry, output);
+    return output;
+  }
+  for (const [key, entry] of Object.entries(value)) {
+    output.add(key);
+    collectSchemaKeywords(entry, output);
+  }
+  return output;
+};
+
 test('OpenAI generation uses Responses Structured Outputs without browsing and returns parsed draft data', async () => {
   let request;
   const client = {responses: {async create(value) {
@@ -41,6 +54,10 @@ test('OpenAI generation uses Responses Structured Outputs without browsing and r
   assert.equal(request.text.format.type, 'json_schema');
   assert.equal(request.text.format.strict, true);
   assert.equal(request.text.format.schema.additionalProperties, false);
+  const keywords = collectSchemaKeywords(request.text.format.schema);
+  for (const unsupported of ['minLength', 'maxLength', 'uniqueItems']) {
+    assert.equal(keywords.has(unsupported), false, unsupported);
+  }
   assert.ok(JSON.stringify(request.input).includes('source-1'));
 });
 
