@@ -1,12 +1,12 @@
 # Bright Profile — Current Project Status
 
-**Status date:** 2026-08-14  
+**Status date:** 2026-08-15  
 **Authoritative scope:** internal standalone app MVP for one operator/small internal team.  
-**Lifecycle:** BUILD/VERIFY/REVIEW complete for T01–T16; SHIP closure in progress.
+**Lifecycle:** DEFINE/PLAN/BUILD/VERIFY/REVIEW complete for T01–T16; SHIP promotion to `main` in progress.
 
 ## Current objective
 
-Promote the completed standalone internal MVP safely from `spec/standalone-production-app` to `main` after release-closure CI, documentation/spec alignment, ship audit, and human approval.
+Promote the completed standalone internal MVP safely from `spec/standalone-production-app` to the default branch `main` through promotion PR #13, with fresh exact-head CI and explicit human approval before merge.
 
 Frozen operator flow:
 
@@ -48,13 +48,25 @@ The Bright Evidence MCP `normalize_evidence` integration remains available as a 
 
 ## Verification evidence
 
-PR #11 completed T14–T16 and merged into `spec/standalone-production-app` on 2026-08-14.
+### Implementation closure
 
-The last pre-merge exact source tree was `d2470ba4290930df35dee7e20be58c972f88c46b`. GitHub Actions run `31799285582` completed successfully on commit `ec82a6fe551d34b1128fe9fa920b5edd0fe412bd`, which has that tree. The branch merge commit `9224107196606737c9b33c9788ef769376c628c7` has the same tree.
+PR #11 completed T14–T16 and merged into `spec/standalone-production-app` on 2026-08-14. GitHub Actions run `31799285582` completed **SUCCESS** on exact head `ec82a6fe551d34b1128fe9fa920b5edd0fe412bd`, source tree `d2470ba4290930df35dee7e20be58c972f88c46b`.
 
 That verification covered frozen install, standalone/MCP production audits, SQLite migration smoke, full unit/integration tests, aggregate lint, Vite build, syntax checks, standalone API/UI health, MCP health, Remotion smoke, standalone Compose validation, real app/worker container boundary checks, MCP Compose/container verification, and teardown.
 
-Fresh promotion evidence is still required before `main` merge. The verification workflow is being extended so both PRs targeting `main` and pushes to `main` run the same gate.
+### Release closure
+
+PR #12 (`ship: close standalone MVP release gates`) merged into `spec/standalone-production-app` as commit `5594bc16d9ce30c5155a0f5ec4bb261bdaf431cf`.
+
+- PR #12 exact-head workflow `31806106643`: **SUCCESS**.
+- post-merge push workflow `31825258653` on `5594bc16d9ce30c5155a0f5ec4bb261bdaf431cf`: **SUCCESS**.
+- the workflow now verifies PRs targeting `main` and pushes to `main` in addition to the retained integration/build gates.
+
+### Promotion
+
+Promotion PR #13 is open from `spec/standalone-production-app` to `main`.
+
+The promotion PR must be judged on its **final exact head**, including these documentation-sync commits. Historical green runs are supporting evidence only; fresh promotion CI is required after the final docs head is established.
 
 ## Security and integrity boundaries retained
 
@@ -68,12 +80,12 @@ The internal scope still requires fail-closed security at external and persisten
 - every approved media file is revalidated by byte size and SHA-256 before render;
 - the completed MP4 is published only after successful current-owner validation and is revalidated before download;
 - normal Remotion execution does not disable Chromium web security and does not accept arbitrary remote/file media refs;
-- the main standalone Compose host port is loopback-only by default and the worker publishes no HTTP port;
+- the standalone Compose host port is loopback-only by default and the worker publishes no HTTP port;
 - provider credentials remain environment/deployment-secret concerns and are not persisted in application records or committed to Git.
 
 ## Frozen MVP contract and traceability
 
-`tasks/traceability.md` is the closure ledger for the milestone and maps retained operations/invariants to owner tasks, implementation surfaces, focused regressions and final E2E/CI gates.
+`tasks/traceability.md` remains the closure ledger for the milestone and maps retained operations/invariants to owner tasks, implementation surfaces, focused regressions and final E2E/CI gates.
 
 Historical ideas not retained by that ledger remain deferred, including post-create source-list editing/rerun research, regenerate-from-same-sources, rerender of an already completed revision, raw approved-manifest export, multi-tenant/public SaaS behavior and full production metrics/operations work.
 
@@ -101,10 +113,12 @@ When documentation conflicts, use this order for the current milestone:
 
 ## Merge / release state
 
-- T01–T16 implementation PRs are merged into `spec/standalone-production-app`.
-- `spec/standalone-production-app` remains ahead of `main`; the standalone MVP has not yet been promoted to the default branch.
-- A release-closure branch/PR owns the current ship audit, consolidated spec update, and CI promotion-trigger fix.
-- Do not merge the promotion to `main` until the closure PR is green, the promotion PR itself receives fresh green CI, and a human approves the exact promotion head.
+- T01–T16 implementation is complete on `spec/standalone-production-app`.
+- PR #12 release closure is merged and both exact-head and post-merge source-branch CI are green.
+- Promotion PR #13 (`spec/standalone-production-app -> main`) is open.
+- `main` has **not** yet received the standalone MVP.
+- Do not merge PR #13 until its final exact head receives fresh full `Bright Profile Verification` and explicit human approval; the browser keyboard/focus/console ship evidence remains governed by the ship audit.
+- After merge, the `main` push workflow must complete successfully before repository promotion is called complete.
 - No deployment is implied by merging to `main`; runtime deployment/rollback must follow the ship audit if/when an internal host is updated.
 
 See `docs/ship/standalone-mvp-ship-audit.md` for current go/no-go evidence and rollback procedure.
