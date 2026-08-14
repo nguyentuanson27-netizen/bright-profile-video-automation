@@ -2,10 +2,12 @@ import {randomUUID} from 'node:crypto';
 import {AppError, ErrorCodes} from '../domain/errors.mjs';
 
 const MAX_PROGRESS_BYTES = 1024 * 1024;
+const MAX_RESEARCH_BYTES = 8 * 1024 * 1024;
 const nowIso = (nowMs) => new Date(nowMs).toISOString();
 const staleClaimError = () => new AppError(ErrorCodes.STALE_CLAIM, 'Job claim is stale or lease has expired');
 const stageNotRetryableError = () => new AppError(ErrorCodes.STAGE_NOT_RETRYABLE, 'Stage is not retryable');
 const stageNotActiveError = () => new AppError(ErrorCodes.STAGE_NOT_ACTIVE, 'Stage is not active');
+const transitionError = (message) => new AppError(ErrorCodes.INVALID_TRANSITION, message);
 
 const assertPositiveInteger = (value, name, max = Number.MAX_SAFE_INTEGER) => {
   if (!Number.isSafeInteger(value) || value < 1 || value > max) {
@@ -17,11 +19,12 @@ const assertNow = (value) => {
   if (!Number.isSafeInteger(value) || value < 0) throw new TypeError('nowMs must be a non-negative safe integer');
 };
 
-const serializeJson = (value, name) => {
+const serializeBoundedJson = (value, name, maxBytes) => {
   const json = JSON.stringify(value ?? {});
-  if (Buffer.byteLength(json, 'utf8') > MAX_PROGRESS_BYTES) throw new TypeError(`${name} is too large`);
+  if (Buffer.byteLength(json, 'utf8') > maxBytes) throw new TypeError(`${name} is too large`);
   return json;
 };
+const serializeJson = (value, name) => serializeBoundedJson(value, name, MAX_PROGRESS_BYTES);
 
 const stageFromRow = (row) => row && ({
   id: row.id,
@@ -72,6 +75,14 @@ const artifactFromRow = (row) => row && ({
   createdAt: row.created_at,
 });
 
+const activeProjectStatus = (stageType) => ({
+  research: 'researching',
+  generation: 'generating',
+  media_ingest: 'media_ingest',
+  tts: 'tts',
+  render: 'rendering',
+}[stageType] ?? stageType);
+
 export const createJobStore = (db, {
   leaseMs = 30_000,
   baseBackoffMs = 1_000,
@@ -79,12 +90,16 @@ export const createJobStore = (db, {
   defaultMaxAttempts = 3,
   tokenFactory = randomUUID,
   attemptIdFactory = randomUUID,
+  sourceIdFactory = randomUUID,
 } = {}) => {
   assertPositiveInteger(leaseMs, 'leaseMs', 10 * 60 * 1000);
   assertPositiveInteger(baseBackoffMs, 'baseBackoffMs', 10 * 60 * 1000);
   assertPositiveInteger(maxBackoffMs, 'maxBackoffMs', 10 * 60 * 1000);
   assertPositiveInteger(defaultMaxAttempts, 'defaultMaxAttempts', 100);
   if (baseBackoffMs > maxBackoffMs) throw new TypeError('baseBackoffMs must not exceed maxBackoffMs');
+  for (const [factory, name] of [[tokenFactory, 'tokenFactory'], [attemptIdFactory, 'attemptIdFactory'], [sourceIdFactory, 'sourceIdFactory']]) {
+    if (typeof factory !== 'function') throw new TypeError(`${name} must be a function`);
+  }
 
   const insertStage = db.prepare(`
     INSERT INTO stages (
@@ -96,6 +111,9 @@ export const createJobStore = (db, {
     )
   `);
   const getStageRow = db.prepare('SELECT * FROM stages WHERE id = ?');
+  const getLatestProjectStageRow = db.prepare(`
+    SELECT * FROM stages WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT 1
+  `);
   const listAttemptRows = db.prepare('SELECT * FROM attempts WHERE stage_id = ? ORDER BY attempt_no');
   const insertAttempt = db.prepare(`
     INSERT INTO attempts (
@@ -170,6 +188,36 @@ export const createJobStore = (db, {
   const updateRevisionPayload = db.prepare(`
     UPDATE revisions SET payload_json = ?, payload_hash = ? WHERE id = ?
   `);
+  const getProjectRow = db.prepare('SELECT * FROM projects WHERE id = ?');
+  const startProjectResearch = db.prepare(`
+    UPDATE projects
+    SET status = 'researching', failed_stage = NULL, failure_retryable = NULL,
+        failure_code = NULL, updated_at = ?
+    WHERE id = ? AND status = 'draft'
+  `);
+  const markProjectActive = db.prepare(`
+    UPDATE projects
+    SET status = ?, failed_stage = NULL, failure_retryable = NULL,
+        failure_code = NULL, updated_at = ?
+    WHERE id = ?
+  `);
+  const markProjectFailed = db.prepare(`
+    UPDATE projects
+    SET status = 'failed', failed_stage = ?, failure_retryable = ?,
+        failure_code = ?, updated_at = ?
+    WHERE id = ?
+  `);
+  const markProjectResearchReady = db.prepare(`
+    UPDATE projects
+    SET status = 'research_ready', research_json = ?, failed_stage = NULL,
+        failure_retryable = NULL, failure_code = NULL, updated_at = ?
+    WHERE id = ? AND status = 'researching'
+  `);
+  const deleteProjectSources = db.prepare('DELETE FROM sources WHERE project_id = ?');
+  const insertSource = db.prepare(`
+    INSERT INTO sources (id, project_id, url, status, payload_json, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
   const insertArtifact = db.prepare(`
     INSERT INTO artifacts (
       id, project_id, revision_id, stage_id, attempt_id, kind, relative_path,
@@ -211,6 +259,32 @@ export const createJobStore = (db, {
     }
     return {types, statement};
   };
+
+  const startResearchTx = db.transaction(({projectId, stageId, nowMs, maxAttempts = defaultMaxAttempts}) => {
+    assertNow(nowMs);
+    assertPositiveInteger(maxAttempts, 'maxAttempts', 100);
+    const project = getProjectRow.get(projectId);
+    if (!project) throw transitionError('Project does not exist');
+    const currentStage = getLatestProjectStageRow.get(projectId);
+    if (project.status === 'researching' && currentStage && ['queued', 'running'].includes(currentStage.state)) {
+      return {changed: false, stage: stageFromRow(currentStage)};
+    }
+    if (project.status !== 'draft') throw transitionError('Research can only start from draft');
+    const timestamp = nowIso(nowMs);
+    insertStage.run({
+      id: stageId,
+      logicalKey: `${projectId}:research`,
+      projectId,
+      revisionId: null,
+      type: 'research',
+      maxAttempts,
+      availableAtMs: nowMs,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    if (startProjectResearch.run(timestamp, projectId).changes !== 1) throw transitionError('Project state changed while starting research');
+    return {changed: true, stage: stageFromRow(getStageRow.get(stageId))};
+  });
 
   const claimTx = db.transaction(({workerId, nowMs, allowedTypes}) => {
     assertNow(nowMs);
@@ -269,9 +343,13 @@ export const createJobStore = (db, {
     const current = requireCurrentClaim(stageId, claimToken, nowMs);
     const canRetry = Boolean(retryable && current.attempt_count < current.max_attempts);
     const code = typeof errorCode === 'string' && errorCode.length > 0 ? errorCode : 'STAGE_FAILED';
+    const timestamp = nowIso(nowMs);
     if (finishAttempt.run('failed', nowMs, code, errorMessage, stageId, claimToken).changes !== 1) throw staleClaimError();
-    if (finishStage.run('failed', canRetry ? 1 : 0, code, errorMessage, nowIso(nowMs), stageId, claimToken).changes !== 1) {
+    if (finishStage.run('failed', canRetry ? 1 : 0, code, errorMessage, timestamp, stageId, claimToken).changes !== 1) {
       throw staleClaimError();
+    }
+    if (markProjectFailed.run(current.stage_type, canRetry ? 1 : 0, code, timestamp, current.project_id).changes !== 1) {
+      throw transitionError('Project disappeared while recording stage failure');
     }
     return stageFromRow(getStageRow.get(stageId));
   });
@@ -285,7 +363,11 @@ export const createJobStore = (db, {
       if (!token) continue;
       finishAttempt.run('lost', nowMs, 'LEASE_EXPIRED', 'Worker lease expired', row.id, token);
       if (row.attempt_count >= row.max_attempts) {
-        if (exhaustStage.run(nowIso(nowMs), row.id, token).changes === 1) exhausted += 1;
+        const timestamp = nowIso(nowMs);
+        if (exhaustStage.run(timestamp, row.id, token).changes === 1) {
+          markProjectFailed.run(row.stage_type, 0, 'ATTEMPTS_EXHAUSTED', timestamp, row.project_id);
+          exhausted += 1;
+        }
         continue;
       }
       const exponent = Math.max(0, row.attempt_count - 1);
@@ -301,7 +383,11 @@ export const createJobStore = (db, {
     if (!row) throw stageNotRetryableError();
     if (row.state === 'queued' || row.state === 'running') return {changed: false, stage: stageFromRow(row)};
     if (row.state !== 'failed' || !row.retryable || row.attempt_count >= row.max_attempts) throw stageNotRetryableError();
-    if (queueRetry.run(nowMs, nowIso(nowMs), stageId).changes !== 1) throw stageNotRetryableError();
+    const timestamp = nowIso(nowMs);
+    if (queueRetry.run(nowMs, timestamp, stageId).changes !== 1) throw stageNotRetryableError();
+    if (markProjectActive.run(activeProjectStatus(row.stage_type), timestamp, row.project_id).changes !== 1) {
+      throw transitionError('Project disappeared while retrying stage');
+    }
     return {changed: true, stage: stageFromRow(getStageRow.get(stageId))};
   });
 
@@ -323,6 +409,41 @@ export const createJobStore = (db, {
     if (current.revision_id !== revisionId) throw new AppError(ErrorCodes.INVALID_TRANSITION, 'Claim does not own this revision');
     if (updateRevisionPayload.run(serializeJson(payload, 'draft'), payloadHash, revisionId).changes !== 1) {
       throw new AppError(ErrorCodes.INVALID_TRANSITION, 'Revision not found');
+    }
+    return true;
+  });
+
+  const commitResearchTx = db.transaction(({stageId, claimToken, result, nowMs}) => {
+    const current = requireCurrentClaim(stageId, claimToken, nowMs);
+    if (current.stage_type !== 'research') throw transitionError('Claim is not a research stage');
+    if (!result || typeof result !== 'object' || Array.isArray(result) || !result.bundle) {
+      throw new TypeError('research result is required');
+    }
+    if (!Array.isArray(result.sources) || !Array.isArray(result.unavailableSources)) {
+      throw new TypeError('research sources and unavailableSources must be arrays');
+    }
+    const researchJson = serializeBoundedJson(result.bundle, 'research result', MAX_RESEARCH_BYTES);
+    const timestamp = nowIso(nowMs);
+    const records = new Map();
+    for (const source of result.sources) {
+      if (!source || typeof source.url !== 'string' || Object.hasOwn(source, 'id')) throw new TypeError('research source is invalid');
+      records.set(source.url, {status: 'available', payload: {...source}});
+    }
+    for (const source of result.unavailableSources) {
+      if (!source || typeof source.url !== 'string' || Object.hasOwn(source, 'id')) throw new TypeError('unavailable research source is invalid');
+      if (!records.has(source.url)) records.set(source.url, {status: 'unavailable', payload: {...source}});
+    }
+
+    deleteProjectSources.run(current.project_id);
+    for (const [url, record] of [...records.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+      const id = sourceIdFactory();
+      if (typeof id !== 'string' || id.length === 0) throw new TypeError('sourceIdFactory must return a non-empty string');
+      insertSource.run(id, current.project_id, url, record.status, JSON.stringify(record.payload), timestamp, timestamp);
+    }
+    if (finishAttempt.run('succeeded', nowMs, null, null, stageId, claimToken).changes !== 1) throw staleClaimError();
+    if (finishStage.run('succeeded', 0, null, null, timestamp, stageId, claimToken).changes !== 1) throw staleClaimError();
+    if (markProjectResearchReady.run(researchJson, timestamp, current.project_id).changes !== 1) {
+      throw transitionError('Project state changed while committing research');
     }
     return true;
   });
@@ -370,6 +491,9 @@ export const createJobStore = (db, {
       });
       return stageFromRow(getStageRow.get(record.id));
     },
+    startResearch(record) {
+      return startResearchTx.immediate(record);
+    },
     claimNext(record) {
       return claimTx.immediate(record);
     },
@@ -397,6 +521,9 @@ export const createJobStore = (db, {
     persistDraft(record) {
       return persistDraftTx.immediate(record);
     },
+    commitResearch(record) {
+      return commitResearchTx.immediate(record);
+    },
     registerArtifact(record) {
       return registerArtifactTx.immediate(record);
     },
@@ -405,6 +532,9 @@ export const createJobStore = (db, {
     },
     getStage(stageId) {
       return stageFromRow(getStageRow.get(stageId));
+    },
+    getCurrentStage(projectId) {
+      return stageFromRow(getLatestProjectStageRow.get(projectId));
     },
     listAttempts(stageId) {
       return listAttemptRows.all(stageId).map(attemptFromRow);
