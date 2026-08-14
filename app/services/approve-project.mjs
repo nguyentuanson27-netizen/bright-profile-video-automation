@@ -37,18 +37,17 @@ export const createApprovalService = ({repos, now = Date.now, revisionIdFactory}
     },
 
     editDraft(projectId, draft) {
-      const project = requireProject(projectId);
+      requireProject(projectId);
       const knownSourceIds = sourceIds(projectId);
       validateDraft(draft, {knownSourceIds});
       const payloadHash = hashDraft(draft);
-      const result = repos.revisions.editCurrent({
+      return repos.revisions.editCurrent({
         projectId,
         revisionId: generatedRevisionId(),
         payload: draft,
         payloadHash,
         updatedAt: new Date(now()).toISOString(),
       });
-      return result;
     },
 
     approve(projectId) {
