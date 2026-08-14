@@ -13,9 +13,7 @@ const nowIso = () => new Date().toISOString();
 const parseJson = (value) => JSON.parse(value);
 
 const assertBusyTimeout = (value) => {
-  if (!Number.isSafeInteger(value) || value < 1 || value > 60_000) {
-    throw new TypeError('busyTimeoutMs must be an integer between 1 and 60000');
-  }
+  if (!Number.isSafeInteger(value) || value < 1 || value > 60_000) throw new TypeError('busyTimeoutMs must be an integer between 1 and 60000');
 };
 
 export const openDatabase = (databasePath, {busyTimeoutMs = 5_000} = {}) => {
@@ -32,11 +30,8 @@ export const openDatabase = (databasePath, {busyTimeoutMs = 5_000} = {}) => {
 
 export const migrateDatabase = (db) => {
   const version = db.pragma('user_version', {simple: true});
-  if (!Number.isInteger(version) || version < 0 || version > LATEST_VERSION) {
-    throw new Error(`Unsupported database schema version: ${version}`);
-  }
+  if (!Number.isInteger(version) || version < 0 || version > LATEST_VERSION) throw new Error(`Unsupported database schema version: ${version}`);
   if (version === LATEST_VERSION) return version;
-
   const migrate = db.transaction(() => {
     for (let next = version + 1; next <= LATEST_VERSION; next += 1) {
       const sql = MIGRATIONS[next];
@@ -50,139 +45,51 @@ export const migrateDatabase = (db) => {
 };
 
 const projectFromRow = (row) => row && ({
-  id: row.id,
-  creator: row.creator,
-  topic: row.topic,
-  instructions: row.instructions ?? '',
-  status: row.status,
-  currentRevisionId: row.current_revision_id,
-  approvedRevisionId: row.approved_revision_id,
-  failedStage: row.failed_stage,
-  failureRetryable: row.failure_retryable === null ? null : Boolean(row.failure_retryable),
-  failureCode: row.failure_code,
-  research: row.research_json ? parseJson(row.research_json) : null,
-  createdAt: row.created_at,
-  updatedAt: row.updated_at,
+  id: row.id, creator: row.creator, topic: row.topic, instructions: row.instructions ?? '', status: row.status,
+  currentRevisionId: row.current_revision_id, approvedRevisionId: row.approved_revision_id, failedStage: row.failed_stage,
+  failureRetryable: row.failure_retryable === null ? null : Boolean(row.failure_retryable), failureCode: row.failure_code,
+  research: row.research_json ? parseJson(row.research_json) : null, createdAt: row.created_at, updatedAt: row.updated_at,
 });
-
 const sourceFromRow = (row) => row && ({
-  id: row.id,
-  projectId: row.project_id,
-  url: row.url,
-  status: row.status,
-  payload: parseJson(row.payload_json),
-  createdAt: row.created_at,
-  updatedAt: row.updated_at,
+  id: row.id, projectId: row.project_id, url: row.url, status: row.status, payload: parseJson(row.payload_json), createdAt: row.created_at, updatedAt: row.updated_at,
 });
-
 const revisionFromRow = (row) => row && ({
-  id: row.id,
-  projectId: row.project_id,
-  revisionNo: row.revision_no,
-  payload: parseJson(row.payload_json),
-  payloadHash: row.payload_hash,
-  approvedAt: row.approved_at,
-  createdAt: row.created_at,
+  id: row.id, projectId: row.project_id, revisionNo: row.revision_no, payload: parseJson(row.payload_json), payloadHash: row.payload_hash, approvedAt: row.approved_at, createdAt: row.created_at,
 });
-
 const stageFromRow = (row) => row && ({
-  id: row.id,
-  logicalKey: row.logical_key,
-  projectId: row.project_id,
-  revisionId: row.revision_id,
-  type: row.stage_type,
-  state: row.state,
-  retryable: Boolean(row.retryable),
-  maxAttempts: row.max_attempts,
-  attemptCount: row.attempt_count,
-  availableAtMs: row.available_at_ms,
-  currentClaimToken: row.current_claim_token,
-  leaseExpiresAtMs: row.lease_expires_at_ms,
-  progress: parseJson(row.progress_json),
-  errorCode: row.error_code,
-  errorMessage: row.error_message,
-  createdAt: row.created_at,
-  updatedAt: row.updated_at,
+  id: row.id, logicalKey: row.logical_key, projectId: row.project_id, revisionId: row.revision_id, type: row.stage_type, state: row.state,
+  retryable: Boolean(row.retryable), maxAttempts: row.max_attempts, attemptCount: row.attempt_count, availableAtMs: row.available_at_ms,
+  currentClaimToken: row.current_claim_token, leaseExpiresAtMs: row.lease_expires_at_ms, progress: parseJson(row.progress_json), errorCode: row.error_code,
+  errorMessage: row.error_message, createdAt: row.created_at, updatedAt: row.updated_at,
 });
 
 const transitionError = (message) => new AppError(ErrorCodes.INVALID_TRANSITION, message);
-const downstreamStartedError = () => new AppError(
-  ErrorCodes.DOWNSTREAM_WORK_STARTED,
-  'Approval-relevant edit is blocked after downstream work starts',
-);
+const downstreamStartedError = () => new AppError(ErrorCodes.DOWNSTREAM_WORK_STARTED, 'Approval-relevant edit is blocked after downstream work starts');
 
 export const createRepositories = (db) => {
-  const insertProject = db.prepare(`
-    INSERT INTO projects (id, creator, topic, instructions, status, created_at, updated_at)
-    VALUES (@id, @creator, @topic, @instructions, @status, @createdAt, @updatedAt)
-  `);
+  const insertProject = db.prepare(`INSERT INTO projects (id, creator, topic, instructions, status, created_at, updated_at) VALUES (@id, @creator, @topic, @instructions, @status, @createdAt, @updatedAt)`);
   const getProject = db.prepare('SELECT * FROM projects WHERE id = ?');
   const listProjects = db.prepare('SELECT * FROM projects ORDER BY created_at, id');
-  const insertSource = db.prepare(`
-    INSERT INTO sources (id, project_id, url, status, payload_json, created_at, updated_at)
-    VALUES (@id, @projectId, @url, @status, @payloadJson, @createdAt, @updatedAt)
-  `);
+  const insertSource = db.prepare(`INSERT INTO sources (id, project_id, url, status, payload_json, created_at, updated_at) VALUES (@id, @projectId, @url, @status, @payloadJson, @createdAt, @updatedAt)`);
   const getSource = db.prepare('SELECT * FROM sources WHERE id = ?');
   const listSources = db.prepare('SELECT * FROM sources WHERE project_id = ? ORDER BY created_at, id');
-  const insertRevision = db.prepare(`
-    INSERT INTO revisions (id, project_id, revision_no, payload_json, payload_hash, created_at)
-    VALUES (@id, @projectId, @revisionNo, @payloadJson, @payloadHash, @createdAt)
-  `);
+  const insertRevision = db.prepare(`INSERT INTO revisions (id, project_id, revision_no, payload_json, payload_hash, created_at) VALUES (@id, @projectId, @revisionNo, @payloadJson, @payloadHash, @createdAt)`);
   const setCurrentRevision = db.prepare('UPDATE projects SET current_revision_id = ?, updated_at = ? WHERE id = ?');
   const getRevision = db.prepare('SELECT * FROM revisions WHERE id = ?');
-  const updateRevisionPayload = db.prepare(`
-    UPDATE revisions SET payload_json = @payloadJson, payload_hash = @payloadHash WHERE id = @revisionId
-  `);
-  const updateUnapprovedRevisionPayload = db.prepare(`
-    UPDATE revisions SET payload_json = @payloadJson, payload_hash = @payloadHash
-    WHERE id = @revisionId AND project_id = @projectId AND approved_at IS NULL
-  `);
-  const cloneReviewProject = db.prepare(`
-    UPDATE projects
-    SET status = 'review_required', current_revision_id = @revisionId, approved_revision_id = NULL, updated_at = @updatedAt
-    WHERE id = @projectId AND status = 'approved'
-      AND current_revision_id = @expectedRevisionId AND approved_revision_id = @expectedRevisionId
-  `);
-  const approveRevisionRow = db.prepare(`
-    UPDATE revisions SET approved_at = @approvedAt
-    WHERE id = @revisionId AND project_id = @projectId AND approved_at IS NULL
-  `);
-  const approveProject = db.prepare(`
-    UPDATE projects
-    SET status = 'approved', approved_revision_id = @revisionId, updated_at = @updatedAt
-    WHERE id = @projectId AND current_revision_id = @revisionId
-  `);
-  const invalidateApprovalProject = db.prepare(`
-    UPDATE projects
-    SET status = 'review_required', approved_revision_id = NULL, updated_at = @updatedAt
-    WHERE id = @projectId
-      AND current_revision_id = @expectedRevisionId
-      AND approved_revision_id = @expectedRevisionId
-  `);
-  const enterMediaIngest = db.prepare(`
-    UPDATE projects
-    SET status = 'media_ingest', updated_at = @updatedAt
-    WHERE id = @projectId
-      AND status = 'approved'
-      AND current_revision_id = @revisionId
-      AND approved_revision_id = @revisionId
-  `);
+  const updateRevisionPayload = db.prepare('UPDATE revisions SET payload_json = @payloadJson, payload_hash = @payloadHash WHERE id = @revisionId');
+  const updateUnapprovedRevisionPayload = db.prepare(`UPDATE revisions SET payload_json = @payloadJson, payload_hash = @payloadHash WHERE id = @revisionId AND project_id = @projectId AND approved_at IS NULL`);
+  const cloneReviewProject = db.prepare(`UPDATE projects SET status = 'review_required', current_revision_id = @revisionId, approved_revision_id = NULL, updated_at = @updatedAt WHERE id = @projectId AND status = 'approved' AND current_revision_id = @expectedRevisionId AND approved_revision_id = @expectedRevisionId`);
+  const approveRevisionRow = db.prepare(`UPDATE revisions SET approved_at = @approvedAt WHERE id = @revisionId AND project_id = @projectId AND approved_at IS NULL`);
+  const approveProject = db.prepare(`UPDATE projects SET status = 'approved', approved_revision_id = @revisionId, updated_at = @updatedAt WHERE id = @projectId AND current_revision_id = @revisionId`);
+  const invalidateApprovalProject = db.prepare(`UPDATE projects SET status = 'review_required', approved_revision_id = NULL, updated_at = @updatedAt WHERE id = @projectId AND current_revision_id = @expectedRevisionId AND approved_revision_id = @expectedRevisionId`);
+  const enterMediaIngest = db.prepare(`UPDATE projects SET status = 'media_ingest', updated_at = @updatedAt WHERE id = @projectId AND status = 'approved' AND current_revision_id = @revisionId AND approved_revision_id = @revisionId`);
   const insertStage = db.prepare(`
-    INSERT INTO stages (
-      id, logical_key, project_id, revision_id, stage_type, state, retryable,
-      max_attempts, available_at_ms, created_at, updated_at
-    ) VALUES (
-      @id, @logicalKey, @projectId, @revisionId, @type, @state, @retryable,
-      @maxAttempts, @availableAtMs, @createdAt, @updatedAt
-    )
+    INSERT INTO stages (id, logical_key, project_id, revision_id, stage_type, state, retryable, max_attempts, available_at_ms, created_at, updated_at)
+    VALUES (@id, @logicalKey, @projectId, @revisionId, @type, @state, @retryable, @maxAttempts, @availableAtMs, @createdAt, @updatedAt)
   `);
   const getStage = db.prepare('SELECT * FROM stages WHERE id = ?');
   const getBarrierProject = db.prepare('SELECT status, current_revision_id, approved_revision_id FROM projects WHERE id = ?');
-  const hasDescendant = db.prepare(`
-    SELECT 1 FROM stages
-    WHERE project_id = ? AND revision_id = ? AND stage_type IN ('media_ingest', 'tts', 'render')
-    LIMIT 1
-  `);
+  const hasDescendant = db.prepare(`SELECT 1 FROM stages WHERE project_id = ? AND revision_id = ? AND stage_type IN ('media_ingest', 'tts', 'render') LIMIT 1`);
 
   const createProjectTx = db.transaction(({project, sources = []}) => {
     const createdAt = project.createdAt ?? nowIso();
@@ -229,45 +136,32 @@ export const createRepositories = (db) => {
     if (!current || current.project_id !== projectId) throw transitionError('Current revision is unavailable');
     const timestamp = updatedAt ?? nowIso();
     const payloadJson = JSON.stringify(payload);
+
     if (project.status === 'review_required') {
-      if (updateUnapprovedRevisionPayload.run({projectId, revisionId: current.id, payloadJson, payloadHash}).changes !== 1) {
-        throw transitionError('Current review revision is not editable');
-      }
+      if (updateUnapprovedRevisionPayload.run({projectId, revisionId: current.id, payloadJson, payloadHash}).changes !== 1) throw transitionError('Current review revision is not editable');
       return {project: projectFromRow(getProject.get(projectId)), revision: revisionFromRow(getRevision.get(current.id))};
     }
-    if (project.status !== 'approved' || project.approved_revision_id !== current.id) {
-      throw transitionError('Draft can only be edited from review_required or approved');
+
+    if (project.approved_revision_id === current.id) {
+      const barrier = readBarrier(projectId);
+      if (barrier.hasDescendantStage) throw downstreamStartedError();
+      if (project.status !== 'approved') throw transitionError('Approved draft is no longer editable');
+      if (typeof revisionId !== 'string' || revisionId.length === 0 || revisionId.length > 200 || revisionId === current.id) throw new TypeError('new revision id is invalid');
+      insertRevision.run({id: revisionId, projectId, revisionNo: current.revision_no + 1, payloadJson, payloadHash, createdAt: timestamp});
+      if (cloneReviewProject.run({projectId, revisionId, expectedRevisionId: current.id, updatedAt: timestamp}).changes !== 1) throw transitionError('Approval changed while applying the edit');
+      return {project: projectFromRow(getProject.get(projectId)), revision: revisionFromRow(getRevision.get(revisionId))};
     }
-    const barrier = readBarrier(projectId);
-    if (barrier.hasDescendantStage) throw downstreamStartedError();
-    if (typeof revisionId !== 'string' || revisionId.length === 0 || revisionId.length > 200 || revisionId === current.id) {
-      throw new TypeError('new revision id is invalid');
-    }
-    insertRevision.run({
-      id: revisionId,
-      projectId,
-      revisionNo: current.revision_no + 1,
-      payloadJson,
-      payloadHash,
-      createdAt: timestamp,
-    });
-    if (cloneReviewProject.run({projectId, revisionId, expectedRevisionId: current.id, updatedAt: timestamp}).changes !== 1) {
-      throw transitionError('Approval changed while applying the edit');
-    }
-    return {project: projectFromRow(getProject.get(projectId)), revision: revisionFromRow(getRevision.get(revisionId))};
+
+    throw transitionError('Draft can only be edited from review_required or approved');
   });
 
   const invalidateForEditTx = db.transaction(({projectId, expectedRevisionId, updatedAt}) => {
     const barrier = readBarrier(projectId);
-    if (!barrier || barrier.currentRevisionId !== expectedRevisionId || barrier.approvedRevisionId !== expectedRevisionId) {
-      throw transitionError('The expected approved revision is no longer current');
-    }
+    if (!barrier || barrier.currentRevisionId !== expectedRevisionId || barrier.approvedRevisionId !== expectedRevisionId) throw transitionError('The expected approved revision is no longer current');
     if (barrier.hasDescendantStage) throw downstreamStartedError();
     if (barrier.status !== 'approved') throw transitionError('Project is not in the approved state');
     const timestamp = updatedAt ?? nowIso();
-    if (invalidateApprovalProject.run({projectId, expectedRevisionId, updatedAt: timestamp}).changes !== 1) {
-      throw transitionError('Approval changed while applying the edit barrier');
-    }
+    if (invalidateApprovalProject.run({projectId, expectedRevisionId, updatedAt: timestamp}).changes !== 1) throw transitionError('Approval changed while applying the edit barrier');
     return projectFromRow(getProject.get(projectId));
   });
 
@@ -281,9 +175,7 @@ export const createRepositories = (db) => {
     const updatedAt = record.updatedAt ?? createdAt;
     const logicalKey = record.logicalKey ?? `${record.projectId}:${record.revisionId}:media_ingest`;
     insertStage.run({...record, logicalKey, state: record.state ?? 'queued', retryable: record.retryable ? 1 : 0, maxAttempts: record.maxAttempts, availableAtMs: record.availableAtMs ?? 0, createdAt, updatedAt});
-    if (enterMediaIngest.run({projectId: record.projectId, revisionId: record.revisionId, updatedAt}).changes !== 1) {
-      throw transitionError('Approval changed while creating the first downstream stage');
-    }
+    if (enterMediaIngest.run({projectId: record.projectId, revisionId: record.revisionId, updatedAt}).changes !== 1) throw transitionError('Approval changed while creating the first downstream stage');
     return stageFromRow(getStage.get(record.id));
   });
 
