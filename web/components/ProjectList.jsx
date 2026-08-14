@@ -13,21 +13,21 @@ export function ProjectList({projects, selectedId, onSelect, loading}) {
     </div>
     {loading && projects.length === 0 ? <p className="empty-state">Loading projects…</p> : null}
     {!loading && projects.length === 0 ? <p className="empty-state">No projects yet. Create one to begin.</p> : null}
-    <div className="project-list" role="list">
-      {projects.map((project) => <button
-        type="button"
-        role="listitem"
-        key={project.id}
-        className={`project-row${project.id === selectedId ? ' selected' : ''}`}
-        onClick={() => onSelect(project.id)}
-        aria-pressed={project.id === selectedId}
-      >
-        <span className="project-row-main">
-          <strong>{project.creator}</strong>
-          <span>{project.topic}</span>
-        </span>
-        <span className={`status-dot status-${project.status}`}>{statusLabel(project.status)}</span>
-      </button>)}
-    </div>
+    <ul className="project-list">
+      {projects.map((project) => <li key={project.id}>
+        <button
+          type="button"
+          className={`project-row${project.id === selectedId ? ' selected' : ''}`}
+          onClick={() => onSelect(project.id)}
+          aria-pressed={project.id === selectedId}
+        >
+          <span className="project-row-main">
+            <strong>{project.creator}</strong>
+            <span>{project.topic}</span>
+          </span>
+          <span className={`status-dot status-${project.status}`}>{statusLabel(project.status)}</span>
+        </button>
+      </li>)}
+    </ul>
   </section>;
 }
