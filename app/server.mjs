@@ -1,9 +1,11 @@
 import http from 'node:http';
 import {randomUUID} from 'node:crypto';
-import {accessSync, constants as fsConstants} from 'node:fs';
+import {accessSync, constants as fsConstants, createReadStream} from 'node:fs';
 import {resolve} from 'node:path';
 
 import {AppError} from '../domain/errors.mjs';
+import {createArtifactStore} from '../storage/artifacts.mjs';
+import {createArtifactsApi} from './http/artifacts.mjs';
 import {createProjectsApi} from './http/projects.mjs';
 import {createRevisionsApi} from './http/revisions.mjs';
 import {matchRoute} from './http/router.mjs';
@@ -20,6 +22,20 @@ const json = (res, status, value, requestId) => {
     ...(requestId ? {'x-request-id': requestId} : {}),
   });
   res.end(body);
+};
+
+const sendOutput = (res, output, requestId) => {
+  res.writeHead(200, {
+    'content-type': output.mimeType,
+    'content-length': output.byteSize,
+    'content-disposition': 'attachment; filename="bright-profile.mp4"',
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+    ...(requestId ? {'x-request-id': requestId} : {}),
+  });
+  const stream = createReadStream(output.absolutePath);
+  stream.once('error', () => res.destroy());
+  stream.pipe(res);
 };
 
 const readJsonBody = async (req, maxBytes) => {
@@ -68,6 +84,7 @@ export const createAppServer = ({
   db,
   repos,
   jobs,
+  artifactStore,
   dataDir,
   now = Date.now,
   nowMs = Date.now,
@@ -101,6 +118,8 @@ export const createAppServer = ({
     mediaIngestMaxAttempts,
   });
   const revisions = createRevisionsApi({repos, now, revisionIdFactory});
+  const resolvedArtifactStore = artifactStore ?? createArtifactStore(db);
+  const artifacts = createArtifactsApi({repos, artifactStore: resolvedArtifactStore, dataDir: resolvedDataDir});
   const readinessQuery = db.prepare('SELECT 1 AS ok');
 
   return http.createServer(async (req, res) => {
@@ -175,6 +194,11 @@ export const createAppServer = ({
       }
       if (route.name === 'projects.approve') {
         return json(res, 200, {...revisions.approve(route.id), requestId}, requestId);
+      }
+      if (route.name === 'projects.artifacts.output') {
+        const output = await artifacts.getOutput(route.id);
+        sendOutput(res, output, requestId);
+        return undefined;
       }
       return json(res, 404, {error: {code: 'NOT_FOUND', message: 'Route not found'}, requestId}, requestId);
     } catch (error) {

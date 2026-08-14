@@ -2,14 +2,28 @@ import {randomUUID} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
 import {loadConfig} from './app/config.mjs';
 import {createGenerationService, createGenerationStageHandler} from './app/services/generate-project.mjs';
+import {createMediaIngestService, createMediaIngestStageHandler} from './app/services/ingest-media.mjs';
+import {createRenderStageHandler, createTtsStageHandler} from './app/services/execute-render.mjs';
 import {createResearchService, createResearchStageHandler} from './app/services/research-project.mjs';
 import {createOpenAIGenerationProvider} from './providers/generation/openai.mjs';
 import {createOpenAIResearchProvider} from './providers/research/openai.mjs';
+import {createSafeFetcher} from './security/safe-fetch.mjs';
+import {createArtifactStore} from './storage/artifacts.mjs';
 import {openDatabase, migrateDatabase, createRepositories} from './storage/db.mjs';
 import {createJobStore} from './storage/jobs.mjs';
 import {createJobRunner} from './worker/job-runner.mjs';
 
-export const runWorker = async ({handlers, provider, researchProvider, generationProvider, env = process.env} = {}) => {
+export const runWorker = async ({
+  handlers,
+  provider,
+  researchProvider,
+  generationProvider,
+  mediaFetcher,
+  ttsGenerator,
+  renderer,
+  renderProbe,
+  env = process.env,
+} = {}) => {
   const config = loadConfig(env);
   const db = openDatabase(config.databasePath);
   migrateDatabase(db);
@@ -38,9 +52,31 @@ export const runWorker = async ({handlers, provider, researchProvider, generatio
       fetchOptions: config.fetch,
     });
     const generationService = createGenerationService({provider: resolvedGenerationProvider});
+    const artifactStore = createArtifactStore(db);
+    const mediaService = createMediaIngestService({
+      fetcher: mediaFetcher ?? createSafeFetcher(),
+      dataDir: config.dataDir,
+      fetchOptions: config.fetch,
+    });
+    const nextMaxAttempts = config.worker.maxRetries + 1;
     resolvedHandlers = {
       research: createResearchStageHandler({repos, researchService}),
       generation: createGenerationStageHandler({repos, generationService}),
+      media_ingest: createMediaIngestStageHandler({repos, artifactStore, service: mediaService, nextMaxAttempts}),
+      tts: createTtsStageHandler({
+        repos,
+        artifactStore,
+        dataDir: config.dataDir,
+        ...(ttsGenerator ? {generateTts: ttsGenerator} : {}),
+        nextMaxAttempts,
+      }),
+      render: createRenderStageHandler({
+        repos,
+        artifactStore,
+        dataDir: config.dataDir,
+        ...(renderer ? {renderer} : {}),
+        ...(renderProbe ? {probe: renderProbe} : {}),
+      }),
     };
   }
 
