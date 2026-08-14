@@ -1,3 +1,4 @@
+import {classifyInvalidItems, evidenceInputSchema} from '../../lib/evidence/schema-validator.mjs';
 import {assertSafePublicUrl} from '../../security/url-policy.mjs';
 
 export const ResearchProviderErrorCodes = Object.freeze({
@@ -22,6 +23,9 @@ const MAX_CANDIDATES = 200;
 const MAX_SOURCES = 200;
 const MAX_UNAVAILABLE_SOURCES = 100;
 const APP_OWNED_ID_FIELDS = new Set(['id', 'sourceId', 'evidenceId', 'applicationSourceId']);
+const SOURCE_RELATIONSHIPS = new Set(
+  evidenceInputSchema.$defs.evidenceItem.properties.sourceRelationship.enum,
+);
 
 const invalidResult = (message) => new ResearchProviderError(
   ResearchProviderErrorCodes.INVALID_RESULT,
@@ -38,6 +42,14 @@ const text = (value, name, {min = 0, max}) => {
   const normalized = value.trim();
   if (normalized.length < min || normalized.length > max) {
     throw invalidResult(`${name} length is outside the provider contract`);
+  }
+  return normalized;
+};
+
+const sourceRelationship = (value, name) => {
+  const normalized = text(value, name, {max: 64});
+  if (normalized !== undefined && !SOURCE_RELATIONSHIPS.has(normalized)) {
+    throw invalidResult(`${name} is outside the canonical evidence vocabulary`);
   }
   return normalized;
 };
@@ -73,15 +85,24 @@ const candidate = (value, index) => {
     excerpt: 1500,
     category: 128,
     sourceType: 64,
-    sourceRelationship: 64,
     claimDate: 64,
     unit: 128,
   };
   for (const [key, max] of Object.entries(boundedFields)) {
     if (value[key] !== undefined) normalized[key] = text(value[key], `candidates[${index}].${key}`, {max});
   }
+  if (value.sourceRelationship !== undefined) {
+    normalized.sourceRelationship = sourceRelationship(
+      value.sourceRelationship,
+      `candidates[${index}].sourceRelationship`,
+    );
+  }
   if (value.value !== undefined && !['string', 'number', 'boolean'].includes(typeof value.value)) {
     throw invalidResult(`candidates[${index}].value has an unsupported type`);
+  }
+  const canonicalErrors = classifyInvalidItems([normalized]).get(0);
+  if (canonicalErrors) {
+    throw invalidResult(`candidates[${index}] violates the canonical evidence item contract`);
   }
   return normalized;
 };
@@ -96,10 +117,15 @@ const source = (value, index) => {
     author: 500,
     publishedAt: 64,
     sourceType: 64,
-    sourceRelationship: 64,
   };
   for (const [key, max] of Object.entries(boundedFields)) {
     if (value[key] !== undefined) normalized[key] = text(value[key], `sources[${index}].${key}`, {max});
+  }
+  if (value.sourceRelationship !== undefined) {
+    normalized.sourceRelationship = sourceRelationship(
+      value.sourceRelationship,
+      `sources[${index}].sourceRelationship`,
+    );
   }
   return normalized;
 };
