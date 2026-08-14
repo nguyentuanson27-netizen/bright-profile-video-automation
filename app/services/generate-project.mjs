@@ -63,10 +63,11 @@ const buildGenerationInput = (project, sourceRows) => {
 
 const requireHumanVerification = (draft) => ({
   ...draft,
-  claims: draft.claims.map(({overrideReason: _overrideReason, ...claim}) => ({
-    ...claim,
-    verified: false,
-  })),
+  claims: draft.claims.map((claim) => {
+    const reviewClaim = {...claim, verified: false};
+    delete reviewClaim.overrideReason;
+    return reviewClaim;
+  }),
 });
 
 export const createGenerationService = ({provider} = {}) => {
