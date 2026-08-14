@@ -17,22 +17,25 @@ export class GenerationProviderError extends Error {
   }
 }
 
+// Keep the provider-facing schema inside OpenAI's documented Structured Outputs
+// subset. Full length/uniqueness/reference/timeline checks remain authoritative in
+// the local Ajv draft validator after the provider returns.
 export const generationOutputSchema = Object.freeze({
   type: 'object',
   additionalProperties: false,
   required: ['creatorName', 'summary', 'claims', 'script', 'voiceover', 'scenes', 'render'],
   properties: {
-    creatorName: {type: 'string', minLength: 1, maxLength: 1000},
-    summary: {type: 'string', minLength: 1, maxLength: 20000},
+    creatorName: {type: 'string'},
+    summary: {type: 'string'},
     claims: {
       type: 'array', maxItems: 500,
       items: {
         type: 'object', additionalProperties: false,
         required: ['id', 'text', 'sourceIds', 'verified'],
         properties: {
-          id: {type: 'string', minLength: 1, maxLength: 200},
-          text: {type: 'string', minLength: 1, maxLength: 10000},
-          sourceIds: {type: 'array', minItems: 1, uniqueItems: true, items: {type: 'string', minLength: 1, maxLength: 200}},
+          id: {type: 'string'},
+          text: {type: 'string'},
+          sourceIds: {type: 'array', minItems: 1, maxItems: 200, items: {type: 'string'}},
           verified: {type: 'boolean'},
         },
       },
@@ -43,11 +46,11 @@ export const generationOutputSchema = Object.freeze({
         type: 'object', additionalProperties: false,
         required: ['id', 'text', 'start', 'duration', 'sourceIds'],
         properties: {
-          id: {type: 'string', minLength: 1, maxLength: 200},
-          text: {type: 'string', minLength: 1, maxLength: 20000},
+          id: {type: 'string'},
+          text: {type: 'string'},
           start: {type: 'number', minimum: 0},
           duration: {type: 'number', exclusiveMinimum: 0},
-          sourceIds: {type: 'array', minItems: 1, uniqueItems: true, items: {type: 'string', minLength: 1, maxLength: 200}},
+          sourceIds: {type: 'array', minItems: 1, maxItems: 200, items: {type: 'string'}},
         },
       },
     },
@@ -60,8 +63,8 @@ export const generationOutputSchema = Object.freeze({
             type: 'object', additionalProperties: false,
             required: ['id', 'text', 'start', 'duration'],
             properties: {
-              id: {type: 'string', minLength: 1, maxLength: 200},
-              text: {type: 'string', minLength: 1, maxLength: 20000},
+              id: {type: 'string'},
+              text: {type: 'string'},
               start: {type: 'number', minimum: 0},
               duration: {type: 'number', exclusiveMinimum: 0},
             },
@@ -75,11 +78,11 @@ export const generationOutputSchema = Object.freeze({
         type: 'object', additionalProperties: false,
         required: ['id', 'type', 'start', 'duration', 'sourceIds'],
         properties: {
-          id: {type: 'string', minLength: 1, maxLength: 200},
-          type: {enum: ['hero', 'claim', 'vertical', 'source', 'social', 'stats']},
+          id: {type: 'string'},
+          type: {type: 'string', enum: ['hero', 'claim', 'vertical', 'source', 'social', 'stats']},
           start: {type: 'number', minimum: 0},
           duration: {type: 'number', exclusiveMinimum: 0},
-          sourceIds: {type: 'array', minItems: 1, uniqueItems: true, items: {type: 'string', minLength: 1, maxLength: 200}},
+          sourceIds: {type: 'array', minItems: 1, maxItems: 200, items: {type: 'string'}},
         },
       },
     },
