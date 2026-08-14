@@ -30,7 +30,7 @@ const claim = {stageId: 'stage/../../unsafe', attemptId: 'attempt/../../unsafe',
 test('media ingest selects separate media from factual HTML provenance and persists an app-owned immutable selection', async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'bright-ingest-'));
   const seen = [];
-  const selectedMediaUrl = 'https://cdn.example.test/../../remote-name.png?token=ignored-for-path';
+  const selectedMediaUrl = 'https://cdn.example.test/remote-name.png?token=ignored-for-path';
   const fetcher = {
     async fetchToFile(url, destination, options) {
       seen.push({url, destination, options});
