@@ -48,11 +48,12 @@ const validateInput = (value) => {
   return {creator, topic, instructions, publicUrls};
 };
 
-const safeFailureCode = (error) => (
-  typeof error?.code === 'string' && /^[A-Z0-9_]{1,128}$/.test(error.code)
-    ? error.code
-    : 'SOURCE_UNAVAILABLE'
-);
+const safeFailureCode = (error) => {
+  const code = error?.errorCode ?? error?.code;
+  return typeof code === 'string' && /^[A-Z0-9_]{1,128}$/.test(code)
+    ? code
+    : 'SOURCE_UNAVAILABLE';
+};
 
 const defaultFetchSource = (fetcher, fetchOptions) => async (url) => {
   const response = await fetcher.fetchBuffer(url, fetchOptions);
@@ -114,7 +115,8 @@ export const createResearchService = ({
   now = Date.now,
 } = {}) => {
   const researchProvider = assertResearchProvider(provider);
-  const readSource = fetchSource ?? defaultFetchSource(safeFetcher, fetchOptions);
+  const resolvedFetchOptions = {...DEFAULT_FETCH_OPTIONS, ...fetchOptions};
+  const readSource = fetchSource ?? defaultFetchSource(safeFetcher, resolvedFetchOptions);
   if (typeof readSource !== 'function') throw new TypeError('fetchSource must be a function');
   if (typeof now !== 'function') throw new TypeError('now must be a function');
 
@@ -129,7 +131,7 @@ export const createResearchService = ({
           const fetched = await readSource(requestedUrl);
           const finalUrl = assertSafePublicUrl(fetched?.url ?? requestedUrl).href;
           const mimeType = cleanText(fetched?.mimeType ?? 'text/plain', 'source mimeType', 200, {required: true});
-          const content = cleanText(fetched?.content ?? '', 'source content', fetchOptions.maxBytes ?? DEFAULT_FETCH_OPTIONS.maxBytes);
+          const content = cleanText(fetched?.content ?? '', 'source content', resolvedFetchOptions.maxBytes);
           operatorSources.push({requestedUrl, url: finalUrl, mimeType, content});
         } catch (error) {
           operatorUnavailable.push({url: requestedUrl, errorCode: safeFailureCode(error)});
