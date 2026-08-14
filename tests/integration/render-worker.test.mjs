@@ -71,14 +71,23 @@ const createFixture = async () => {
   const mediaAbsolute = resolve(dataDir, mediaRelative);
   await mkdir(resolve(dataDir, 'projects/seed/media'), {recursive: true});
   await writeFile(mediaAbsolute, mediaBytes);
+  const mediaSelectionId = 'media-selection-111111111111111111111111';
+  const mediaUrl = 'https://example.test/media.png';
   const manifest = {
-    version: 1,
+    version: 2,
     projectId: 'project-1',
     revisionId: 'revision-1',
-    scenes: {'scene-1': 'source-1'},
+    scenes: {'scene-1': mediaSelectionId},
     media: [{
-      sourceId: 'source-1', relativePath: mediaRelative, mimeType: 'image/png',
-      byteSize: mediaBytes.length, sha256: sha256(mediaBytes),
+      mediaSelectionId,
+      sourceId: 'source-1',
+      sourceUrl: mediaUrl,
+      selectedMediaUrl: mediaUrl,
+      resolvedMediaUrl: mediaUrl,
+      relativePath: mediaRelative,
+      mimeType: 'image/png',
+      byteSize: mediaBytes.length,
+      sha256: sha256(mediaBytes),
     }],
   };
   const manifestBytes = Buffer.from(JSON.stringify(manifest));
