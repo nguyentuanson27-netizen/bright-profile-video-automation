@@ -61,6 +61,14 @@ const buildGenerationInput = (project, sourceRows) => {
   };
 };
 
+const requireHumanVerification = (draft) => ({
+  ...draft,
+  claims: draft.claims.map(({overrideReason: _overrideReason, ...claim}) => ({
+    ...claim,
+    verified: false,
+  })),
+});
+
 export const createGenerationService = ({provider} = {}) => {
   const generationProvider = assertGenerationProvider(provider);
   return Object.freeze({
@@ -80,7 +88,9 @@ export const createGenerationService = ({provider} = {}) => {
       if (draft.creatorName !== project.creator) {
         throw new GenerationProviderError(GenerationProviderErrorCodes.INVALID_RESULT, 'Generated creator name does not match the project', {retryable: false});
       }
-      return draft;
+      const reviewDraft = requireHumanVerification(draft);
+      validateDraft(reviewDraft, {knownSourceIds: input.sources.map(({id}) => id)});
+      return reviewDraft;
     },
   });
 };
