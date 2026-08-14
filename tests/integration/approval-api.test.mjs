@@ -66,6 +66,20 @@ const runtime = () => {
   return {databasePath, db, repos, jobs, server, runner};
 };
 
+const peerRuntime = (databasePath, suffix) => {
+  const db = openDatabase(databasePath);
+  const repos = createRepositories(db);
+  const jobs = createJobStore(db, {leaseMs: 1000});
+  let stageNo = 0;
+  let revisionNo = 100;
+  const server = createAppServer({
+    db, repos, jobs, dataDir: join(databasePath, '..'), now: () => Date.parse('2026-08-14T04:00:01Z'), nowMs: () => 1001,
+    projectIdFactory: () => `unused-project-${suffix}`, stageIdFactory: () => `${suffix}-stage-${++stageNo}`, sourceIdFactory: () => `unused-source-${suffix}`,
+    revisionIdFactory: () => `${suffix}-revision-${++revisionNo}`, requestIdFactory: () => `request-${suffix}`, generationMaxAttempts: 3,
+  });
+  return {db, repos, jobs, server};
+};
+
 const generateDraft = async (ctx, base) => {
   const started = await request(base, '/api/projects/project-1/generate', {method: 'POST'});
   assert.equal(started.response.status, 202);
@@ -136,4 +150,65 @@ test('once downstream stage creation wins, approval-relevant edit is rejected wi
   assert.equal(edited.response.status, 409); assert.equal(edited.json.error.code, 'DOWNSTREAM_WORK_STARTED'); assert.deepEqual(ctx.repos.projects.get('project-1'), before);
   assert.equal(ctx.repos.revisions.get(revisionId).payload.summary, 'Creator profile summary.');
   await close(ctx.server); ctx.db.close();
+});
+
+test('render-start HTTP creates exactly one queued media_ingest stage and repeated active request is idempotent', async () => {
+  const ctx = runtime(); const base = await listen(ctx.server); const revisionId = await generateDraft(ctx, base);
+  await verifyDraftAndApprove(base);
+  const first = await request(base, '/api/projects/project-1/render', {method: 'POST'});
+  assert.equal(first.response.status, 202); assert.equal(first.json.changed, true);
+  assert.equal(first.json.project.status, 'media_ingest'); assert.equal(first.json.project.approvedRevisionId, revisionId);
+  assert.equal(first.json.stage.type, 'media_ingest'); assert.equal(first.json.stage.state, 'queued'); assert.equal(first.json.stage.revisionId, revisionId);
+  const second = await request(base, '/api/projects/project-1/render', {method: 'POST'});
+  assert.equal(second.response.status, 202); assert.equal(second.json.changed, false); assert.equal(second.json.stage.id, first.json.stage.id);
+  assert.equal(ctx.db.prepare("SELECT COUNT(*) AS n FROM stages WHERE project_id = ? AND revision_id = ? AND stage_type = 'media_ingest'").get('project-1', revisionId).n, 1);
+  await close(ctx.server); ctx.db.close();
+});
+
+test('render-start rejects unapproved, superseded and cancelled project states with stable transitions', async () => {
+  const unapproved = runtime(); const unapprovedBase = await listen(unapproved.server);
+  await generateDraft(unapproved, unapprovedBase);
+  const unapprovedResult = await request(unapprovedBase, '/api/projects/project-1/render', {method: 'POST'});
+  assert.equal(unapprovedResult.response.status, 409); assert.equal(unapprovedResult.json.error.code, 'INVALID_TRANSITION');
+  await close(unapproved.server); unapproved.db.close();
+
+  const superseded = runtime(); const supersededBase = await listen(superseded.server);
+  await generateDraft(superseded, supersededBase); await verifyDraftAndApprove(supersededBase);
+  const editedDraft = validDraft(); editedDraft.summary = 'Superseding review revision.';
+  assert.equal((await request(supersededBase, '/api/projects/project-1/draft', {method: 'PUT', body: {draft: editedDraft}})).response.status, 200);
+  const supersededResult = await request(supersededBase, '/api/projects/project-1/render', {method: 'POST'});
+  assert.equal(supersededResult.response.status, 409); assert.equal(supersededResult.json.error.code, 'INVALID_TRANSITION');
+  await close(superseded.server); superseded.db.close();
+
+  const cancelled = runtime(); const cancelledBase = await listen(cancelled.server);
+  assert.equal((await request(cancelledBase, '/api/projects/project-1/generate', {method: 'POST'})).response.status, 202);
+  assert.equal((await request(cancelledBase, '/api/projects/project-1/cancel', {method: 'POST'})).response.status, 200);
+  assert.equal(cancelled.repos.projects.get('project-1').status, 'cancelled');
+  const cancelledResult = await request(cancelledBase, '/api/projects/project-1/render', {method: 'POST'});
+  assert.equal(cancelledResult.response.status, 409); assert.equal(cancelledResult.json.error.code, 'INVALID_TRANSITION');
+  await close(cancelled.server); cancelled.db.close();
+});
+
+test('edit and render-start contention through HTTP serializes to exactly one valid winner', async () => {
+  const primary = runtime(); const primaryBase = await listen(primary.server); const approvedRevisionId = await generateDraft(primary, primaryBase);
+  await verifyDraftAndApprove(primaryBase);
+  const peer = peerRuntime(primary.databasePath, 'peer'); const peerBase = await listen(peer.server);
+  const editedDraft = validDraft(); editedDraft.summary = 'Contending approval-relevant edit.';
+  const [renderResult, editResult] = await Promise.all([
+    request(primaryBase, '/api/projects/project-1/render', {method: 'POST'}),
+    request(peerBase, '/api/projects/project-1/draft', {method: 'PUT', body: {draft: editedDraft}}),
+  ]);
+  const renderWon = renderResult.response.status === 202;
+  const editWon = editResult.response.status === 200;
+  assert.notEqual(renderWon, editWon);
+  const project = primary.repos.projects.get('project-1');
+  const mediaCount = primary.db.prepare("SELECT COUNT(*) AS n FROM stages WHERE project_id = ? AND revision_id = ? AND stage_type = 'media_ingest'").get('project-1', approvedRevisionId).n;
+  if (renderWon) {
+    assert.equal(renderResult.json.changed, true); assert.equal(editResult.response.status, 409); assert.equal(editResult.json.error.code, 'DOWNSTREAM_WORK_STARTED');
+    assert.equal(project.status, 'media_ingest'); assert.equal(project.currentRevisionId, approvedRevisionId); assert.equal(project.approvedRevisionId, approvedRevisionId); assert.equal(mediaCount, 1);
+  } else {
+    assert.equal(renderResult.response.status, 409); assert.equal(renderResult.json.error.code, 'INVALID_TRANSITION'); assert.equal(editResult.json.project.status, 'review_required');
+    assert.equal(project.status, 'review_required'); assert.notEqual(project.currentRevisionId, approvedRevisionId); assert.equal(project.approvedRevisionId, null); assert.equal(mediaCount, 0);
+  }
+  await close(peer.server); peer.db.close(); await close(primary.server); primary.db.close();
 });
