@@ -187,6 +187,13 @@ export const createRepositories = (db) => {
     )
   `);
   const getStage = db.prepare('SELECT * FROM stages WHERE id = ?');
+  const getActiveMediaIngest = db.prepare(`
+    SELECT * FROM stages
+    WHERE project_id = ? AND revision_id = ? AND stage_type = 'media_ingest'
+      AND state IN ('queued', 'running')
+    ORDER BY rowid
+    LIMIT 1
+  `);
   const getBarrierProject = db.prepare(`
     SELECT status, current_revision_id, approved_revision_id FROM projects WHERE id = ?
   `);
@@ -330,6 +337,16 @@ export const createRepositories = (db) => {
   const createFirstDescendantTx = db.transaction((record) => {
     if (record.type !== 'media_ingest') throw transitionError('The first downstream stage must be media_ingest');
     const barrier = readBarrier(record.projectId);
+    const active = getActiveMediaIngest.get(record.projectId, record.revisionId);
+    if (
+      barrier
+      && barrier.status === 'media_ingest'
+      && barrier.currentRevisionId === record.revisionId
+      && barrier.approvedRevisionId === record.revisionId
+      && active
+    ) {
+      return stageFromRow(active);
+    }
     if (
       !barrier
       || barrier.status !== 'approved'
