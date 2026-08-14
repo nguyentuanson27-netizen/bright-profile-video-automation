@@ -70,3 +70,9 @@ test('generation service rejects invalid timelines after provider output', async
     (error) => error.code === ErrorCodes.INVALID_DOMAIN_DATA,
   );
 });
+
+test('generation service does not trust an LLM-provided verified flag as human verification', async () => {
+  const generated = await serviceFor(validDraft()).generate({project, sources});
+  assert.equal(generated.claims[0].verified, false);
+  assert.equal(Object.hasOwn(generated.claims[0], 'overrideReason'), false);
+});
