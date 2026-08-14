@@ -183,3 +183,25 @@ export const createResearchService = ({
     },
   });
 };
+
+export const createResearchStageHandler = ({repos, researchService} = {}) => {
+  if (!repos?.projects || !repos?.sources) throw new TypeError('repositories are required');
+  if (!researchService || typeof researchService.research !== 'function') throw new TypeError('researchService is required');
+
+  return async (claim, context) => {
+    if (!claim?.projectId) throw new TypeError('research claim projectId is required');
+    if (!context || typeof context.commitResearch !== 'function') throw new TypeError('fenced research commit is required');
+    const project = repos.projects.get(claim.projectId);
+    if (!project) throw new ResearchProviderError(ResearchProviderErrorCodes.FAILED, 'Research project no longer exists', {retryable: false});
+    const publicUrls = repos.sources.list(claim.projectId)
+      .filter((source) => source.status === 'pending')
+      .map((source) => source.url);
+    const result = await researchService.research({
+      creator: project.creator,
+      topic: project.topic,
+      instructions: project.instructions,
+      publicUrls,
+    });
+    context.commitResearch(result);
+  };
+};
