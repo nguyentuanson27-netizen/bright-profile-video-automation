@@ -61,6 +61,18 @@ const buildGenerationInput = (project, sourceRows) => {
   };
 };
 
+const assertNoProviderManagedMedia = (draft) => {
+  for (const scene of draft.scenes ?? []) {
+    if (scene && typeof scene === 'object' && !Array.isArray(scene) && Object.hasOwn(scene, 'mediaUrl')) {
+      throw new GenerationProviderError(
+        GenerationProviderErrorCodes.INVALID_RESULT,
+        'Generated draft must not contain managed media URLs',
+        {retryable: false},
+      );
+    }
+  }
+};
+
 const requireHumanVerification = (draft) => ({
   ...draft,
   claims: draft.claims.map((claim) => {
@@ -86,6 +98,7 @@ export const createGenerationService = ({provider} = {}) => {
       }
       const draft = validateGenerationProviderResult(result);
       validateDraft(draft, {knownSourceIds: input.sources.map(({id}) => id)});
+      assertNoProviderManagedMedia(draft);
       if (draft.creatorName !== project.creator) {
         throw new GenerationProviderError(GenerationProviderErrorCodes.INVALID_RESULT, 'Generated creator name does not match the project', {retryable: false});
       }
