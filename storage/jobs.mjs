@@ -348,7 +348,9 @@ export const createJobStore = (db, {
   const promoteArtifactTx = db.transaction(({stageId, claimToken, artifactId, nowMs}) => {
     const current = requireCurrentClaim(stageId, claimToken, nowMs);
     const artifact = getArtifact.get(artifactId);
-    if (!artifact || artifact.stage_id !== stageId) throw new AppError(ErrorCodes.INVALID_TRANSITION, 'Artifact is not owned by this stage');
+    if (!artifact || artifact.stage_id !== stageId || artifact.attempt_id !== current.active_attempt_id) {
+      throw new AppError(ErrorCodes.INVALID_TRANSITION, 'Artifact is not owned by the current stage attempt');
+    }
     clearAuthority.run(current.project_id, current.revision_id, artifact.kind);
     if (setAuthority.run(artifactId).changes !== 1) throw new AppError(ErrorCodes.INVALID_TRANSITION, 'Artifact not found');
     return artifactFromRow(getArtifact.get(artifactId));
