@@ -2,7 +2,11 @@ const projectActionPattern = /^\/api\/projects\/([^/]+)\/(research|generate|retr
 const projectPattern = /^\/api\/projects\/([^/]+)$/;
 
 const decodeId = (value) => {
-  try { return decodeURIComponent(value); } catch { return null; }
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
 };
 
 export const matchRoute = (method, pathname) => {
