@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import {mkdtempSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -31,15 +32,23 @@ const createFixture = async () => {
 };
 
 const close = (server) => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+const rawRequest = ({port, path, headers}) => new Promise((resolveRequest, rejectRequest) => {
+  const request = http.request({hostname: '127.0.0.1', port, path, method: 'GET', headers}, (response) => {
+    let body = '';
+    response.setEncoding('utf8');
+    response.on('data', (chunk) => { body += chunk; });
+    response.once('end', () => resolveRequest({status: response.statusCode, body: JSON.parse(body)}));
+  });
+  request.once('error', rejectRequest);
+  request.end();
+});
 
 test('standalone browser boundary rejects DNS-rebinding Host values', async () => {
   const fixture = await createFixture();
   try {
-    const response = await fetch(`http://127.0.0.1:${fixture.port}/health/live`, {
-      headers: {host: 'attacker.example'},
-    });
+    const response = await rawRequest({port: fixture.port, path: '/health/live', headers: {host: 'attacker.example'}});
     assert.equal(response.status, 403);
-    assert.equal((await response.json()).error.code, 'HOST_NOT_ALLOWED');
+    assert.equal(response.body.error.code, 'HOST_NOT_ALLOWED');
   } finally {
     await close(fixture.server);
     fixture.db.close();
