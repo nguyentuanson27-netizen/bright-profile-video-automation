@@ -1,8 +1,9 @@
-import {randomUUID} from 'node:crypto';
+import {createHash, randomUUID} from 'node:crypto';
 import {AppError, ErrorCodes} from '../domain/errors.mjs';
 
 const MAX_PROGRESS_BYTES = 1024 * 1024;
 const MAX_RESEARCH_BYTES = 8 * 1024 * 1024;
+const MAX_DRAFT_BYTES = 8 * 1024 * 1024;
 const nowIso = (nowMs) => new Date(nowMs).toISOString();
 const staleClaimError = () => new AppError(ErrorCodes.STALE_CLAIM, 'Job claim is stale or lease has expired');
 const stageNotRetryableError = () => new AppError(ErrorCodes.STAGE_NOT_RETRYABLE, 'Stage is not retryable');
@@ -25,6 +26,7 @@ const serializeBoundedJson = (value, name, maxBytes) => {
   return json;
 };
 const serializeJson = (value, name) => serializeBoundedJson(value, name, MAX_PROGRESS_BYTES);
+const hashJson = (json) => createHash('sha256').update(json).digest('hex');
 
 const stageFromRow = (row) => row && ({
   id: row.id,
@@ -91,13 +93,19 @@ export const createJobStore = (db, {
   tokenFactory = randomUUID,
   attemptIdFactory = randomUUID,
   sourceIdFactory = randomUUID,
+  revisionIdFactory = randomUUID,
 } = {}) => {
   assertPositiveInteger(leaseMs, 'leaseMs', 10 * 60 * 1000);
   assertPositiveInteger(baseBackoffMs, 'baseBackoffMs', 10 * 60 * 1000);
   assertPositiveInteger(maxBackoffMs, 'maxBackoffMs', 10 * 60 * 1000);
   assertPositiveInteger(defaultMaxAttempts, 'defaultMaxAttempts', 100);
   if (baseBackoffMs > maxBackoffMs) throw new TypeError('baseBackoffMs must not exceed maxBackoffMs');
-  for (const [factory, name] of [[tokenFactory, 'tokenFactory'], [attemptIdFactory, 'attemptIdFactory'], [sourceIdFactory, 'sourceIdFactory']]) {
+  for (const [factory, name] of [
+    [tokenFactory, 'tokenFactory'],
+    [attemptIdFactory, 'attemptIdFactory'],
+    [sourceIdFactory, 'sourceIdFactory'],
+    [revisionIdFactory, 'revisionIdFactory'],
+  ]) {
     if (typeof factory !== 'function') throw new TypeError(`${name} must be a function`);
   }
 
@@ -188,12 +196,23 @@ export const createJobStore = (db, {
   const updateRevisionPayload = db.prepare(`
     UPDATE revisions SET payload_json = ?, payload_hash = ? WHERE id = ?
   `);
+  const insertRevision = db.prepare(`
+    INSERT INTO revisions (id, project_id, revision_no, payload_json, payload_hash, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  const nextRevisionNo = db.prepare('SELECT COALESCE(MAX(revision_no), 0) + 1 AS revision_no FROM revisions WHERE project_id = ?');
   const getProjectRow = db.prepare('SELECT * FROM projects WHERE id = ?');
   const startProjectResearch = db.prepare(`
     UPDATE projects
     SET status = 'researching', failed_stage = NULL, failure_retryable = NULL,
         failure_code = NULL, updated_at = ?
     WHERE id = ? AND status = 'draft'
+  `);
+  const startProjectGeneration = db.prepare(`
+    UPDATE projects
+    SET status = 'generating', failed_stage = NULL, failure_retryable = NULL,
+        failure_code = NULL, updated_at = ?
+    WHERE id = ? AND status = 'research_ready'
   `);
   const markProjectActive = db.prepare(`
     UPDATE projects
@@ -212,6 +231,12 @@ export const createJobStore = (db, {
     SET status = 'research_ready', research_json = ?, failed_stage = NULL,
         failure_retryable = NULL, failure_code = NULL, updated_at = ?
     WHERE id = ? AND status = 'researching'
+  `);
+  const markProjectReviewRequired = db.prepare(`
+    UPDATE projects
+    SET status = 'review_required', current_revision_id = ?, approved_revision_id = NULL,
+        failed_stage = NULL, failure_retryable = NULL, failure_code = NULL, updated_at = ?
+    WHERE id = ? AND status = 'generating'
   `);
   const deleteProjectSources = db.prepare('DELETE FROM sources WHERE project_id = ?');
   const insertSource = db.prepare(`
@@ -286,6 +311,32 @@ export const createJobStore = (db, {
     return {changed: true, stage: stageFromRow(getStageRow.get(stageId))};
   });
 
+  const startGenerationTx = db.transaction(({projectId, stageId, nowMs, maxAttempts = defaultMaxAttempts}) => {
+    assertNow(nowMs);
+    assertPositiveInteger(maxAttempts, 'maxAttempts', 100);
+    const project = getProjectRow.get(projectId);
+    if (!project) throw transitionError('Project does not exist');
+    const currentStage = getLatestProjectStageRow.get(projectId);
+    if (project.status === 'generating' && currentStage?.stage_type === 'generation' && ['queued', 'running'].includes(currentStage.state)) {
+      return {changed: false, stage: stageFromRow(currentStage)};
+    }
+    if (project.status !== 'research_ready') throw transitionError('Generation can only start from research_ready');
+    const timestamp = nowIso(nowMs);
+    insertStage.run({
+      id: stageId,
+      logicalKey: `${projectId}:generation`,
+      projectId,
+      revisionId: null,
+      type: 'generation',
+      maxAttempts,
+      availableAtMs: nowMs,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    if (startProjectGeneration.run(timestamp, projectId).changes !== 1) throw transitionError('Project state changed while starting generation');
+    return {changed: true, stage: stageFromRow(getStageRow.get(stageId))};
+  });
+
   const claimTx = db.transaction(({workerId, nowMs, allowedTypes}) => {
     assertNow(nowMs);
     if (typeof workerId !== 'string' || workerId.length === 0) throw new TypeError('workerId is required');
@@ -345,9 +396,7 @@ export const createJobStore = (db, {
     const code = typeof errorCode === 'string' && errorCode.length > 0 ? errorCode : 'STAGE_FAILED';
     const timestamp = nowIso(nowMs);
     if (finishAttempt.run('failed', nowMs, code, errorMessage, stageId, claimToken).changes !== 1) throw staleClaimError();
-    if (finishStage.run('failed', canRetry ? 1 : 0, code, errorMessage, timestamp, stageId, claimToken).changes !== 1) {
-      throw staleClaimError();
-    }
+    if (finishStage.run('failed', canRetry ? 1 : 0, code, errorMessage, timestamp, stageId, claimToken).changes !== 1) throw staleClaimError();
     if (markProjectFailed.run(current.stage_type, canRetry ? 1 : 0, code, timestamp, current.project_id).changes !== 1) {
       throw transitionError('Project disappeared while recording stage failure');
     }
@@ -385,9 +434,7 @@ export const createJobStore = (db, {
     if (row.state !== 'failed' || !row.retryable || row.attempt_count >= row.max_attempts) throw stageNotRetryableError();
     const timestamp = nowIso(nowMs);
     if (queueRetry.run(nowMs, timestamp, stageId).changes !== 1) throw stageNotRetryableError();
-    if (markProjectActive.run(activeProjectStatus(row.stage_type), timestamp, row.project_id).changes !== 1) {
-      throw transitionError('Project disappeared while retrying stage');
-    }
+    if (markProjectActive.run(activeProjectStatus(row.stage_type), timestamp, row.project_id).changes !== 1) throw transitionError('Project disappeared while retrying stage');
     return {changed: true, stage: stageFromRow(getStageRow.get(stageId))};
   });
 
@@ -416,12 +463,8 @@ export const createJobStore = (db, {
   const commitResearchTx = db.transaction(({stageId, claimToken, result, nowMs}) => {
     const current = requireCurrentClaim(stageId, claimToken, nowMs);
     if (current.stage_type !== 'research') throw transitionError('Claim is not a research stage');
-    if (!result || typeof result !== 'object' || Array.isArray(result) || !result.bundle) {
-      throw new TypeError('research result is required');
-    }
-    if (!Array.isArray(result.sources) || !Array.isArray(result.unavailableSources)) {
-      throw new TypeError('research sources and unavailableSources must be arrays');
-    }
+    if (!result || typeof result !== 'object' || Array.isArray(result) || !result.bundle) throw new TypeError('research result is required');
+    if (!Array.isArray(result.sources) || !Array.isArray(result.unavailableSources)) throw new TypeError('research sources and unavailableSources must be arrays');
     const researchJson = serializeBoundedJson(result.bundle, 'research result', MAX_RESEARCH_BYTES);
     const timestamp = nowIso(nowMs);
     const records = new Map();
@@ -433,7 +476,6 @@ export const createJobStore = (db, {
       if (!source || typeof source.url !== 'string' || Object.hasOwn(source, 'id')) throw new TypeError('unavailable research source is invalid');
       if (!records.has(source.url)) records.set(source.url, {status: 'unavailable', payload: {...source}});
     }
-
     deleteProjectSources.run(current.project_id);
     for (const [url, record] of [...records.entries()].sort(([left], [right]) => left.localeCompare(right))) {
       const id = sourceIdFactory();
@@ -442,10 +484,28 @@ export const createJobStore = (db, {
     }
     if (finishAttempt.run('succeeded', nowMs, null, null, stageId, claimToken).changes !== 1) throw staleClaimError();
     if (finishStage.run('succeeded', 0, null, null, timestamp, stageId, claimToken).changes !== 1) throw staleClaimError();
-    if (markProjectResearchReady.run(researchJson, timestamp, current.project_id).changes !== 1) {
-      throw transitionError('Project state changed while committing research');
-    }
+    if (markProjectResearchReady.run(researchJson, timestamp, current.project_id).changes !== 1) throw transitionError('Project state changed while committing research');
     return true;
+  });
+
+  const commitGenerationTx = db.transaction(({stageId, claimToken, draft, nowMs}) => {
+    const current = requireCurrentClaim(stageId, claimToken, nowMs);
+    if (current.stage_type !== 'generation') throw transitionError('Claim is not a generation stage');
+    if (!draft || typeof draft !== 'object' || Array.isArray(draft)) throw new TypeError('generation draft is required');
+    const draftJson = serializeBoundedJson(draft, 'generation draft', MAX_DRAFT_BYTES);
+    const revisionId = revisionIdFactory();
+    if (typeof revisionId !== 'string' || revisionId.length === 0 || revisionId.length > 200) {
+      throw new TypeError('revisionIdFactory must return a non-empty bounded string');
+    }
+    const timestamp = nowIso(nowMs);
+    const revisionNo = nextRevisionNo.get(current.project_id).revision_no;
+    insertRevision.run(revisionId, current.project_id, revisionNo, draftJson, hashJson(draftJson), timestamp);
+    if (finishAttempt.run('succeeded', nowMs, null, null, stageId, claimToken).changes !== 1) throw staleClaimError();
+    if (finishStage.run('succeeded', 0, null, null, timestamp, stageId, claimToken).changes !== 1) throw staleClaimError();
+    if (markProjectReviewRequired.run(revisionId, timestamp, current.project_id).changes !== 1) {
+      throw transitionError('Project state changed while committing generation');
+    }
+    return {revisionId};
   });
 
   const registerArtifactTx = db.transaction((record) => {
@@ -491,56 +551,24 @@ export const createJobStore = (db, {
       });
       return stageFromRow(getStageRow.get(record.id));
     },
-    startResearch(record) {
-      return startResearchTx.immediate(record);
-    },
-    claimNext(record) {
-      return claimTx.immediate(record);
-    },
-    heartbeat(record) {
-      return heartbeatTx.immediate(record);
-    },
-    updateProgress(record) {
-      return progressTx.immediate(record);
-    },
-    complete(record) {
-      return completeTx.immediate(record);
-    },
-    fail(record) {
-      return failTx.immediate(record);
-    },
-    recoverExpired(record) {
-      return recoverTx.immediate(record);
-    },
-    retry(record) {
-      return retryTx.immediate(record);
-    },
-    cancel(record) {
-      return cancelTx.immediate(record);
-    },
-    persistDraft(record) {
-      return persistDraftTx.immediate(record);
-    },
-    commitResearch(record) {
-      return commitResearchTx.immediate(record);
-    },
-    registerArtifact(record) {
-      return registerArtifactTx.immediate(record);
-    },
-    promoteArtifact(record) {
-      return promoteArtifactTx.immediate(record);
-    },
-    getStage(stageId) {
-      return stageFromRow(getStageRow.get(stageId));
-    },
-    getCurrentStage(projectId) {
-      return stageFromRow(getLatestProjectStageRow.get(projectId));
-    },
-    listAttempts(stageId) {
-      return listAttemptRows.all(stageId).map(attemptFromRow);
-    },
-    listArtifacts(stageId) {
-      return listArtifactRows.all(stageId).map(artifactFromRow);
-    },
+    startResearch(record) { return startResearchTx.immediate(record); },
+    startGeneration(record) { return startGenerationTx.immediate(record); },
+    claimNext(record) { return claimTx.immediate(record); },
+    heartbeat(record) { return heartbeatTx.immediate(record); },
+    updateProgress(record) { return progressTx.immediate(record); },
+    complete(record) { return completeTx.immediate(record); },
+    fail(record) { return failTx.immediate(record); },
+    recoverExpired(record) { return recoverTx.immediate(record); },
+    retry(record) { return retryTx.immediate(record); },
+    cancel(record) { return cancelTx.immediate(record); },
+    persistDraft(record) { return persistDraftTx.immediate(record); },
+    commitResearch(record) { return commitResearchTx.immediate(record); },
+    commitGeneration(record) { return commitGenerationTx.immediate(record); },
+    registerArtifact(record) { return registerArtifactTx.immediate(record); },
+    promoteArtifact(record) { return promoteArtifactTx.immediate(record); },
+    getStage(stageId) { return stageFromRow(getStageRow.get(stageId)); },
+    getCurrentStage(projectId) { return stageFromRow(getLatestProjectStageRow.get(projectId)); },
+    listAttempts(stageId) { return listAttemptRows.all(stageId).map(attemptFromRow); },
+    listArtifacts(stageId) { return listArtifactRows.all(stageId).map(artifactFromRow); },
   });
 };

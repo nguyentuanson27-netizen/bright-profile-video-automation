@@ -48,6 +48,11 @@ export const createJobRunner = ({
     }, heartbeatMs);
     timer.unref?.();
 
+    const finalize = (operation) => {
+      const committed = operation();
+      finalized = true;
+      return committed;
+    };
     const context = Object.freeze({
       heartbeat,
       progress: (progress) => jobs.updateProgress({
@@ -56,16 +61,18 @@ export const createJobRunner = ({
       persistDraft: (record) => jobs.persistDraft({
         ...record, stageId: claim.stageId, claimToken: claim.claimToken, nowMs: now(),
       }),
-      commitResearch: (result) => {
-        const committed = jobs.commitResearch({
-          stageId: claim.stageId,
-          claimToken: claim.claimToken,
-          result,
-          nowMs: now(),
-        });
-        finalized = true;
-        return committed;
-      },
+      commitResearch: (result) => finalize(() => jobs.commitResearch({
+        stageId: claim.stageId,
+        claimToken: claim.claimToken,
+        result,
+        nowMs: now(),
+      })),
+      commitGeneration: (draft) => finalize(() => jobs.commitGeneration({
+        stageId: claim.stageId,
+        claimToken: claim.claimToken,
+        draft,
+        nowMs: now(),
+      })),
       registerArtifact: (record) => jobs.registerArtifact({
         ...record, stageId: claim.stageId, claimToken: claim.claimToken, nowMs: now(),
       }),

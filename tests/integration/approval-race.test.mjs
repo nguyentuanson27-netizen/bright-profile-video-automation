@@ -20,7 +20,8 @@ const setupApproved = () => {
     payload: {version: 1}, payloadHash: 'a'.repeat(64),
   });
   repos.revisions.approve({
-    projectId: 'project-1', revisionId: 'revision-1', approvedAt: '2026-08-13T00:00:00.000Z',
+    projectId: 'project-1', revisionId: 'revision-1', expectedPayloadHash: 'a'.repeat(64),
+    approvedAt: '2026-08-13T00:00:00.000Z',
   });
   db.close();
   return databasePath;

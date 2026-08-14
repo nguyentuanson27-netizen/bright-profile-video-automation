@@ -135,14 +135,32 @@ export const createRepositories = (db) => {
   const updateRevisionPayload = db.prepare(`
     UPDATE revisions SET payload_json = @payloadJson, payload_hash = @payloadHash WHERE id = @revisionId
   `);
+  const updateUnapprovedRevisionPayload = db.prepare(`
+    UPDATE revisions SET payload_json = @payloadJson, payload_hash = @payloadHash
+    WHERE id = @revisionId AND project_id = @projectId AND approved_at IS NULL
+  `);
+  const cloneReviewProject = db.prepare(`
+    UPDATE projects
+    SET status = 'review_required', current_revision_id = @revisionId,
+        approved_revision_id = NULL, updated_at = @updatedAt
+    WHERE id = @projectId
+      AND status = 'approved'
+      AND current_revision_id = @expectedRevisionId
+      AND approved_revision_id = @expectedRevisionId
+  `);
   const approveRevisionRow = db.prepare(`
     UPDATE revisions SET approved_at = @approvedAt
-    WHERE id = @revisionId AND project_id = @projectId AND approved_at IS NULL
+    WHERE id = @revisionId
+      AND project_id = @projectId
+      AND approved_at IS NULL
+      AND payload_hash = @expectedPayloadHash
   `);
   const approveProject = db.prepare(`
     UPDATE projects
     SET status = 'approved', approved_revision_id = @revisionId, updated_at = @updatedAt
-    WHERE id = @projectId AND current_revision_id = @revisionId
+    WHERE id = @projectId
+      AND status = 'review_required'
+      AND current_revision_id = @revisionId
   `);
   const invalidateApprovalProject = db.prepare(`
     UPDATE projects
@@ -169,6 +187,13 @@ export const createRepositories = (db) => {
     )
   `);
   const getStage = db.prepare('SELECT * FROM stages WHERE id = ?');
+  const getActiveMediaIngest = db.prepare(`
+    SELECT * FROM stages
+    WHERE project_id = ? AND revision_id = ? AND stage_type = 'media_ingest'
+      AND state IN ('queued', 'running')
+    ORDER BY rowid
+    LIMIT 1
+  `);
   const getBarrierProject = db.prepare(`
     SELECT status, current_revision_id, approved_revision_id FROM projects WHERE id = ?
   `);
@@ -208,13 +233,16 @@ export const createRepositories = (db) => {
     return revisionFromRow(getRevision.get(record.id));
   });
 
-  const approveRevisionTx = db.transaction(({projectId, revisionId, approvedAt}) => {
+  const approveRevisionTx = db.transaction(({projectId, revisionId, expectedPayloadHash, approvedAt}) => {
+    if (typeof expectedPayloadHash !== 'string' || !/^[a-f0-9]{64}$/.test(expectedPayloadHash)) {
+      throw transitionError('Expected revision hash is required for approval');
+    }
     const timestamp = approvedAt ?? nowIso();
-    if (approveRevisionRow.run({projectId, revisionId, approvedAt: timestamp}).changes !== 1) {
-      throw new Error('revision cannot be approved');
+    if (approveRevisionRow.run({projectId, revisionId, expectedPayloadHash, approvedAt: timestamp}).changes !== 1) {
+      throw transitionError('Revision changed before approval');
     }
     if (approveProject.run({projectId, revisionId, updatedAt: timestamp}).changes !== 1) {
-      throw new Error('revision is not the current project revision');
+      throw transitionError('Revision is not the current review revision');
     }
     return revisionFromRow(getRevision.get(revisionId));
   });
@@ -231,6 +259,66 @@ export const createRepositories = (db) => {
   };
   const readBarrierTx = db.transaction(readBarrier);
   const serializedBarrierTx = db.transaction((projectId, operation) => operation(readBarrier(projectId)));
+
+  const editCurrentRevisionTx = db.transaction(({projectId, revisionId, payload, payloadHash, updatedAt}) => {
+    const project = getProject.get(projectId);
+    if (!project?.current_revision_id) throw transitionError('Project has no review draft');
+    const current = getRevision.get(project.current_revision_id);
+    if (!current || current.project_id !== projectId) throw transitionError('Current revision is unavailable');
+    const timestamp = updatedAt ?? nowIso();
+    const payloadJson = JSON.stringify(payload);
+
+    if (project.status === 'review_required') {
+      if (updateUnapprovedRevisionPayload.run({
+        projectId,
+        revisionId: current.id,
+        payloadJson,
+        payloadHash,
+      }).changes !== 1) {
+        throw transitionError('Current review revision is not editable');
+      }
+      return {
+        project: projectFromRow(getProject.get(projectId)),
+        revision: revisionFromRow(getRevision.get(current.id)),
+      };
+    }
+
+    if (project.approved_revision_id === current.id) {
+      const barrier = readBarrier(projectId);
+      if (barrier.hasDescendantStage) throw downstreamStartedError();
+      if (project.status !== 'approved') throw transitionError('Approved draft is no longer editable');
+      if (
+        typeof revisionId !== 'string'
+        || revisionId.length === 0
+        || revisionId.length > 200
+        || revisionId === current.id
+      ) {
+        throw new TypeError('new revision id is invalid');
+      }
+      insertRevision.run({
+        id: revisionId,
+        projectId,
+        revisionNo: current.revision_no + 1,
+        payloadJson,
+        payloadHash,
+        createdAt: timestamp,
+      });
+      if (cloneReviewProject.run({
+        projectId,
+        revisionId,
+        expectedRevisionId: current.id,
+        updatedAt: timestamp,
+      }).changes !== 1) {
+        throw transitionError('Approval changed while applying the edit');
+      }
+      return {
+        project: projectFromRow(getProject.get(projectId)),
+        revision: revisionFromRow(getRevision.get(revisionId)),
+      };
+    }
+
+    throw transitionError('Draft can only be edited from review_required or approved');
+  });
 
   const invalidateForEditTx = db.transaction(({projectId, expectedRevisionId, updatedAt}) => {
     const barrier = readBarrier(projectId);
@@ -249,6 +337,16 @@ export const createRepositories = (db) => {
   const createFirstDescendantTx = db.transaction((record) => {
     if (record.type !== 'media_ingest') throw transitionError('The first downstream stage must be media_ingest');
     const barrier = readBarrier(record.projectId);
+    const active = getActiveMediaIngest.get(record.projectId, record.revisionId);
+    if (
+      barrier
+      && barrier.status === 'media_ingest'
+      && barrier.currentRevisionId === record.revisionId
+      && barrier.approvedRevisionId === record.revisionId
+      && active
+    ) {
+      return stageFromRow(active);
+    }
     if (
       !barrier
       || barrier.status !== 'approved'
@@ -315,6 +413,9 @@ export const createRepositories = (db) => {
           throw new Error('revision not found');
         }
         return revisionFromRow(getRevision.get(revisionId));
+      },
+      editCurrent(record) {
+        return editCurrentRevisionTx.immediate(record);
       },
       approve(record) {
         return approveRevisionTx.immediate(record);

@@ -17,6 +17,13 @@ const seedRevision = (repos) => repos.revisions.create({
   payload: {draft: true}, payloadHash: 'a'.repeat(64),
 });
 
+const approveSeedRevision = (repos) => repos.revisions.approve({
+  projectId: 'project-1',
+  revisionId: 'revision-1',
+  expectedPayloadHash: 'a'.repeat(64),
+  approvedAt: '2026-08-13T00:00:00.000Z',
+});
+
 test('fresh database migrates explicitly from user_version 0', () => {
   const db = openDatabase(tempDatabasePath());
   assert.equal(db.pragma('user_version', {simple: true}), 0);
@@ -69,7 +76,7 @@ test('approved revision payload and hash are immutable', () => {
   const repos = createRepositories(db);
   seedProject(repos);
   seedRevision(repos);
-  repos.revisions.approve({projectId: 'project-1', revisionId: 'revision-1', approvedAt: '2026-08-13T00:00:00.000Z'});
+  approveSeedRevision(repos);
   assert.throws(() => repos.revisions.updatePayload({revisionId: 'revision-1', payload: {draft: false}, payloadHash: 'b'.repeat(64)}), /immutable/i);
   assert.deepEqual(repos.revisions.get('revision-1').payload, {draft: true});
   assert.equal(repos.revisions.get('revision-1').payloadHash, 'a'.repeat(64));
@@ -83,7 +90,7 @@ test('approval barrier query survives reopen and reports descendant durable-stag
   let repos = createRepositories(db);
   seedProject(repos);
   seedRevision(repos);
-  repos.revisions.approve({projectId: 'project-1', revisionId: 'revision-1', approvedAt: '2026-08-13T00:00:00.000Z'});
+  approveSeedRevision(repos);
   assert.deepEqual(repos.approval.getBarrier('project-1'), {status: 'approved', currentRevisionId: 'revision-1', approvedRevisionId: 'revision-1', hasDescendantStage: false});
   repos.stages.create({id: 'stage-1', projectId: 'project-1', revisionId: 'revision-1', type: 'media_ingest', state: 'queued', maxAttempts: 3});
   db.close();

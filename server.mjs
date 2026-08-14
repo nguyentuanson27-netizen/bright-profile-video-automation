@@ -28,6 +28,8 @@ const server = createAppServer({
   jobs,
   dataDir: config.dataDir,
   researchMaxAttempts: config.worker.maxRetries + 1,
+  generationMaxAttempts: config.worker.maxRetries + 1,
+  mediaIngestMaxAttempts: config.worker.maxRetries + 1,
 });
 const port = readPort(process.env.PORT);
 

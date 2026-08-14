@@ -5,6 +5,7 @@ import {resolve} from 'node:path';
 
 import {AppError} from '../domain/errors.mjs';
 import {createProjectsApi} from './http/projects.mjs';
+import {createRevisionsApi} from './http/revisions.mjs';
 import {matchRoute} from './http/router.mjs';
 
 const DEFAULT_MAX_BODY_BYTES = 64 * 1024;
@@ -73,8 +74,11 @@ export const createAppServer = ({
   projectIdFactory = randomUUID,
   stageIdFactory = randomUUID,
   sourceIdFactory = randomUUID,
+  revisionIdFactory = randomUUID,
   requestIdFactory = randomUUID,
   researchMaxAttempts = 4,
+  generationMaxAttempts = 4,
+  mediaIngestMaxAttempts = 4,
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
 } = {}) => {
   if (!db || typeof db.prepare !== 'function') throw new TypeError('database is required');
@@ -93,7 +97,10 @@ export const createAppServer = ({
     stageIdFactory,
     sourceIdFactory,
     researchMaxAttempts,
+    generationMaxAttempts,
+    mediaIngestMaxAttempts,
   });
+  const revisions = createRevisionsApi({repos, now, revisionIdFactory});
   const readinessQuery = db.prepare('SELECT 1 AS ok');
 
   return http.createServer(async (req, res) => {
@@ -143,6 +150,14 @@ export const createAppServer = ({
         const result = projects.startResearch(route.id);
         return json(res, 202, {...result, requestId}, requestId);
       }
+      if (route.name === 'projects.generate') {
+        const result = projects.startGeneration(route.id);
+        return json(res, 202, {...result, requestId}, requestId);
+      }
+      if (route.name === 'projects.render') {
+        const result = projects.startRender(route.id);
+        return json(res, 202, {...result, requestId}, requestId);
+      }
       if (route.name === 'projects.retry') {
         const result = projects.retry(route.id);
         return json(res, 202, {...result, requestId}, requestId);
@@ -150,6 +165,16 @@ export const createAppServer = ({
       if (route.name === 'projects.cancel') {
         const result = projects.cancel(route.id);
         return json(res, 200, {...result, requestId}, requestId);
+      }
+      if (route.name === 'projects.draft.get') {
+        return json(res, 200, {...revisions.getDraft(route.id), requestId}, requestId);
+      }
+      if (route.name === 'projects.draft.edit') {
+        const body = await readJsonBody(req, maxBodyBytes);
+        return json(res, 200, {...revisions.editDraft(route.id, body), requestId}, requestId);
+      }
+      if (route.name === 'projects.approve') {
+        return json(res, 200, {...revisions.approve(route.id), requestId}, requestId);
       }
       return json(res, 404, {error: {code: 'NOT_FOUND', message: 'Route not found'}, requestId}, requestId);
     } catch (error) {

@@ -46,9 +46,14 @@ jobs:
           node --check app/server.mjs
           node --check app/http/router.mjs
           node --check app/http/projects.mjs
+          node --check app/http/revisions.mjs
           node --check app/services/research-project.mjs
+          node --check app/services/generate-project.mjs
+          node --check app/services/approve-project.mjs
           node --check providers/research/index.mjs
           node --check providers/research/openai.mjs
+          node --check providers/generation/index.mjs
+          node --check providers/generation/openai.mjs
           node --check domain/errors.mjs
           node --check domain/project.mjs
           node --check domain/schemas.mjs
