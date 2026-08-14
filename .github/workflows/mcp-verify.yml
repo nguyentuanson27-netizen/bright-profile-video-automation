@@ -10,7 +10,7 @@ on:
       - spec/standalone-production-app
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   verify:
@@ -21,14 +21,17 @@ jobs:
         with:
           node-version: '24.18.0'
           package-manager-cache: false
-      - name: Generate lockfile checkpoint
+      - name: Persist synchronized lockfile
         run: |
           npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-          echo BRIGHT_LOCKFILE_GZIP_BASE64_BEGIN
-          gzip -c package-lock.json | base64 -w0
-          echo
-          echo BRIGHT_LOCKFILE_GZIP_BASE64_END
-      - name: Install synchronized dependencies
+          if ! git diff --quiet -- package-lock.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add package-lock.json
+            git commit -m "build: sync Vite lockfile"
+            git push origin HEAD:${GITHUB_REF_NAME}
+          fi
+      - name: Install frozen dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Standalone production dependency audit
         run: npm run audit:standalone
