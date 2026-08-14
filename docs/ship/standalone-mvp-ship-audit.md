@@ -23,7 +23,7 @@ The release has advanced beyond the original closure audit:
 - PR #12 exact-head workflow `31806106643` completed **SUCCESS**;
 - source-branch push workflow `31825258653` on merge commit `5594bc16d9ce30c5155a0f5ec4bb261bdaf431cf` completed **SUCCESS**;
 - promotion PR #13 is open from `spec/standalone-production-app` to `main`;
-- release-state documentation is being synchronized on the promotion head itself;
+- release-state documentation is synchronized on the promotion head itself;
 - `main` has not yet received the standalone MVP.
 
 At promotion open, `main` was `54d7ce5bd4d72b376e923a2969297762e261b4fe`, and the source branch was ahead with no divergence from `main`.
@@ -90,7 +90,7 @@ Repository and optional persistent-host rollback procedures remain defined below
 
 Automated UI state/control regressions, semantic controls, Vite production build, and built-web health checks exist. A real interactive browser walkthrough for the complete supported operator flow and keyboard/focus behavior has not been recorded in this audit.
 
-**Required before final GO unless explicitly resolved by the human release owner:** exercise the built UI for create/status/review/edit/approve/render/download plus legal retry/cancel, confirm no new console errors, and check keyboard reachability/focus for interactive controls. Record the outcome on PR #13.
+**Required before final GO:** exercise the built UI for create/status/review/edit/approve/render/download plus legal retry/cancel, confirm no new console errors, and check keyboard reachability/focus for interactive controls. Record the outcome on PR #13.
 
 ## Definition of Done audit
 
@@ -133,7 +133,7 @@ If the app is intentionally exposed beyond the trusted internal boundary, a sepa
 ### Accessibility
 
 - **Automated/static evidence:** UI state/control tests and production build exist.
-- **Pending:** real browser keyboard/focus/console walkthrough or explicit release-owner resolution.
+- **Pending:** real browser keyboard/focus/console walkthrough.
 
 ## CI / promotion policy
 
@@ -142,9 +142,9 @@ Current sequence:
 1. **done** — merge PR #12 release closure after full CI;
 2. **done** — verify post-merge push on `spec/standalone-production-app`;
 3. **done** — open promotion PR #13 `spec/standalone-production-app -> main`;
-4. **in progress** — synchronize authoritative docs on the promotion head;
+4. **done** — synchronize authoritative docs on the promotion head;
 5. **required** — full `Bright Profile Verification` passes on the final exact PR #13 head/merge result;
-6. **required** — resolve/record the real-browser keyboard/focus/console gate;
+6. **required** — record passing real-browser keyboard/focus/console evidence;
 7. **required** — human explicitly approves the final promotion head;
 8. **required** — merge PR #13 to `main` using an exact-head guard;
 9. **required** — `main` push verification completes successfully.
@@ -203,7 +203,7 @@ The release-closure and source-branch gates are green and promotion PR #13 is op
 - [x] promotion PR #13 `spec/standalone-production-app -> main` opened;
 - [x] authoritative project-status/spec/ship documentation synchronized to the promotion phase;
 - [ ] final exact-head PR #13 full workflow green;
-- [ ] real browser keyboard/focus/console smoke recorded as passing, or explicitly resolved by the human release owner;
+- [ ] real browser keyboard/focus/console smoke recorded as passing;
 - [ ] human explicitly approves the final PR #13 head;
 - [ ] PR #13 merged to `main`;
 - [ ] post-merge `main` push workflow green;
