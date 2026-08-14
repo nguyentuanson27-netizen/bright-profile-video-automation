@@ -157,7 +157,7 @@ export const createMediaIngestStageHandler = ({repos, artifactStore, service, ne
     return context.finalize(() => artifactStore.commitMediaIngest({
       stageId: claim.stageId,
       claimToken: claim.claimToken,
-      nowMs: Date.now(),
+      nowMs: context.nowMs(),
       mediaArtifacts: prepared.mediaArtifacts,
       manifestArtifact: prepared.manifestArtifact,
       nextMaxAttempts,
