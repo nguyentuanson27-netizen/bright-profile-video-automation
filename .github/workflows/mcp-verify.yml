@@ -10,7 +10,7 @@ on:
       - spec/standalone-production-app
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   verify:
@@ -21,16 +21,6 @@ jobs:
         with:
           node-version: '24.18.0'
           package-manager-cache: false
-      - name: Persist synchronized lockfile
-        run: |
-          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-          if ! git diff --quiet -- package-lock.json; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add package-lock.json
-            git commit -m "build: sync Vite lockfile"
-            git push origin HEAD:${GITHUB_REF_NAME}
-          fi
       - name: Install frozen dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Standalone production dependency audit
@@ -51,6 +41,12 @@ jobs:
         run: npm test
       - name: Aggregate first-party lint
         run: npm run lint
+      - name: Build standalone web UI
+        run: |
+          npm run build:web
+          test -s dist/index.html
+          test -n "$(find dist/assets -maxdepth 1 -type f -name '*.js' -print -quit)"
+          test -n "$(find dist/assets -maxdepth 1 -type f -name '*.css' -print -quit)"
       - name: Syntax checks
         run: |
           node --check app/config.mjs
@@ -81,6 +77,9 @@ jobs:
           node --check server.mjs
           node --check lib/remotion-renderer.mjs
           node --check lib/timed-google-tts.mjs
+          node --check web/state.mjs
+          node --check web/api.mjs
+          node --check vite.config.mjs
           node --check scripts/db-migrate.mjs
           node --check security/standalone-audit-policy.mjs
           node --check mcp/server.mjs
@@ -88,10 +87,11 @@ jobs:
           node --check lib/evidence/normalize-evidence.mjs
           node --check lib/evidence/schema-validator.mjs
           node --check scripts/verify-mcp-prod-audit.mjs
-      - name: Verify standalone API local health
+      - name: Verify standalone API and built web health
         run: |
           BRIGHT_DATA_DIR="$RUNNER_TEMP/standalone-data" \
           BRIGHT_DATABASE_PATH="$RUNNER_TEMP/standalone-data/app.sqlite" \
+          BRIGHT_WEB_DIR="$GITHUB_WORKSPACE/dist" \
           PORT=4182 node server.mjs >standalone.stdout.log 2>standalone.stderr.log &
           pid=$!
           trap 'kill "$pid" 2>/dev/null || true' EXIT
@@ -105,6 +105,7 @@ jobs:
           done
           curl -fsS http://127.0.0.1:4182/health/live >/dev/null
           curl -fsS http://127.0.0.1:4182/health/ready >/dev/null
+          curl -fsS http://127.0.0.1:4182/ | grep -q 'id="root"'
       - name: Verify MCP process health
         env:
           MCP_PORT: 4191
@@ -123,6 +124,55 @@ jobs:
           browser="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
           test -n "$browser"
           REMOTION_BROWSER_EXECUTABLE="$browser" npm run render:smoke
+      - name: Validate standalone Compose boundary
+        run: |
+          OPENAI_API_KEY=test-key docker compose -f compose.yml config --format json > "$RUNNER_TEMP/standalone-compose.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = json.loads(Path(os.environ['RUNNER_TEMP']).joinpath('standalone-compose.json').read_text())
+          services = data['services']
+          assert set(services) == {'app', 'worker'}
+          app = services['app']
+          worker = services['worker']
+          app_ports = app.get('ports') or []
+          assert len(app_ports) == 1
+          assert app_ports[0].get('host_ip') == '127.0.0.1'
+          assert str(app_ports[0].get('target')) == '4180'
+          assert not worker.get('ports')
+          assert app['environment']['BRIGHT_DATABASE_PATH'] == '/app/data/bright-profile.sqlite'
+          assert worker['environment']['BRIGHT_DATABASE_PATH'] == '/app/data/bright-profile.sqlite'
+          assert app['environment']['BRIGHT_DATA_DIR'] == '/app/data'
+          assert worker['environment']['BRIGHT_DATA_DIR'] == '/app/data'
+          for service in (app, worker):
+            mounts = service.get('volumes') or []
+            assert any(m.get('target') == '/app/data' and m.get('type') == 'volume' for m in mounts)
+          assert 'n8n' not in json.dumps(data).lower()
+          PY
+      - name: Build and verify standalone app image
+        run: |
+          OPENAI_API_KEY=test-key docker compose -f compose.yml build app
+          OPENAI_API_KEY=test-key docker compose -f compose.yml up -d app
+          container="$(docker compose -f compose.yml ps -q app)"
+          test -n "$container"
+          for attempt in $(seq 1 30); do
+            status="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container")"
+            if [ "$status" = healthy ]; then break; fi
+            if [ "$status" = unhealthy ]; then
+              docker compose -f compose.yml logs --no-color app
+              docker inspect --format='{{json .State.Health}}' "$container"
+              exit 1
+            fi
+            sleep 1
+          done
+          test "$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container")" = healthy
+          test "$(docker compose -f compose.yml exec -T app id -u)" != 0
+          docker inspect "$container" | node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const c=JSON.parse(s)[0];const p=(c.HostConfig.PortBindings||{})['4180/tcp'];if(!Array.isArray(p)||p.length!==1||p[0].HostIp!=='127.0.0.1')process.exit(1)})"
+          curl -fsS http://127.0.0.1:4180/health/ready >/dev/null
+          curl -fsS http://127.0.0.1:4180/ | grep -q 'id="root"'
+      - name: Tear down standalone Compose
+        if: always()
+        run: OPENAI_API_KEY=test-key docker compose -f compose.yml down -v --remove-orphans
       - name: Validate MCP Compose boundary
         run: |
           docker compose -f compose.mcp.yml config --format json > "$RUNNER_TEMP/mcp-compose.json"
