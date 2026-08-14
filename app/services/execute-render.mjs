@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 import {spawn} from 'node:child_process';
-import {copyFile, mkdir, readFile, rm, stat} from 'node:fs/promises';
+import {copyFile, mkdir, readFile, rm, stat, writeFile} from 'node:fs/promises';
 import {extname, relative, resolve, sep} from 'node:path';
 
 import {AppError, ErrorCodes} from '../../domain/errors.mjs';
@@ -29,9 +29,29 @@ const readVerifiedArtifact = async (dataDir, artifact) => {
   return bytes;
 };
 
+const readVerifiedManifestMedia = async (dataDir, item) => {
+  if (
+    !item
+    || typeof item.sourceId !== 'string'
+    || !Number.isSafeInteger(item.byteSize)
+    || item.byteSize < 1
+    || typeof item.sha256 !== 'string'
+    || !/^[a-f0-9]{64}$/.test(item.sha256)
+  ) {
+    throw new AppError('ARTIFACT_CORRUPT', 'Media manifest contains an invalid artifact record');
+  }
+  const bytes = await readFile(absoluteArtifactPath(dataDir, item.relativePath));
+  if (bytes.length !== item.byteSize || sha256(bytes) !== item.sha256) {
+    throw new AppError('ARTIFACT_CORRUPT', 'Approved media failed integrity validation');
+  }
+  return bytes;
+};
+
 const makeFileArtifact = async (dataDir, kind, absolutePath, mimeType) => {
+  const info = await stat(absolutePath);
+  if (!info.isFile() || info.size < 1) throw new AppError('OUTPUT_INVALID', `${kind} output is empty or invalid`);
   const bytes = await readFile(absolutePath);
-  if (bytes.length < 1) throw new AppError('OUTPUT_INVALID', `${kind} output is empty`);
+  if (bytes.length !== info.size) throw new AppError('OUTPUT_INVALID', `${kind} output changed during validation`);
   return {
     kind,
     relativePath: toRelative(dataDir, absolutePath),
@@ -164,7 +184,8 @@ const buildRenderPublicDir = async ({dataDir, claim, manifest, audioArtifact}) =
     const item = manifest.media[index];
     const extension = extname(item.relativePath).toLowerCase();
     const filename = `media-${String(index).padStart(3, '0')}${extension}`;
-    await copyFile(absoluteArtifactPath(dataDir, item.relativePath), resolve(publicDir, 'media', filename));
+    const bytes = await readVerifiedManifestMedia(dataDir, item);
+    await writeFile(resolve(publicDir, 'media', filename), bytes, {flag: 'wx'});
     mediaRefs.set(item.sourceId, `media/${filename}`);
   }
   await readVerifiedArtifact(dataDir, audioArtifact);
