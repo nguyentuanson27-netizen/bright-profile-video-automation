@@ -3,10 +3,13 @@ name: Bright Profile Verification
 on:
   push:
     branches:
+      - main
+      - spec/standalone-production-app
       - build/mcp-public-research-evidence
       - 'build/standalone-*'
   pull_request:
     branches:
+      - main
       - spec/standalone-production-app
 
 permissions:

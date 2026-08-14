@@ -1,11 +1,12 @@
 # Bright Profile — Current Project Status
 
 **Status date:** 2026-08-14  
-**Authoritative scope:** internal standalone app MVP for one operator/small internal team.
+**Authoritative scope:** internal standalone app MVP for one operator/small internal team.  
+**Lifecycle:** BUILD/VERIFY/REVIEW complete for T01–T16; SHIP closure in progress.
 
 ## Current objective
 
-The retained standalone internal-MVP workflow is implemented in the repository and is under the normal human PR review/merge gate.
+Promote the completed standalone internal MVP safely from `spec/standalone-production-app` to `main` after release-closure CI, documentation/spec alignment, ship audit, and human approval.
 
 Frozen operator flow:
 
@@ -45,6 +46,16 @@ The current implementation includes:
 
 The Bright Evidence MCP `normalize_evidence` integration remains available as a separate read-only ChatGPT boundary and is not required to expose the standalone app publicly.
 
+## Verification evidence
+
+PR #11 completed T14–T16 and merged into `spec/standalone-production-app` on 2026-08-14.
+
+The last pre-merge exact source tree was `d2470ba4290930df35dee7e20be58c972f88c46b`. GitHub Actions run `31799285582` completed successfully on commit `ec82a6fe551d34b1128fe9fa920b5edd0fe412bd`, which has that tree. The branch merge commit `9224107196606737c9b33c9788ef769376c628c7` has the same tree.
+
+That verification covered frozen install, standalone/MCP production audits, SQLite migration smoke, full unit/integration tests, aggregate lint, Vite build, syntax checks, standalone API/UI health, MCP health, Remotion smoke, standalone Compose validation, real app/worker container boundary checks, MCP Compose/container verification, and teardown.
+
+Fresh promotion evidence is still required before `main` merge. The verification workflow is being extended so both PRs targeting `main` and pushes to `main` run the same gate.
+
 ## Security and integrity boundaries retained
 
 The internal scope still requires fail-closed security at external and persistence boundaries:
@@ -83,11 +94,17 @@ Unless explicitly reintroduced later, the MVP does **not** require:
 When documentation conflicts, use this order for the current milestone:
 
 1. `docs/project-status.md`
-2. `docs/specs/standalone-internal-mvp-amendment.md`
+2. `docs/specs/standalone-internal-mvp-amendment.md` — consolidated active spec despite the legacy filename
 3. `tasks/traceability.md`
 4. `tasks/plan.md` and `tasks/todo.md`
 5. `docs/specs/standalone-production-app.md` only as historical detail explicitly retained by the higher-precedence current-scope documents.
 
 ## Merge / release state
 
-Implementation completion does not bypass review. The current T11-T13 and T14-T16 changes remain subject to their exact-head CI evidence and fresh human approval before merge. A green test suite alone is not the merge gate.
+- T01–T16 implementation PRs are merged into `spec/standalone-production-app`.
+- `spec/standalone-production-app` remains ahead of `main`; the standalone MVP has not yet been promoted to the default branch.
+- A release-closure branch/PR owns the current ship audit, consolidated spec update, and CI promotion-trigger fix.
+- Do not merge the promotion to `main` until the closure PR is green, the promotion PR itself receives fresh green CI, and a human approves the exact promotion head.
+- No deployment is implied by merging to `main`; runtime deployment/rollback must follow the ship audit if/when an internal host is updated.
+
+See `docs/ship/standalone-mvp-ship-audit.md` for current go/no-go evidence and rollback procedure.
