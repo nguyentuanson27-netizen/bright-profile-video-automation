@@ -6,6 +6,7 @@ import {join} from 'node:path';
 
 import {ErrorCodes} from '../../domain/errors.mjs';
 import {createGenerationService, createGenerationStageHandler} from '../../app/services/generate-project.mjs';
+import {GenerationProviderError, GenerationProviderErrorCodes} from '../../providers/generation/index.mjs';
 import {openDatabase, migrateDatabase, createRepositories} from '../../storage/db.mjs';
 import {createJobStore} from '../../storage/jobs.mjs';
 import {createJobRunner} from '../../worker/job-runner.mjs';
@@ -84,27 +85,72 @@ test('durable generation commits exactly one locally validated review draft and 
   reopened.close();
 });
 
-test('reclaimed generation fences stale owner so only the current claim can create the review draft', () => {
-  const db = openDatabase(tempDatabasePath());
-  migrateDatabase(db);
-  const repos = seedResearchReady(db);
-  const jobs = jobStore(db);
-  jobs.startGeneration({projectId: 'project-1', stageId: 'generation-stage', nowMs: 1000, maxAttempts: 3});
-  const attemptA = jobs.claimNext({workerId: 'worker-a', nowMs: 1000, allowedTypes: ['generation']});
-  assert.deepEqual(jobs.recoverExpired({nowMs: 1101}), {recovered: 1, exhausted: 0});
-  const attemptB = jobs.claimNext({workerId: 'worker-b', nowMs: 1111, allowedTypes: ['generation']});
+test('restart after lease loss lets a replacement worker recover exactly one draft and fences the old owner', () => {
+  const databasePath = tempDatabasePath();
+  const firstDb = openDatabase(databasePath);
+  migrateDatabase(firstDb);
+  seedResearchReady(firstDb);
+  const firstJobs = jobStore(firstDb);
+  firstJobs.startGeneration({projectId: 'project-1', stageId: 'generation-stage', nowMs: 1000, maxAttempts: 3});
+  const attemptA = firstJobs.claimNext({workerId: 'worker-a', nowMs: 1000, allowedTypes: ['generation']});
+  firstDb.close();
+
+  const replacementDb = openDatabase(databasePath);
+  migrateDatabase(replacementDb);
+  const repos = createRepositories(replacementDb);
+  const replacementJobs = jobStore(replacementDb);
+  assert.deepEqual(replacementJobs.recoverExpired({nowMs: 1101}), {recovered: 1, exhausted: 0});
+  const attemptB = replacementJobs.claimNext({workerId: 'worker-b', nowMs: 1111, allowedTypes: ['generation']});
 
   assert.throws(
-    () => jobs.commitGeneration({stageId: 'generation-stage', claimToken: attemptA.claimToken, draft: validDraft('stale'), nowMs: 1112}),
+    () => replacementJobs.commitGeneration({stageId: 'generation-stage', claimToken: attemptA.claimToken, draft: validDraft('stale'), nowMs: 1112}),
     (error) => error.code === ErrorCodes.STALE_CLAIM,
   );
   assert.equal(repos.projects.get('project-1').currentRevisionId, null);
 
-  jobs.commitGeneration({stageId: 'generation-stage', claimToken: attemptB.claimToken, draft: validDraft('current'), nowMs: 1113});
+  replacementJobs.commitGeneration({stageId: 'generation-stage', claimToken: attemptB.claimToken, draft: validDraft('current'), nowMs: 1113});
   const project = repos.projects.get('project-1');
   assert.equal(project.status, 'review_required');
   assert.equal(repos.revisions.get(project.currentRevisionId).payload.summary, 'current');
-  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM revisions WHERE project_id = ?').get('project-1').n, 1);
+  assert.equal(replacementDb.prepare('SELECT COUNT(*) AS n FROM revisions WHERE project_id = ?').get('project-1').n, 1);
+  replacementDb.close();
+});
+
+test('retryable generation failure requeues the same logical stage once and then reaches review_required', async () => {
+  const db = openDatabase(tempDatabasePath());
+  migrateDatabase(db);
+  const repos = seedResearchReady(db);
+  const jobs = jobStore(db);
+  let shouldFail = true;
+  let clock = 1000;
+  const service = createGenerationService({provider: {
+    async generate() {
+      if (shouldFail) {
+        throw new GenerationProviderError(GenerationProviderErrorCodes.FAILED, 'temporary', {retryable: true});
+      }
+      return validDraft('retried');
+    },
+  }});
+  const runner = createJobRunner({
+    jobs, workerId: 'worker-a', leaseMs: 100, now: () => clock,
+    handlers: {generation: createGenerationStageHandler({repos, generationService: service})},
+  });
+  jobs.startGeneration({projectId: 'project-1', stageId: 'generation-stage', nowMs: 1000, maxAttempts: 3});
+  assert.equal(await runner.runOnce(), true);
+  assert.equal(repos.projects.get('project-1').status, 'failed');
+  assert.equal(repos.projects.get('project-1').failureRetryable, true);
+  assert.equal(jobs.listAttempts('generation-stage').length, 1);
+
+  shouldFail = false;
+  clock = 1001;
+  const retried = jobs.retry({stageId: 'generation-stage', nowMs: clock});
+  assert.equal(retried.changed, true);
+  const repeated = jobs.retry({stageId: 'generation-stage', nowMs: clock});
+  assert.equal(repeated.changed, false);
+  assert.equal(await runner.runOnce(), true);
+  assert.equal(jobs.listAttempts('generation-stage').length, 2);
+  assert.equal(repos.projects.get('project-1').status, 'review_required');
+  assert.equal(repos.revisions.get(repos.projects.get('project-1').currentRevisionId).payload.summary, 'retried');
   db.close();
 });
 
