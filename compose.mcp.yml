@@ -1,0 +1,24 @@
+services:
+  bright-evidence-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+    restart: unless-stopped
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 4190
+      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-https://video.lanadesign.tech/mcp}
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-127.0.0.1,localhost}
+      MCP_MAX_BODY_BYTES: 2097152
+      MCP_RATE_LIMIT_PER_MINUTE: 60
+      MCP_REQUEST_TIMEOUT_MS: 10000
+    ports:
+      - "127.0.0.1:4190:4190"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('node:http').get('http://127.0.0.1:4190/health',r=>{let b='';r.setEncoding('utf8');r.on('data',c=>b+=c);r.on('end',()=>{if(r.statusCode!==200){console.error('health status='+r.statusCode+' body='+b);process.exit(1)}})}).on('error',e=>{console.error(e.message);process.exit(1)})"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 2s
+    cpus: 0.5
+    mem_limit: 256m

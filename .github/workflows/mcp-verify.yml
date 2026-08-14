@@ -1,0 +1,237 @@
+name: Bright Profile Verification
+
+on:
+  push:
+    branches:
+      - main
+      - spec/standalone-production-app
+      - build/mcp-public-research-evidence
+      - 'build/standalone-*'
+  pull_request:
+    branches:
+      - main
+      - spec/standalone-production-app
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24.18.0'
+          package-manager-cache: false
+      - name: Install frozen dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Standalone production dependency audit
+        run: npm run audit:standalone
+      - name: Audit MCP production dependencies
+        run: |
+          set +e
+          npm audit --omit=dev --audit-level=high --json > "$RUNNER_TEMP/npm-audit.json"
+          audit_status=$?
+          set -e
+          cat "$RUNNER_TEMP/npm-audit.json"
+          node scripts/verify-mcp-prod-audit.mjs "$RUNNER_TEMP/npm-audit.json" "$audit_status"
+      - name: Build pinned SQLite native binding
+        run: npm rebuild better-sqlite3 --no-audit --no-fund
+      - name: Database migration smoke
+        run: npm run db:migrate -- --database "$RUNNER_TEMP/bright-profile.sqlite"
+      - name: Unit and integration tests
+        run: npm test
+      - name: Aggregate first-party lint
+        run: npm run lint
+      - name: Build standalone web UI
+        run: |
+          npm run build:web
+          test -s dist/index.html
+          test -n "$(find dist/assets -maxdepth 1 -type f -name '*.js' -print -quit)"
+          test -n "$(find dist/assets -maxdepth 1 -type f -name '*.css' -print -quit)"
+      - name: Syntax checks
+        run: |
+          node --check app/config.mjs
+          node --check app/server.mjs
+          node --check app/http/router.mjs
+          node --check app/http/projects.mjs
+          node --check app/http/revisions.mjs
+          node --check app/http/artifacts.mjs
+          node --check app/services/research-project.mjs
+          node --check app/services/generate-project.mjs
+          node --check app/services/approve-project.mjs
+          node --check app/services/ingest-media.mjs
+          node --check app/services/execute-render.mjs
+          node --check providers/research/index.mjs
+          node --check providers/research/openai.mjs
+          node --check providers/generation/index.mjs
+          node --check providers/generation/openai.mjs
+          node --check domain/errors.mjs
+          node --check domain/project.mjs
+          node --check domain/schemas.mjs
+          node --check storage/db.mjs
+          node --check storage/jobs.mjs
+          node --check storage/artifacts.mjs
+          node --check security/url-policy.mjs
+          node --check security/safe-fetch.mjs
+          node --check worker/job-runner.mjs
+          node --check worker.mjs
+          node --check server.mjs
+          node --check lib/remotion-renderer.mjs
+          node --check lib/timed-google-tts.mjs
+          node --check web/state.mjs
+          node --check web/api.mjs
+          node --check vite.config.mjs
+          node --check scripts/db-migrate.mjs
+          node --check security/standalone-audit-policy.mjs
+          node --check mcp/server.mjs
+          node --check lib/evidence/primitives.mjs
+          node --check lib/evidence/normalize-evidence.mjs
+          node --check lib/evidence/schema-validator.mjs
+          node --check scripts/verify-mcp-prod-audit.mjs
+      - name: Verify standalone API and built web health
+        run: |
+          BRIGHT_DATA_DIR="$RUNNER_TEMP/standalone-data" \
+          BRIGHT_DATABASE_PATH="$RUNNER_TEMP/standalone-data/app.sqlite" \
+          BRIGHT_WEB_DIR="$GITHUB_WORKSPACE/dist" \
+          PORT=4182 node server.mjs >standalone.stdout.log 2>standalone.stderr.log &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:4182/health/live >/dev/null; then break; fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              cat standalone.stderr.log
+              exit 1
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:4182/health/live >/dev/null
+          curl -fsS http://127.0.0.1:4182/health/ready >/dev/null
+          curl -fsS http://127.0.0.1:4182/ | grep -q 'id="root"'
+      - name: Verify MCP process health
+        env:
+          MCP_PORT: 4191
+        run: |
+          node mcp/server.mjs >mcp.stdout.log 2>mcp.stderr.log &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:4191/health >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat mcp.stderr.log
+          exit 1
+      - name: Render regression smoke
+        run: |
+          browser="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          test -n "$browser"
+          REMOTION_BROWSER_EXECUTABLE="$browser" npm run render:smoke
+      - name: Validate standalone Compose boundary
+        run: |
+          OPENAI_API_KEY=test-key docker compose -f compose.yml config --format json > "$RUNNER_TEMP/standalone-compose.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = json.loads(Path(os.environ['RUNNER_TEMP']).joinpath('standalone-compose.json').read_text())
+          services = data['services']
+          assert set(services) == {'app', 'worker'}
+          app = services['app']
+          worker = services['worker']
+          app_ports = app.get('ports') or []
+          assert len(app_ports) == 1
+          assert app_ports[0].get('host_ip') == '127.0.0.1'
+          assert str(app_ports[0].get('target')) == '4180'
+          assert not worker.get('ports')
+          assert app['environment']['BRIGHT_DATABASE_PATH'] == '/app/data/bright-profile.sqlite'
+          assert worker['environment']['BRIGHT_DATABASE_PATH'] == '/app/data/bright-profile.sqlite'
+          assert app['environment']['BRIGHT_DATA_DIR'] == '/app/data'
+          assert worker['environment']['BRIGHT_DATA_DIR'] == '/app/data'
+          assert worker['environment']['GOOGLE_APPLICATION_CREDENTIALS'] == '/run/secrets/google-application-credentials.json'
+          health = worker.get('healthcheck') or {}
+          assert health.get('disable') is True or health.get('test') == ['NONE']
+          for service in (app, worker):
+            mounts = service.get('volumes') or []
+            assert any(m.get('target') == '/app/data' and m.get('type') == 'volume' for m in mounts)
+          credential_mounts = [m for m in (worker.get('volumes') or []) if m.get('target') == '/run/secrets/google-application-credentials.json']
+          assert len(credential_mounts) == 1
+          assert credential_mounts[0].get('read_only') is True
+          assert 'n8n' not in json.dumps(data).lower()
+          PY
+      - name: Build and verify standalone app and worker image
+        run: |
+          mkdir -p .secrets
+          printf '{}\n' > .secrets/google-application-credentials.json
+          OPENAI_API_KEY=test-key docker compose -f compose.yml build app worker
+          OPENAI_API_KEY=test-key docker compose -f compose.yml up -d app worker
+          app_container="$(docker compose -f compose.yml ps -q app)"
+          worker_container="$(docker compose -f compose.yml ps -q worker)"
+          test -n "$app_container"
+          test -n "$worker_container"
+          for attempt in $(seq 1 30); do
+            status="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$app_container")"
+            if [ "$status" = healthy ]; then break; fi
+            if [ "$status" = unhealthy ]; then
+              docker compose -f compose.yml logs --no-color app
+              docker inspect --format='{{json .State.Health}}' "$app_container"
+              exit 1
+            fi
+            sleep 1
+          done
+          test "$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$app_container")" = healthy
+          test "$(docker compose -f compose.yml exec -T app id -u)" != 0
+          test "$(docker inspect --format='{{.State.Running}}' "$worker_container")" = true
+          test "$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$worker_container")" = none
+          test "$(docker compose -f compose.yml exec -T worker id -u)" != 0
+          docker inspect "$app_container" | node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const c=JSON.parse(s)[0];const p=(c.HostConfig.PortBindings||{})['4180/tcp'];if(!Array.isArray(p)||p.length!==1||p[0].HostIp!=='127.0.0.1')process.exit(1)})"
+          docker inspect "$worker_container" | node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const c=JSON.parse(s)[0];if(Object.keys(c.HostConfig.PortBindings||{}).length)process.exit(1);const mount=(c.Mounts||[]).find(m=>m.Destination==='/run/secrets/google-application-credentials.json');if(!mount||mount.RW!==false)process.exit(1)})"
+          curl -fsS http://127.0.0.1:4180/health/ready >/dev/null
+          curl -fsS http://127.0.0.1:4180/ | grep -q 'id="root"'
+      - name: Tear down standalone Compose
+        if: always()
+        run: |
+          OPENAI_API_KEY=test-key docker compose -f compose.yml down -v --remove-orphans
+          rm -f .secrets/google-application-credentials.json
+      - name: Validate MCP Compose boundary
+        run: |
+          docker compose -f compose.mcp.yml config --format json > "$RUNNER_TEMP/mcp-compose.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = json.loads(Path(os.environ['RUNNER_TEMP']).joinpath('mcp-compose.json').read_text())
+          service = data['services']['bright-evidence-mcp']
+          assert not service.get('volumes')
+          assert not service.get('secrets')
+          ports = service.get('ports') or []
+          assert len(ports) == 1
+          assert ports[0].get('host_ip') == '127.0.0.1'
+          assert str(ports[0].get('published')) == '4190'
+          assert str(ports[0].get('target')) == '4190'
+          PY
+      - name: Build and verify isolated MCP container
+        run: |
+          docker compose -f compose.mcp.yml up -d --build
+          container="$(docker compose -f compose.mcp.yml ps -q bright-evidence-mcp)"
+          test -n "$container"
+          for attempt in $(seq 1 30); do
+            status="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container")"
+            if [ "$status" = healthy ]; then break; fi
+            if [ "$status" = unhealthy ]; then
+              docker compose -f compose.mcp.yml logs --no-color
+              docker inspect --format='{{json .State.Health}}' "$container"
+              exit 1
+            fi
+            sleep 1
+          done
+          final_status="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container")"
+          if [ "$final_status" != healthy ]; then
+            docker compose -f compose.mcp.yml logs --no-color
+            docker inspect --format='{{json .State.Health}}' "$container"
+            exit 1
+          fi
+          test "$(docker compose -f compose.mcp.yml exec -T bright-evidence-mcp id -u)" != 0
+          docker inspect "$container" | node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const c=JSON.parse(s)[0];const mounts=c.Mounts||[];if(mounts.length)process.exit(1);const b=c.HostConfig.PortBindings||{};const p=b['4190/tcp'];if(!Array.isArray(p)||p.length!==1||p[0].HostIp!=='127.0.0.1'||p[0].HostPort!=='4190')process.exit(1)})"
+          curl -fsS http://127.0.0.1:4190/health >/dev/null
+      - name: Tear down MCP container
+        if: always()
+        run: docker compose -f compose.mcp.yml down -v --remove-orphans

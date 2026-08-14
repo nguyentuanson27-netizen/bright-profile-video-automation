@@ -1,0 +1,53 @@
+const runtimeGlobals = {
+  AbortController: 'readonly',
+  AbortSignal: 'readonly',
+  Blob: 'readonly',
+  Buffer: 'readonly',
+  File: 'readonly',
+  FormData: 'readonly',
+  Headers: 'readonly',
+  Request: 'readonly',
+  Response: 'readonly',
+  TextDecoder: 'readonly',
+  TextEncoder: 'readonly',
+  URL: 'readonly',
+  URLSearchParams: 'readonly',
+  clearInterval: 'readonly',
+  clearTimeout: 'readonly',
+  console: 'readonly',
+  document: 'readonly',
+  fetch: 'readonly',
+  navigator: 'readonly',
+  performance: 'readonly',
+  process: 'readonly',
+  queueMicrotask: 'readonly',
+  requestAnimationFrame: 'readonly',
+  cancelAnimationFrame: 'readonly',
+  setImmediate: 'readonly',
+  setInterval: 'readonly',
+  setTimeout: 'readonly',
+  structuredClone: 'readonly',
+  window: 'readonly',
+};
+
+export default [
+  {
+    files: ['**/*.{js,jsx,mjs}'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      parserOptions: {ecmaFeatures: {jsx: true}},
+      globals: runtimeGlobals,
+    },
+    rules: {
+      'no-undef': 'error',
+      'no-unused-vars': ['error', {
+        argsIgnorePattern: '^_',
+        ignoreRestSiblings: true,
+        varsIgnorePattern: '^React$',
+      }],
+      'no-constant-condition': 'error',
+      'no-unreachable': 'error',
+    },
+  },
+];

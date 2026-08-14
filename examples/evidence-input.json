@@ -1,0 +1,27 @@
+{
+  "subject": {"name": "Emiru", "aliases": ["Emily Schunk"]},
+  "researchQuery": "career milestones and audience metrics",
+  "researchedAt": "2026-08-11T08:00:00Z",
+  "items": [
+    {
+      "claim": "Emiru reached 2.1 million followers.",
+      "url": "https://example.com/a?utm_source=research",
+      "publisher": "Example A",
+      "sourceType": "news",
+      "value": 2100000,
+      "unit": "followers",
+      "category": "followers",
+      "claimDate": "2026-07-01"
+    },
+    {
+      "claim": "Emiru reached 2.1M followers.",
+      "url": "https://example.org/b",
+      "publisher": "Example B",
+      "sourceType": "news",
+      "value": "2.1M",
+      "unit": "followers",
+      "category": "followers",
+      "claimDate": "2026-07-01"
+    }
+  ]
+}

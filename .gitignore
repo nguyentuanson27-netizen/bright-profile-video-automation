@@ -3,6 +3,7 @@ data/
 .env
 .env.*
 !.env.example
+.secrets/
 *.log
 *.mp4
 *-contact.jpg
@@ -11,3 +12,4 @@ dist/
 coverage/
 .DS_Store
 Thumbs.db
+plugins/bright-evidence/.app.json
