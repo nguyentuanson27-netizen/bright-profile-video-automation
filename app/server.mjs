@@ -1,7 +1,8 @@
 import http from 'node:http';
 import {randomUUID} from 'node:crypto';
 import {accessSync, constants as fsConstants, createReadStream} from 'node:fs';
-import {resolve} from 'node:path';
+import {stat} from 'node:fs/promises';
+import {extname, resolve, sep} from 'node:path';
 
 import {AppError} from '../domain/errors.mjs';
 import {createArtifactStore} from '../storage/artifacts.mjs';
@@ -11,6 +12,18 @@ import {createRevisionsApi} from './http/revisions.mjs';
 import {matchRoute} from './http/router.mjs';
 
 const DEFAULT_MAX_BODY_BYTES = 64 * 1024;
+const WEB_ASSET_PATTERN = /^\/assets\/([A-Za-z0-9._-]+)$/;
+const WEB_MIME = new Map([
+  ['.css', 'text/css; charset=utf-8'],
+  ['.js', 'text/javascript; charset=utf-8'],
+  ['.mjs', 'text/javascript; charset=utf-8'],
+  ['.svg', 'image/svg+xml'],
+  ['.png', 'image/png'],
+  ['.jpg', 'image/jpeg'],
+  ['.jpeg', 'image/jpeg'],
+  ['.webp', 'image/webp'],
+  ['.woff2', 'font/woff2'],
+]);
 
 const json = (res, status, value, requestId) => {
   const body = JSON.stringify(value);
@@ -36,6 +49,52 @@ const sendOutput = (res, output, requestId) => {
   const stream = createReadStream(output.absolutePath);
   stream.once('error', () => res.destroy());
   stream.pipe(res);
+};
+
+const webHeaders = (contentType, byteSize) => ({
+  'content-type': contentType,
+  'content-length': byteSize,
+  'cache-control': contentType.startsWith('text/html') ? 'no-store' : 'public, max-age=31536000, immutable',
+  'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+  'referrer-policy': 'no-referrer',
+  'x-content-type-options': 'nosniff',
+});
+
+const sendWebFile = async (req, res, file, contentType) => {
+  const info = await stat(file);
+  if (!info.isFile() || info.size < 1) return false;
+  res.writeHead(200, webHeaders(contentType, info.size));
+  if (req.method === 'HEAD') {
+    res.end();
+    return true;
+  }
+  const stream = createReadStream(file);
+  stream.once('error', () => res.destroy());
+  stream.pipe(res);
+  return true;
+};
+
+const tryServeWeb = async (req, res, pathname, webDir) => {
+  if (!webDir || !['GET', 'HEAD'].includes(req.method ?? 'GET')) return false;
+  const root = resolve(webDir);
+  if (pathname === '/') {
+    try {
+      return await sendWebFile(req, res, resolve(root, 'index.html'), 'text/html; charset=utf-8');
+    } catch {
+      return false;
+    }
+  }
+  const match = pathname.match(WEB_ASSET_PATTERN);
+  if (!match) return false;
+  const file = resolve(root, 'assets', match[1]);
+  if (!file.startsWith(`${resolve(root, 'assets')}${sep}`)) return false;
+  const contentType = WEB_MIME.get(extname(file).toLowerCase());
+  if (!contentType) return false;
+  try {
+    return await sendWebFile(req, res, file, contentType);
+  } catch {
+    return false;
+  }
 };
 
 const readJsonBody = async (req, maxBytes) => {
@@ -86,6 +145,7 @@ export const createAppServer = ({
   jobs,
   artifactStore,
   dataDir,
+  webDir,
   now = Date.now,
   nowMs = Date.now,
   projectIdFactory = randomUUID,
@@ -105,6 +165,7 @@ export const createAppServer = ({
   }
   if (typeof requestIdFactory !== 'function') throw new TypeError('requestIdFactory is required');
   const resolvedDataDir = resolve(dataDir);
+  const resolvedWebDir = webDir ? resolve(webDir) : undefined;
   const projects = createProjectsApi({
     repos,
     jobs,
@@ -131,6 +192,7 @@ export const createAppServer = ({
       const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
       const route = matchRoute(req.method ?? 'GET', pathname);
       if (!route) {
+        if (await tryServeWeb(req, res, pathname, resolvedWebDir)) return undefined;
         return json(res, 404, {error: {code: 'NOT_FOUND', message: 'Route not found'}, requestId}, requestId);
       }
 
