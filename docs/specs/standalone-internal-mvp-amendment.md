@@ -27,7 +27,7 @@ Provide a standalone internal web application that lets an operator:
 4. review and edit claims, script, voiceover chunks, scene plan, and bounded render settings;
 5. explicitly approve an immutable revision;
 6. start downstream work through the application render-start control;
-7. ingest approved media through the SSRF-safe fetch boundary into application-owned attempt paths;
+7. ingest approved media through the SSRF-safe fetch boundary;
 8. run durable Google TTS and Remotion render stages;
 9. retry a retryable failed stage or cancel active durable work safely;
 10. download the one authoritative validated MP4;
