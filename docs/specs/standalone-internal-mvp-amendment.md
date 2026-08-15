@@ -1,9 +1,9 @@
 # Spec: Standalone Bright Profile Internal MVP
 
-**Status:** Active — promotion release-candidate contract  
+**Status:** Active — repository promotion complete; real-browser follow-up remains open  
 **Date:** 2026-08-15  
-**Branch:** `spec/standalone-production-app`  
-**Promotion PR:** #13 → `main`  
+**Current branch:** `main`  
+**Promoted from:** `spec/standalone-production-app` via PR #13  
 **Historical note:** this file began as a scope amendment. It is now the consolidated current spec and supersedes conflicting current-state language in `docs/specs/standalone-production-app.md`, which remains historical design context.
 
 ## Assumptions
@@ -278,24 +278,24 @@ Release/promotion criteria governed by `/ship`:
 - [x] PR #12 release-closure exact-head CI passed.
 - [x] PR #12 merged into `spec/standalone-production-app`.
 - [x] Post-merge source-branch push CI `31825258653` passed on merge commit `5594bc16d9ce30c5155a0f5ec4bb261bdaf431cf`.
-- [x] Promotion PR #13 `spec/standalone-production-app -> main` is open.
+- [x] Promotion PR #13 `spec/standalone-production-app -> main` was opened.
 - [x] Promotion workflow `31826285093`, attempt 2, passed on prior exact head `07a079a6bb5ae44e66c15a8b248cde0e6e2a6868`.
 - [x] The repository owner explicitly accepted a **one-time PR #13 waiver** for the missing real-browser keyboard/focus/console smoke. This records accepted residual risk only; browser smoke remains **not verified** and must stay as a follow-up.
-- [ ] Fresh full promotion CI is green on the **final exact promotion head** after waiver-documentation synchronization.
-- [ ] A human explicitly approves the final promotion head.
-- [ ] PR #13 is merged to `main`.
-- [ ] Post-merge `main` push verification completes successfully.
+- [x] Fresh full promotion CI passed on the final exact promotion head after waiver-documentation synchronization.
+- [x] A human explicitly approved the final promotion head.
+- [x] PR #13 merged to `main` as `4f8344de2dbd9963a5d4b3a96e6aeeb19d36e098`.
+- [x] Post-merge `main` push verification `31837273738` completed successfully on that exact merge commit.
 - [ ] The follow-up real-browser keyboard/focus/console walkthrough is eventually executed and closed with actual evidence.
 
 ## Current Implementation and Release Status
 
-T01–T16 are implemented on `spec/standalone-production-app`.
+T01–T16 are implemented and repository promotion is complete.
 
-PR #11 completed the React/Vite UI, two-service app/worker Compose closure, deterministic standalone E2E, and final CI/container gates. PR #12 then synchronized the current spec/status, added the ship audit/rollback plan, and extended verification to promotion PRs/pushes.
+PR #11 completed the React/Vite UI, two-service app/worker Compose closure, deterministic standalone E2E, and final CI/container gates. PR #12 synchronized the current spec/status, added the ship audit/rollback plan, and extended verification to promotion PRs/pushes. PR #12 merged as `5594bc16d9ce30c5155a0f5ec4bb261bdaf431cf`; its post-merge source-branch workflow `31825258653` completed **SUCCESS**.
 
-PR #12 merged as `5594bc16d9ce30c5155a0f5ec4bb261bdaf431cf`; its post-merge source-branch workflow `31825258653` completed **SUCCESS**.
+PR #13 then promoted `spec/standalone-production-app` to `main`. The final promotion head received fresh full verification and explicit human release approval, PR #13 merged to `main` as `4f8344de2dbd9963a5d4b3a96e6aeeb19d36e098`, and post-merge `main` workflow `31837273738` completed **SUCCESS** on that exact merge commit.
 
-Promotion PR #13 is now the active repository-integration gate. Prior exact-head promotion CI passed, and the owner has accepted a one-time browser-smoke waiver for this internal MVP promotion. The waiver is not a passing browser result. The documentation-sync head must receive fresh full CI and explicit human approval before merge. `main` has not yet received this MVP.
+A one-time browser-smoke waiver was accepted for PR #13. That waiver is not a passing browser result: the real-browser keyboard/focus/console walkthrough remains unverified and visible as the sole milestone verification follow-up. Repository promotion did not deploy the application to a persistent runtime host.
 
 ## Deferred / Out of Scope
 
@@ -311,15 +311,13 @@ Promotion PR #13 is now the active repository-integration gate. Prior exact-head
 
 ## Open Questions
 
-No unresolved product-contract question blocks the frozen internal MVP.
+No unresolved product-contract or repository-promotion question blocks the frozen internal MVP.
 
-Remaining release/follow-up actions are:
+Remaining follow-up/optional ship actions are:
 
-1. complete fresh full CI on the final exact PR #13 head after waiver-documentation synchronization;
-2. obtain explicit human approval and merge PR #13;
-3. verify the post-merge `main` push workflow;
-4. keep the waived real-browser keyboard/focus/console walkthrough visible as a follow-up until actual evidence closes it;
-5. if the merged code will be deployed to a persistent internal host, record which operator owns the pre-deploy data snapshot and rollback execution.
+1. keep the waived real-browser keyboard/focus/console walkthrough visible until actual evidence closes it;
+2. if browser verification finds a defect, return it through the normal debug -> test -> review flow;
+3. if the code is later deployed to a persistent internal host, record the deployed commit/image, pre-deploy data snapshot owner, health/representative-flow evidence, and rollback owner as a separate ship operation.
 
 ## Traceability
 
