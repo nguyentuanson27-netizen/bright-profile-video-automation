@@ -4,10 +4,11 @@ import Database from 'better-sqlite3';
 
 import {AppError, ErrorCodes} from '../domain/errors.mjs';
 
-const LATEST_VERSION = 2;
+const LATEST_VERSION = 3;
 const MIGRATIONS = Object.freeze({
   1: readFileSync(new URL('./migrations/001_initial.sql', import.meta.url), 'utf8'),
   2: readFileSync(new URL('./migrations/002_research_api.sql', import.meta.url), 'utf8'),
+  3: readFileSync(new URL('./migrations/003_chatgpt_handoff.sql', import.meta.url), 'utf8'),
 });
 const nowIso = () => new Date().toISOString();
 const parseJson = (value) => JSON.parse(value);
@@ -55,6 +56,8 @@ const projectFromRow = (row) => row && ({
   topic: row.topic,
   instructions: row.instructions ?? '',
   status: row.status,
+  origin: row.origin ?? 'standalone',
+  idempotencyKey: row.idempotency_key ?? null,
   currentRevisionId: row.current_revision_id,
   approvedRevisionId: row.approved_revision_id,
   failedStage: row.failed_stage,
@@ -82,6 +85,9 @@ const revisionFromRow = (row) => row && ({
   payload: parseJson(row.payload_json),
   payloadHash: row.payload_hash,
   approvedAt: row.approved_at,
+  approvalMode: row.approval_mode ?? null,
+  approvalActor: row.approval_actor ?? null,
+  approvalContext: row.approval_context_json ? parseJson(row.approval_context_json) : null,
   createdAt: row.created_at,
 });
 
@@ -113,10 +119,11 @@ const downstreamStartedError = () => new AppError(
 
 export const createRepositories = (db) => {
   const insertProject = db.prepare(`
-    INSERT INTO projects (id, creator, topic, instructions, status, created_at, updated_at)
-    VALUES (@id, @creator, @topic, @instructions, @status, @createdAt, @updatedAt)
+    INSERT INTO projects (id, creator, topic, instructions, status, origin, idempotency_key, research_json, created_at, updated_at)
+    VALUES (@id, @creator, @topic, @instructions, @status, @origin, @idempotencyKey, @researchJson, @createdAt, @updatedAt)
   `);
   const getProject = db.prepare('SELECT * FROM projects WHERE id = ?');
+  const getProjectByIdempotencyKey = db.prepare('SELECT * FROM projects WHERE idempotency_key = ?');
   const listProjects = db.prepare('SELECT * FROM projects ORDER BY created_at, id');
   const insertSource = db.prepare(`
     INSERT INTO sources (id, project_id, url, status, payload_json, created_at, updated_at)
@@ -149,7 +156,11 @@ export const createRepositories = (db) => {
       AND approved_revision_id = @expectedRevisionId
   `);
   const approveRevisionRow = db.prepare(`
-    UPDATE revisions SET approved_at = @approvedAt
+    UPDATE revisions
+    SET approved_at = @approvedAt,
+        approval_mode = @approvalMode,
+        approval_actor = @approvalActor,
+        approval_context_json = @approvalContextJson
     WHERE id = @revisionId
       AND project_id = @projectId
       AND approved_at IS NULL
@@ -210,6 +221,9 @@ export const createRepositories = (db) => {
       ...project,
       instructions: project.instructions ?? '',
       status: project.status ?? 'draft',
+      origin: project.origin ?? 'standalone',
+      idempotencyKey: project.idempotencyKey ?? null,
+      researchJson: project.research ? JSON.stringify(project.research) : null,
       createdAt,
       updatedAt,
     });
@@ -233,12 +247,29 @@ export const createRepositories = (db) => {
     return revisionFromRow(getRevision.get(record.id));
   });
 
-  const approveRevisionTx = db.transaction(({projectId, revisionId, expectedPayloadHash, approvedAt}) => {
+  const approveRevisionTx = db.transaction(({
+    projectId,
+    revisionId,
+    expectedPayloadHash,
+    approvedAt,
+    approvalMode = 'user_reviewed',
+    approvalActor = 'user',
+    approvalContext = null,
+  }) => {
     if (typeof expectedPayloadHash !== 'string' || !/^[a-f0-9]{64}$/.test(expectedPayloadHash)) {
       throw transitionError('Expected revision hash is required for approval');
     }
     const timestamp = approvedAt ?? nowIso();
-    if (approveRevisionRow.run({projectId, revisionId, expectedPayloadHash, approvedAt: timestamp}).changes !== 1) {
+    const approvalContextJson = approvalContext ? JSON.stringify(approvalContext) : null;
+    if (approveRevisionRow.run({
+      projectId,
+      revisionId,
+      expectedPayloadHash,
+      approvedAt: timestamp,
+      approvalMode,
+      approvalActor,
+      approvalContextJson,
+    }).changes !== 1) {
       throw transitionError('Revision changed before approval');
     }
     if (approveProject.run({projectId, revisionId, updatedAt: timestamp}).changes !== 1) {
@@ -385,6 +416,11 @@ export const createRepositories = (db) => {
       },
       get(id) {
         return projectFromRow(getProject.get(id));
+      },
+      getByIdempotencyKey(key) {
+        if (typeof key !== 'string' || !key) return null;
+        const row = getProjectByIdempotencyKey.get(key);
+        return row ? projectFromRow(row) : null;
       },
       list() {
         return listProjects.all().map(projectFromRow);
