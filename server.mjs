@@ -4,6 +4,7 @@ import {resolve} from 'node:path';
 import {loadConfig} from './app/config.mjs';
 import {createAppServer} from './app/server.mjs';
 import {openDatabase, migrateDatabase, createRepositories} from './storage/db.mjs';
+import {createArtifactStore} from './storage/artifacts.mjs';
 import {createJobStore} from './storage/jobs.mjs';
 
 const readPort = (value) => {
@@ -31,10 +32,12 @@ const jobs = createJobStore(db, {
   leaseMs: config.worker.leaseMs,
   defaultMaxAttempts: config.worker.maxRetries + 1,
 });
+const artifactStore = createArtifactStore(db);
 const server = createAppServer({
   db,
   repos,
   jobs,
+  artifactStore,
   dataDir: config.dataDir,
   webDir: resolve(process.env.BRIGHT_WEB_DIR?.trim() || './dist'),
   integrationToken: config.integration.serviceToken,
