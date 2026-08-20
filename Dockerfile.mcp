@@ -6,6 +6,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
     && npm cache clean --force
 
+COPY --chown=node:node domain ./domain
 COPY --chown=node:node lib/evidence ./lib/evidence
 COPY --chown=node:node security ./security
 COPY --chown=node:node mcp ./mcp
