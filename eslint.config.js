@@ -32,6 +32,9 @@ const runtimeGlobals = {
 
 export default [
   {
+    ignores: ['dist/**', 'node_modules/**', '.secrets/**', 'coverage/**'],
+  },
+  {
     files: ['**/*.{js,jsx,mjs}'],
     languageOptions: {
       ecmaVersion: 'latest',

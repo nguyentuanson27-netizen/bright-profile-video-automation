@@ -44,7 +44,7 @@ test('loadConfig normalizes standalone paths and numeric runtime bounds', () => 
 
 test('loadConfig accepts an explicit database path relative to cwd', () => {
   const config = loadConfig({...baseEnv, BRIGHT_DATABASE_PATH: './state/app.sqlite'}, {cwd: '/workspace'});
-  assert.equal(config.databasePath, '/workspace/state/app.sqlite');
+  assert.equal(config.databasePath, resolve('/workspace', './state/app.sqlite'));
 });
 
 test('loadConfig accepts each configured numeric upper boundary', () => {

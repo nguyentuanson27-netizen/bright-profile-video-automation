@@ -17,13 +17,20 @@ const response = (statusCode, headers = {}, chunks = []) => Object.assign(Readab
 
 const requestFactory = (handler) => (options, callback) => {
   const request = new EventEmitter();
+  let finished = false;
   request.end = () => {
-    Promise.resolve(handler(options)).then((value) => {
-      if (value) callback(value);
-    }, (error) => request.emit('error', error));
+    Promise.resolve(handler(options, request)).then((value) => {
+      if (!finished && value) callback(value);
+    }, (error) => {
+      if (!finished) request.emit('error', error);
+    });
   };
   request.destroy = (error) => {
-    if (error) queueMicrotask(() => request.emit('error', error));
+    finished = true;
+    request.emit('close');
+    if (error) queueMicrotask(() => {
+      if (request.listenerCount('error') > 0) request.emit('error', error);
+    });
   };
   return request;
 };
@@ -178,7 +185,9 @@ test('oversize and disallowed MIME responses fail closed', async () => {
 test('request timeout fails with a stable timeout error', async () => {
   const fetcher = createSafeFetcher({
     lookup: lookupFactory({'slow.test': [{address: '93.184.216.34', family: 4}]}),
-    httpRequest: requestFactory(async () => new Promise(() => {})),
+    httpRequest: requestFactory((options, req) => new Promise((_, reject) => {
+      req.once('close', () => reject(new Error('request closed')));
+    })),
   });
   await expectCode(fetcher.fetchBuffer('http://slow.test/', {
     timeoutMs: 20, maxBytes: 1024, allowedMimeTypes: ['text/plain'],

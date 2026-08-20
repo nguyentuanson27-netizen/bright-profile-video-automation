@@ -10,6 +10,11 @@ import {
   evidenceBundleSchema,
   evidenceInputSchema,
 } from '../lib/evidence/schema-validator.mjs';
+import {
+  compareTokensConstantTime,
+  extractBearerToken,
+  redactSecrets,
+} from '../security/integration-auth.mjs';
 
 const DEFAULT_PORT = 4190;
 const DEFAULT_MAX_BODY_BYTES = 2 * 1024 * 1024;
@@ -301,6 +306,21 @@ export function createBrightHttpServer({
         return;
       }
 
+      const expectedAuthToken = String(env.MCP_AUTH_TOKEN || '').trim();
+      if (expectedAuthToken) {
+        const token = extractBearerToken(req.headers.authorization);
+        if (!token || !compareTokensConstantTime(token, expectedAuthToken)) {
+          writeJsonBeforeBodyConsumed(req, res, 401, {
+            error: {
+              code: 'UNAUTHORIZED',
+              message: 'Unauthorized',
+              requestId,
+            },
+          }, requestId);
+          return;
+        }
+      }
+
       const method = req.method || 'GET';
       if (['GET', 'HEAD'].includes(method) && requestDeclaresBody(req)) {
         writeJsonBeforeBodyConsumed(req, res, 400, {
@@ -346,7 +366,7 @@ export function createBrightHttpServer({
         res.destroy();
       }
     } finally {
-      log({event: 'mcp.request', requestId, method: req.method, path: requestPath, status: res.statusCode, durationMs: Date.now() - started});
+      log(redactSecrets({event: 'mcp.request', requestId, method: req.method, path: requestPath, status: res.statusCode, durationMs: Date.now() - started}));
     }
   });
 }

@@ -79,7 +79,7 @@ export const runStandaloneAudit = ({spawn = spawnSync} = {}) => {
   const audit = spawn(
     npmCommand,
     ['audit', '--omit=dev', '--audit-level=high', '--json'],
-    {encoding: 'utf8', maxBuffer: 16 * 1024 * 1024},
+    {encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, shell: process.platform === 'win32'},
   );
 
   if (audit.error) {

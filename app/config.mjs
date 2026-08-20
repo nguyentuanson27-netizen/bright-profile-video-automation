@@ -67,5 +67,9 @@ export const loadConfig = (env = process.env, {cwd = process.cwd()} = {}) => {
       timeoutMs: readInteger(env, 'OPENAI_API_TIMEOUT_MS', DEFAULTS.openaiTimeoutMs, {min: 1, max: MAXIMUMS.openaiTimeoutMs}),
       maxRetries: readInteger(env, 'OPENAI_API_MAX_RETRIES', DEFAULTS.openaiMaxRetries, {min: 0, max: MAXIMUMS.openaiMaxRetries}),
     }),
+    integration: Object.freeze({
+      serviceToken: env.BRIGHT_INTEGRATION_TOKEN?.trim() || undefined,
+      backendUrl: env.BRIGHT_BACKEND_URL?.trim() || 'http://127.0.0.1:4180',
+    }),
   });
 };
