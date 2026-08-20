@@ -32,26 +32,80 @@ export function verifyPkce(verifier, challenge, method = 'S256') {
 export function createOauthManager({
   issuer,
   secret,
+  canonicalResource,
   authCodeTtlSeconds = 300,
   tokenTtlSeconds = 3600,
   nowMs = Date.now,
 } = {}) {
   const authCodes = new Map();
+  const clients = new Map();
+  const defaultIssuer = issuer || 'http://127.0.0.1:4190';
+  const defaultResource = canonicalResource || `${defaultIssuer}/mcp`;
 
   return {
-    getProtectedResourceMetadata(resource) {
-      const res = resource || issuer;
+    registerClient(options = {}) {
+      const clientName = options.client_name || options.clientName || 'ChatGPT MCP Client';
+      const redirectUris = options.redirect_uris || options.redirectUris || [];
+      const grantTypes = options.grant_types || options.grantTypes || ['authorization_code'];
+      const responseTypes = options.response_types || options.responseTypes || ['code'];
+      const tokenEndpointAuthMethod = options.token_endpoint_auth_method || options.tokenEndpointAuthMethod || 'none';
+      const scope = options.scope || 'bright:profile:write bright:profile:read';
+
+      if (!Array.isArray(redirectUris) || redirectUris.length === 0) {
+        throw new AppError('INVALID_REQUEST', 'redirect_uris must be a non-empty array of valid URLs', {status: 400});
+      }
+      for (const uri of redirectUris) {
+        try {
+          const parsed = new URL(uri);
+          if (!['https:', 'http:'].includes(parsed.protocol)) {
+            throw new Error('invalid protocol');
+          }
+        } catch {
+          throw new AppError('INVALID_REQUEST', `Invalid redirect URI: ${uri}`, {status: 400});
+        }
+      }
+
+      const clientId = `client_${randomUUID()}`;
+      const clientRecord = {
+        clientId,
+        clientName,
+        redirectUris: [...redirectUris],
+        grantTypes,
+        responseTypes,
+        tokenEndpointAuthMethod,
+        scope,
+        createdAt: nowMs(),
+      };
+      clients.set(clientId, clientRecord);
+
       return {
-        resource: res,
-        authorization_servers: [res],
-        scopes_supported: ['bright:profile:write', 'bright:profile:read'],
-        bearer_methods_supported: ['header'],
-        resource_documentation: `${res}/docs`,
+        client_id: clientId,
+        client_name: clientName,
+        redirect_uris: clientRecord.redirectUris,
+        grant_types: grantTypes,
+        response_types: responseTypes,
+        token_endpoint_auth_method: tokenEndpointAuthMethod,
       };
     },
 
-    getAuthorizationServerMetadata(resource) {
-      const iss = resource || issuer;
+    getClient(clientId) {
+      return clients.get(clientId) || null;
+    },
+
+    getProtectedResourceMetadata(mcpResourceUrl, issuerUrl) {
+      const res = mcpResourceUrl || defaultResource;
+      const iss = issuerUrl || defaultIssuer;
+      return {
+        resource: res,
+        authorization_servers: [iss],
+        scopes_supported: ['bright:profile:write', 'bright:profile:read'],
+        bearer_methods_supported: ['header'],
+        resource_documentation: `${iss}/docs`,
+      };
+    },
+
+    getAuthorizationServerMetadata(issuerUrl) {
+      const iss = issuerUrl || defaultIssuer;
       return {
         issuer: iss,
         authorization_endpoint: `${iss}/oauth/authorize`,
@@ -65,16 +119,32 @@ export function createOauthManager({
       };
     },
 
-    createAuthorizationCode({
-      clientId,
-      redirectUri,
-      scope = 'bright:profile:write bright:profile:read',
-      codeChallenge,
-      codeChallengeMethod = 'S256',
-      userId = 'chatgpt_user',
-    }) {
+    createAuthorizationCode(options = {}) {
+      const user = options.user;
+      if (!user || (!user.id && !user.sub)) {
+        throw new AppError('UNAUTHORIZED', 'User authentication and consent are required to authorize client', {status: 401});
+      }
+      const userId = user.id || user.sub;
+
+      const clientId = options.client_id || options.clientId;
+      const redirectUri = options.redirect_uri || options.redirectUri;
+      const scope = options.scope || 'bright:profile:write bright:profile:read';
+      const codeChallenge = options.code_challenge || options.codeChallenge;
+      const codeChallengeMethod = options.code_challenge_method || options.codeChallengeMethod || 'S256';
+      const resource = options.resource || defaultResource;
+
       if (!clientId) throw new AppError('INVALID_REQUEST', 'client_id is required', {status: 400});
       if (!redirectUri) throw new AppError('INVALID_REQUEST', 'redirect_uri is required', {status: 400});
+
+      const client = clients.get(clientId);
+      if (!client) {
+        throw new AppError('UNAUTHORIZED_CLIENT', `Client ${clientId} is not registered`, {status: 400});
+      }
+
+      if (!client.redirectUris.includes(redirectUri)) {
+        throw new AppError('INVALID_REQUEST', `redirect_uri ${redirectUri} is not registered for client ${clientId}`, {status: 400});
+      }
+
       if (!codeChallenge) throw new AppError('INVALID_REQUEST', 'code_challenge is required for PKCE', {status: 400});
       if (codeChallengeMethod !== 'S256') {
         throw new AppError('INVALID_REQUEST', 'code_challenge_method must be S256', {status: 400});
@@ -89,18 +159,26 @@ export function createOauthManager({
         scope,
         codeChallenge,
         codeChallengeMethod,
-        userId,
+        user: {
+          id: userId,
+          name: user.name || userId,
+          email: user.email || null,
+        },
+        issuer: options.issuer || defaultIssuer,
+        resource,
         expiresAt,
       });
       return code;
     },
 
-    exchangeCodeForToken({
-      code,
-      clientId,
-      redirectUri,
-      codeVerifier,
-    }) {
+    exchangeCodeForToken(options = {}) {
+      const code = options.code;
+      const clientId = options.client_id || options.clientId;
+      const redirectUri = options.redirect_uri || options.redirectUri;
+      const codeVerifier = options.code_verifier || options.codeVerifier;
+      const resource = options.resource;
+      const issuer = options.issuer;
+
       if (!code) throw new AppError('INVALID_REQUEST', 'code is required', {status: 400});
       if (!codeVerifier) throw new AppError('INVALID_REQUEST', 'code_verifier is required', {status: 400});
 
@@ -123,11 +201,14 @@ export function createOauthManager({
         throw new AppError('INVALID_GRANT', 'PKCE verification failed', {status: 400});
       }
 
+      const targetIssuer = issuer || entry.issuer || defaultIssuer;
+      const targetResource = resource || entry.resource || defaultResource;
       const exp = Math.floor((nowMs() / 1000) + tokenTtlSeconds);
       const payload = {
-        iss: issuer,
-        aud: issuer,
-        sub: entry.userId,
+        iss: targetIssuer,
+        aud: targetResource,
+        sub: entry.user.id,
+        user: entry.user,
         scope: entry.scope,
         exp,
         iat: Math.floor(nowMs() / 1000),
@@ -151,7 +232,11 @@ export function createOauthManager({
       };
     },
 
-    verifyAccessToken(token) {
+    verifyAccessToken(options = {}) {
+      const token = typeof options === 'string' ? options : options.token;
+      const expectedIssuer = options.expectedIssuer || options.expected_issuer;
+      const expectedAudience = options.expectedAudience || options.expected_audience;
+
       if (typeof token !== 'string' || !token) {
         throw new AppError('UNAUTHORIZED', 'Access token is required', {status: 401});
       }
@@ -180,7 +265,22 @@ export function createOauthManager({
         throw new AppError('UNAUTHORIZED', 'Access token has expired', {status: 401});
       }
 
-      return payload;
+      const iss = expectedIssuer || defaultIssuer;
+      if (payload.iss && payload.iss !== iss) {
+        throw new AppError('UNAUTHORIZED', `Token issuer mismatch: expected ${iss}, got ${payload.iss}`, {status: 401});
+      }
+
+      const aud = expectedAudience || defaultResource;
+      if (payload.aud && payload.aud !== aud && payload.aud !== iss) {
+        throw new AppError('UNAUTHORIZED', `Token audience mismatch: expected ${aud}, got ${payload.aud}`, {status: 401});
+      }
+
+      const rawScopes = typeof payload.scope === 'string' ? payload.scope.trim().split(/\s+/) : [];
+      return {
+        ...payload,
+        scopes: rawScopes,
+        userId: payload.sub,
+      };
     },
   };
 }

@@ -12,12 +12,14 @@ import {
   evidenceBundleSchema,
   evidenceInputSchema,
 } from '../lib/evidence/schema-validator.mjs';
+import {AppError} from '../domain/errors.mjs';
 import {
   compareTokensConstantTime,
   extractBearerToken,
   redactSecrets,
 } from '../security/integration-auth.mjs';
 import {createOauthManager} from '../security/oauth.mjs';
+import {issueDelegationGrant} from '../security/delegation-grant.mjs';
 
 import {
   createVideoProjectInputSchema,
@@ -118,6 +120,31 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
     return copy;
   };
 
+  const assertScope = (requiredScope) => {
+    const ctx = correlationContext.getStore();
+    const auth = ctx?.auth;
+    if (!auth) return;
+    if (auth.isStaticToken) return;
+    const scopes = auth.scopes || [];
+    if (requiredScope === 'bright:profile:read') {
+      if (!scopes.includes('bright:profile:read') && !scopes.includes('bright:profile:write')) {
+        throw new AppError(
+          'FORBIDDEN',
+          `Forbidden: token lacks required scope "bright:profile:read". Available scopes: ${scopes.join(', ') || 'none'}`,
+          {status: 403}
+        );
+      }
+      return;
+    }
+    if (!scopes.includes(requiredScope)) {
+      throw new AppError(
+        'FORBIDDEN',
+        `Forbidden: token lacks required scope "${requiredScope}". Available scopes: ${scopes.join(', ') || 'none'}`,
+        {status: 403}
+      );
+    }
+  };
+
   const server = new McpServer({name: 'bright-evidence', version: '1.0.0'});
   server.registerTool(
     'normalize_evidence',
@@ -130,12 +157,14 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
         readOnlyHint: true,
         destructiveHint: false,
         openWorldHint: false,
+        securitySchemes: [{type: 'oauth2', scopes: ['bright:profile:read']}],
       },
     },
     async (input) => {
       const started = Date.now();
       const correlationId = randomUUID();
       try {
+        assertScope('bright:profile:read');
         assertEvidenceEnvelope(input);
         const bundle = assertEvidenceBundle(normalizeEvidence(input));
         console.error(JSON.stringify(redactSecrets({
@@ -164,7 +193,7 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
             type: 'text',
             text: error?.code === 'EVIDENCE_INPUT_INVALID'
               ? 'Evidence input failed schema validation.'
-              : 'Evidence normalization failed.',
+              : error?.message || 'Evidence normalization failed.',
           }],
         };
       }
@@ -182,10 +211,12 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
         readOnlyHint: false,
         destructiveHint: false,
         openWorldHint: false,
+        securitySchemes: [{type: 'oauth2', scopes: ['bright:profile:write']}],
       },
     },
     async (input) => {
       try {
+        assertScope('bright:profile:write');
         assertEvidenceBundle(input.evidenceBundle);
         const res = await fetchWithCorrelation(`${backendUrl}/api/integrations/chatgpt/projects/import`, {
           method: 'POST',
@@ -230,10 +261,12 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
         readOnlyHint: true,
         destructiveHint: false,
         openWorldHint: false,
+        securitySchemes: [{type: 'oauth2', scopes: ['bright:profile:read']}],
       },
     },
     async (input) => {
       try {
+        assertScope('bright:profile:read');
         const res = await fetchWithCorrelation(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}`, {
           method: 'GET',
           headers: {
@@ -276,10 +309,12 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
         readOnlyHint: false,
         destructiveHint: false,
         openWorldHint: false,
+        securitySchemes: [{type: 'oauth2', scopes: ['bright:profile:write']}],
       },
     },
     async (input) => {
       try {
+        assertScope('bright:profile:write');
         const res = await fetchWithCorrelation(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/draft`, {
           method: 'POST',
           headers: {
@@ -328,22 +363,40 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
     },
     async (input) => {
       try {
-        if (input.mode === 'delegated_e2e' && !input.delegationGrant) {
+        assertScope('bright:profile:write');
+        const ctx = correlationContext.getStore();
+        const currentUserId = ctx?.auth?.userId;
+        let delegationGrant = input.delegationGrant;
+        if (!delegationGrant && input.mode === 'delegated_e2e' && currentUserId && serviceToken && serviceToken.length >= 16) {
+          delegationGrant = issueDelegationGrant({
+            projectId: input.projectId,
+            revisionId: input.revisionId,
+            payloadHash: input.expectedPayloadHash,
+            actor: currentUserId,
+            secret: serviceToken,
+            ttlSeconds: 900,
+          });
+        }
+        if (input.mode === 'delegated_e2e' && !delegationGrant) {
           return {
             isError: true,
             content: [{
               type: 'text',
-              text: 'Delegated approval blocked: valid user delegation grant is required for delegated_e2e mode.',
+              text: 'Delegated approval blocked: valid authenticated user session or delegation grant is required for delegated_e2e mode.',
             }],
           };
         }
+        const approveBody = {
+          ...input,
+          ...(delegationGrant ? {delegationGrant} : {}),
+        };
         const res = await fetchWithCorrelation(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/approve`, {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
             ...(serviceToken ? {authorization: `Bearer ${serviceToken}`} : {}),
           },
-          body: JSON.stringify(input),
+          body: JSON.stringify(approveBody),
         }, {toolName: 'approve_video_project', projectId: input.projectId});
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -380,10 +433,12 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
         readOnlyHint: false,
         destructiveHint: false,
         openWorldHint: false,
+        securitySchemes: [{type: 'oauth2', scopes: ['bright:profile:write']}],
       },
     },
     async (input) => {
       try {
+        assertScope('bright:profile:write');
         const res = await fetchWithCorrelation(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/render`, {
           method: 'POST',
           headers: {
@@ -426,10 +481,12 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
         readOnlyHint: false,
         destructiveHint: false,
         openWorldHint: false,
+        securitySchemes: [{type: 'oauth2', scopes: ['bright:profile:write']}],
       },
     },
     async (input) => {
       try {
+        assertScope('bright:profile:write');
         const res = await fetchWithCorrelation(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/retry`, {
           method: 'POST',
           headers: {
@@ -472,10 +529,12 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
         readOnlyHint: false,
         destructiveHint: true,
         openWorldHint: false,
+        securitySchemes: [{type: 'oauth2', scopes: ['bright:profile:write']}],
       },
     },
     async (input) => {
       try {
+        assertScope('bright:profile:write');
         const res = await fetchWithCorrelation(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/cancel`, {
           method: 'POST',
           headers: {
@@ -712,10 +771,21 @@ export function createBrightHttpServer({
   const serviceToken = env.BRIGHT_INTEGRATION_TOKEN?.trim() || '';
   const expectedAuthToken = String(env.MCP_AUTH_TOKEN || '').trim();
   const isAuthConfigured = Boolean(expectedAuthToken || serviceToken || env.MCP_OAUTH_SECRET);
-  const mcpPublicUrl = env.MCP_PUBLIC_URL || env.BRIGHT_PUBLIC_URL || `http://${env.MCP_HOST || '127.0.0.1'}:${env.MCP_PORT || DEFAULT_PORT}`;
+  const configuredPublicUrl = (env.MCP_PUBLIC_URL || env.BRIGHT_PUBLIC_URL || '').trim();
+  let defaultIssuer = `http://${env.MCP_HOST || '127.0.0.1'}:${env.MCP_PORT || DEFAULT_PORT}`;
+  let defaultCanonicalResource = `${defaultIssuer}/mcp`;
+  if (configuredPublicUrl) {
+    try {
+      const parsed = new URL(configuredPublicUrl);
+      defaultIssuer = parsed.origin;
+      defaultCanonicalResource = configuredPublicUrl;
+    } catch {}
+  }
+
   const oauthSecret = env.MCP_OAUTH_SECRET?.trim() || serviceToken || expectedAuthToken || 'default-oauth-secret-key-16-chars';
   const oauthManager = createOauthManager({
-    issuer: mcpPublicUrl,
+    issuer: defaultIssuer,
+    canonicalResource: defaultCanonicalResource,
     secret: oauthSecret,
   });
 
@@ -726,7 +796,7 @@ export function createBrightHttpServer({
       ? incomingCorr.trim().slice(0, 200)
       : requestId;
 
-    return correlationContext.run({correlationId, requestId}, async () => {
+    return correlationContext.run({correlationId, requestId, auth: null}, async () => {
       const started = Date.now();
       const deadlineAt = started + requestTimeoutMs;
       const host = hostnameFromHeader(req.headers.host);
@@ -763,22 +833,50 @@ export function createBrightHttpServer({
           return;
         }
 
-        const effectivePublicUrl = env.MCP_PUBLIC_URL || env.BRIGHT_PUBLIC_URL || `http://${req.headers.host || `${env.MCP_HOST || '127.0.0.1'}:${env.MCP_PORT || DEFAULT_PORT}`}`;
+        const requestIssuer = configuredPublicUrl ? new URL(configuredPublicUrl).origin : (req.headers.host ? `http://${req.headers.host}` : defaultIssuer);
+        const requestCanonicalResource = configuredPublicUrl || `${requestIssuer}/mcp`;
 
-        // RFC 9470 OAuth Protected Resource Metadata
-        if (url.pathname === '/.well-known/oauth-protected-resource' && req.method === 'GET') {
-          writeJsonBeforeBodyConsumed(req, res, 200, oauthManager.getProtectedResourceMetadata(effectivePublicUrl), requestId);
+        // RFC 9470 OAuth Protected Resource Metadata (both root and /mcp/ prefix)
+        if (['/.well-known/oauth-protected-resource', '/mcp/.well-known/oauth-protected-resource'].includes(url.pathname) && req.method === 'GET') {
+          writeJsonBeforeBodyConsumed(req, res, 200, oauthManager.getProtectedResourceMetadata(requestCanonicalResource, requestIssuer), requestId);
           return;
         }
 
-        // RFC 8414 OAuth Authorization Server Metadata & OpenID Configuration
-        if (['/.well-known/oauth-authorization-server', '/.well-known/openid-configuration'].includes(url.pathname) && req.method === 'GET') {
-          writeJsonBeforeBodyConsumed(req, res, 200, oauthManager.getAuthorizationServerMetadata(effectivePublicUrl), requestId);
+        // RFC 8414 OAuth Authorization Server Metadata & OpenID Configuration (both root and /mcp/ prefix)
+        if (['/.well-known/oauth-authorization-server', '/.well-known/openid-configuration', '/mcp/.well-known/oauth-authorization-server', '/mcp/.well-known/openid-configuration'].includes(url.pathname) && req.method === 'GET') {
+          writeJsonBeforeBodyConsumed(req, res, 200, oauthManager.getAuthorizationServerMetadata(requestIssuer), requestId);
           return;
         }
 
-        // OAuth 2.1 Authorize endpoint
-        if (url.pathname === '/oauth/authorize' && req.method === 'GET') {
+        // RFC 7591 Dynamic Client Registration (both root and /mcp/ prefix)
+        if (['/oauth/register', '/mcp/oauth/register'].includes(url.pathname) && req.method === 'POST') {
+          const rawBody = await readBody(req, maxBodyBytes, deadlineAt);
+          let parsed = {};
+          try {
+            parsed = JSON.parse(rawBody.toString('utf8'));
+          } catch {
+            writeJsonBeforeBodyConsumed(req, res, 400, {
+              error: {code: 'INVALID_REQUEST', message: 'Invalid registration JSON body', requestId},
+            }, requestId);
+            return;
+          }
+          try {
+            const regResponse = oauthManager.registerClient(parsed);
+            res.statusCode = 201;
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+            res.setHeader('x-request-id', requestId);
+            res.end(JSON.stringify(regResponse));
+            return;
+          } catch (err) {
+            writeJsonBeforeBodyConsumed(req, res, err.status || 400, {
+              error: {code: err.code || 'INVALID_REQUEST', message: err.message, requestId},
+            }, requestId);
+            return;
+          }
+        }
+
+        // OAuth 2.1 Authorize endpoint (both root and /mcp/ prefix)
+        if (['/oauth/authorize', '/mcp/oauth/authorize'].includes(url.pathname) && req.method === 'GET') {
           const responseType = url.searchParams.get('response_type');
           const clientId = url.searchParams.get('client_id');
           const redirectUri = url.searchParams.get('redirect_uri');
@@ -786,10 +884,42 @@ export function createBrightHttpServer({
           const state = url.searchParams.get('state');
           const codeChallenge = url.searchParams.get('code_challenge');
           const codeChallengeMethod = url.searchParams.get('code_challenge_method') || 'S256';
+          const resource = url.searchParams.get('resource') || requestCanonicalResource;
 
           if (responseType !== 'code') {
             writeJsonBeforeBodyConsumed(req, res, 400, {
               error: {code: 'UNSUPPORTED_RESPONSE_TYPE', message: 'response_type must be code', requestId},
+            }, requestId);
+            return;
+          }
+
+          const client = oauthManager.getClient(clientId);
+          if (!client) {
+            writeJsonBeforeBodyConsumed(req, res, 400, {
+              error: {code: 'UNAUTHORIZED_CLIENT', message: `Client ${clientId} is not registered`, requestId},
+            }, requestId);
+            return;
+          }
+
+          if (!client.redirectUris.includes(redirectUri)) {
+            writeJsonBeforeBodyConsumed(req, res, 400, {
+              error: {code: 'INVALID_REQUEST', message: `redirect_uri is not registered for client ${clientId}`, requestId},
+            }, requestId);
+            return;
+          }
+
+          // User authentication & consent boundary check
+          const authenticatedUserId = req.headers['x-user-id'] || url.searchParams.get('user_id') || (extractBearerToken(req.headers.authorization) ? 'chatgpt_user' : null);
+
+          if (!authenticatedUserId) {
+            res.setHeader('WWW-Authenticate', `Bearer realm="bright-auth", error="login_required", resource="${requestCanonicalResource}"`);
+            writeJsonBeforeBodyConsumed(req, res, 401, {
+              error: {
+                code: 'UNAUTHORIZED',
+                message: 'User authentication and consent are required to authorize client',
+                consent_endpoint: `${requestIssuer}/oauth/authorize/consent`,
+                requestId,
+              },
             }, requestId);
             return;
           }
@@ -801,7 +931,9 @@ export function createBrightHttpServer({
               scope,
               codeChallenge,
               codeChallengeMethod,
-              userId: 'chatgpt_user',
+              user: {id: String(authenticatedUserId)},
+              issuer: requestIssuer,
+              resource,
             });
 
             if (redirectUri) {
@@ -825,8 +957,61 @@ export function createBrightHttpServer({
           }
         }
 
-        // OAuth 2.1 Token endpoint
-        if (url.pathname === '/oauth/token' && req.method === 'POST') {
+        // OAuth 2.1 Consent confirmation endpoint (both root and /mcp/ prefix)
+        if (['/oauth/authorize/consent', '/mcp/oauth/authorize/consent'].includes(url.pathname) && req.method === 'POST') {
+          const rawBody = await readBody(req, maxBodyBytes, deadlineAt);
+          let parsed = {};
+          const contentType = req.headers['content-type'] || '';
+          if (contentType.includes('application/x-www-form-urlencoded')) {
+            const params = new URLSearchParams(rawBody.toString('utf8'));
+            for (const [k, v] of params.entries()) parsed[k] = v;
+          } else {
+            try {
+              parsed = JSON.parse(rawBody.toString('utf8'));
+            } catch {
+              writeJsonBeforeBodyConsumed(req, res, 400, {
+                error: {code: 'INVALID_REQUEST', message: 'Invalid consent JSON body', requestId},
+              }, requestId);
+              return;
+            }
+          }
+
+          const userId = parsed.user_id || req.headers['x-user-id'] || 'chatgpt_user';
+          try {
+            const code = oauthManager.createAuthorizationCode({
+              clientId: parsed.client_id,
+              redirectUri: parsed.redirect_uri,
+              scope: parsed.scope || 'bright:profile:write bright:profile:read',
+              codeChallenge: parsed.code_challenge,
+              codeChallengeMethod: parsed.code_challenge_method || 'S256',
+              user: {id: String(userId), email: parsed.user_email || null},
+              issuer: requestIssuer,
+              resource: parsed.resource || requestCanonicalResource,
+            });
+
+            const redirectUrl = new URL(parsed.redirect_uri);
+            redirectUrl.searchParams.set('code', code);
+            if (parsed.state) redirectUrl.searchParams.set('state', parsed.state);
+
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+            res.setHeader('x-request-id', requestId);
+            res.end(JSON.stringify({
+              code,
+              state: parsed.state || null,
+              redirect_url: redirectUrl.toString(),
+            }));
+            return;
+          } catch (err) {
+            writeJsonBeforeBodyConsumed(req, res, err.status || 400, {
+              error: {code: err.code || 'INVALID_REQUEST', message: err.message, requestId},
+            }, requestId);
+            return;
+          }
+        }
+
+        // OAuth 2.1 Token endpoint (both root and /mcp/ prefix)
+        if (['/oauth/token', '/mcp/oauth/token'].includes(url.pathname) && req.method === 'POST') {
           const rawBody = await readBody(req, maxBodyBytes, deadlineAt);
           let parsedBody = {};
           const contentType = req.headers['content-type'] || '';
@@ -857,6 +1042,8 @@ export function createBrightHttpServer({
               clientId: parsedBody.client_id,
               redirectUri: parsedBody.redirect_uri,
               codeVerifier: parsedBody.code_verifier,
+              issuer: requestIssuer,
+              resource: parsedBody.resource || requestCanonicalResource,
             });
             res.statusCode = 200;
             res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -871,23 +1058,6 @@ export function createBrightHttpServer({
             }, requestId);
             return;
           }
-        }
-
-        // RFC 7591 Dynamic Client Registration
-        if (url.pathname === '/oauth/register' && req.method === 'POST') {
-          const clientId = `client_${randomUUID()}`;
-          res.statusCode = 201;
-          res.setHeader('Content-Type', 'application/json; charset=utf-8');
-          res.setHeader('x-request-id', requestId);
-          res.end(JSON.stringify({
-            client_id: clientId,
-            client_name: 'ChatGPT MCP Client',
-            redirect_uris: ['https://chatgpt.com/aip/oauth/callback', 'https://chat.openai.com/aip/oauth/callback'],
-            grant_types: ['authorization_code'],
-            response_types: ['code'],
-            token_endpoint_auth_method: 'none',
-          }));
-          return;
         }
 
         // Download proxy route (authenticated strictly by signed HMAC capability token in query)
@@ -978,7 +1148,7 @@ export function createBrightHttpServer({
 
         const token = extractBearerToken(req.headers.authorization);
         if (!token) {
-          res.setHeader('WWW-Authenticate', `Bearer realm="bright-mcp", error="invalid_token", error_description="Bearer token is required", resource="${mcpPublicUrl}"`);
+          res.setHeader('WWW-Authenticate', `Bearer realm="bright-mcp", error="invalid_token", error_description="Bearer token is required", resource="${requestCanonicalResource}"`);
           writeJsonBeforeBodyConsumed(req, res, 401, {
             error: {
               code: 'UNAUTHORIZED',
@@ -989,17 +1159,30 @@ export function createBrightHttpServer({
           return;
         }
 
-        let verifiedUser = null;
+        let verifiedAuth = null;
         try {
-          verifiedUser = oauthManager.verifyAccessToken(token);
+          const verified = oauthManager.verifyAccessToken({
+            token,
+            expectedIssuer: requestIssuer,
+            expectedAudience: requestCanonicalResource,
+          });
+          verifiedAuth = {
+            userId: verified.userId,
+            scopes: verified.scopes,
+            isStaticToken: false,
+          };
         } catch {
           if (expectedAuthToken && compareTokensConstantTime(token, expectedAuthToken)) {
-            verifiedUser = {sub: 'chatgpt_user', scope: 'bright:profile:write'};
+            verifiedAuth = {
+              userId: 'service_operator',
+              scopes: ['bright:profile:write', 'bright:profile:read'],
+              isStaticToken: true,
+            };
           }
         }
 
-        if (!verifiedUser) {
-          res.setHeader('WWW-Authenticate', `Bearer realm="bright-mcp", error="invalid_token", error_description="Access token is invalid or expired", resource="${mcpPublicUrl}"`);
+        if (!verifiedAuth) {
+          res.setHeader('WWW-Authenticate', `Bearer realm="bright-mcp", error="invalid_token", error_description="Access token is invalid, expired, or wrong audience/issuer", resource="${requestCanonicalResource}"`);
           writeJsonBeforeBodyConsumed(req, res, 401, {
             error: {
               code: 'UNAUTHORIZED',
@@ -1009,6 +1192,9 @@ export function createBrightHttpServer({
           }, requestId);
           return;
         }
+
+        // Set verified auth in AsyncLocalStorage
+        correlationContext.getStore().auth = verifiedAuth;
 
         let body;
         if (!['GET', 'HEAD'].includes(method)) body = await readBody(req, maxBodyBytes, deadlineAt);
