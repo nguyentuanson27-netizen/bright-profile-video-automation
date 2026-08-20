@@ -1,5 +1,6 @@
 import Ajv2020 from 'ajv/dist/2020.js';
 import {AppError, ErrorCodes, invalidDomainData} from './errors.mjs';
+import {assertEvidenceBundle} from '../lib/evidence/schema-validator.mjs';
 
 const sourceIds = {
   type: 'array',
@@ -210,4 +211,141 @@ export const validateApprovedRevision = (revision, options = {}) => {
   assertShape(validateApprovedShape, revision, 'approved revision');
   validateDraft(revision.payload, options);
   return revision;
+};
+
+export const APPROVAL_MODES = Object.freeze({
+  USER_REVIEWED: 'user_reviewed',
+  DELEGATED_E2E: 'delegated_e2e',
+});
+
+export const PROJECT_ORIGINS = Object.freeze({
+  STANDALONE: 'standalone',
+  CHATGPT_MCP: 'chatgpt_mcp',
+});
+
+export const importProjectInputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['creator', 'topic', 'evidenceBundle', 'idempotencyKey'],
+  properties: {
+    creator: {type: 'string', minLength: 1, maxLength: 200},
+    topic: {type: 'string', minLength: 1, maxLength: 500},
+    instructions: {type: 'string', maxLength: 2000},
+    evidenceBundle: {type: 'object'},
+    idempotencyKey: {type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_.:-]+$'},
+  },
+};
+
+export const approveProjectInputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['projectId', 'revisionId', 'expectedPayloadHash', 'mode'],
+  properties: {
+    projectId: {type: 'string', minLength: 1, maxLength: 200},
+    revisionId: {type: 'string', minLength: 1, maxLength: 200},
+    expectedPayloadHash: {type: 'string', pattern: '^[a-f0-9]{64}$'},
+    mode: {enum: [APPROVAL_MODES.USER_REVIEWED, APPROVAL_MODES.DELEGATED_E2E]},
+    delegatedContext: {type: 'object'},
+  },
+};
+
+export const editDraftInputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['projectId', 'revisionId', 'expectedPayloadHash', 'draft'],
+  properties: {
+    projectId: {type: 'string', minLength: 1, maxLength: 200},
+    revisionId: {type: 'string', minLength: 1, maxLength: 200},
+    expectedPayloadHash: {type: 'string', pattern: '^[a-f0-9]{64}$'},
+    draft: {type: 'object'},
+  },
+};
+
+export const projectStatusOutputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['projectId', 'status'],
+  properties: {
+    projectId: {type: 'string', minLength: 1, maxLength: 200},
+    status: {type: 'string', minLength: 1, maxLength: 100},
+    origin: {type: 'string', maxLength: 50},
+    currentRevision: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'payloadHash'],
+      properties: {
+        id: {type: 'string', minLength: 1, maxLength: 200},
+        payloadHash: {type: 'string', pattern: '^[a-f0-9]{64}$'},
+        draft: {type: 'object'},
+      },
+    },
+    progress: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        currentStage: {type: 'string'},
+        stageStatus: {type: 'string'},
+        attemptCount: {type: 'integer', minimum: 0},
+        failureRetryable: {type: 'boolean'},
+        failureCode: {type: 'string'},
+      },
+    },
+    evidenceSummary: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        inputItems: {type: 'integer', minimum: 0},
+        retainedEvidence: {type: 'integer', minimum: 0},
+        conflictGroups: {type: 'integer', minimum: 0},
+        rejectedItems: {type: 'integer', minimum: 0},
+      },
+    },
+    output: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        artifactId: {type: 'string'},
+        downloadUrl: {type: 'string'},
+        sizeBytes: {type: 'integer', minimum: 0},
+        sha256: {type: 'string'},
+      },
+    },
+  },
+};
+
+const validateImportProjectShape = ajv.compile(importProjectInputSchema);
+const validateApproveProjectShape = ajv.compile(approveProjectInputSchema);
+const validateEditDraftShape = ajv.compile(editDraftInputSchema);
+const validateProjectStatusOutputShape = ajv.compile(projectStatusOutputSchema);
+
+export const validateImportProjectInput = (input) => {
+  assertShape(validateImportProjectShape, input, 'import project input');
+  try {
+    assertEvidenceBundle(input.evidenceBundle);
+  } catch (error) {
+    throw invalidDomainData('Invalid evidenceBundle in import project input', error?.details);
+  }
+  return input;
+};
+
+export const validateApproveProjectInput = (input) => {
+  assertShape(validateApproveProjectShape, input, 'approve project input');
+  if (input.mode === APPROVAL_MODES.DELEGATED_E2E && input.delegatedContext) {
+    const serialized = JSON.stringify(input.delegatedContext);
+    if (serialized && serialized.length > 10000) {
+      throw invalidDomainData('delegatedContext exceeds maximum allowed size of 10000 bytes');
+    }
+  }
+  return input;
+};
+
+export const validateEditDraftInput = (input, options = {}) => {
+  assertShape(validateEditDraftShape, input, 'edit draft input');
+  validateDraft(input.draft, options);
+  return input;
+};
+
+export const validateProjectStatusOutput = (output) => {
+  assertShape(validateProjectStatusOutputShape, output, 'project status output');
+  return output;
 };
