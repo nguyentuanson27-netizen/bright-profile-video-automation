@@ -1,3 +1,4 @@
+import {AsyncLocalStorage} from 'node:async_hooks';
 import {randomUUID} from 'node:crypto';
 import {createServer} from 'node:http';
 import {Readable} from 'node:stream';
@@ -15,6 +16,7 @@ import {
   extractBearerToken,
   redactSecrets,
 } from '../security/integration-auth.mjs';
+import {issueDelegationGrant} from '../security/delegation-grant.mjs';
 
 import {
   createVideoProjectInputSchema,
@@ -26,6 +28,8 @@ import {
   cancelVideoProjectInputSchema,
   videoProjectStatusOutputSchema,
 } from './schemas/tool-schemas.mjs';
+
+const correlationContext = new AsyncLocalStorage();
 
 const DEFAULT_PORT = 4190;
 const DEFAULT_MAX_BODY_BYTES = 2 * 1024 * 1024;
@@ -57,11 +61,13 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
 
   const fetchWithCorrelation = async (endpoint, options = {}, { toolName, projectId, idempotencyKey } = {}) => {
     const started = Date.now();
-    const correlationId = randomUUID();
+    const store = correlationContext.getStore();
+    const correlationId = store?.correlationId || randomUUID();
+    const requestId = store?.requestId || correlationId;
     const headers = {
       ...options.headers,
       'x-correlation-id': correlationId,
-      'x-request-id': correlationId,
+      'x-request-id': requestId,
     };
     try {
       const res = await fetchFn(endpoint, {...options, headers});
@@ -320,13 +326,28 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
     },
     async (input) => {
       try {
+        let delegationGrant = input.delegationGrant;
+        if (!delegationGrant && input.mode === 'delegated_e2e' && input.delegatedContext?.userExplicitIntent && serviceToken && serviceToken.length >= 16) {
+          delegationGrant = issueDelegationGrant({
+            projectId: input.projectId,
+            revisionId: input.revisionId,
+            payloadHash: input.expectedPayloadHash,
+            actor: 'chatgpt_mcp',
+            secret: serviceToken,
+            ttlSeconds: 900,
+          });
+        }
+        const approveBody = {
+          ...input,
+          ...(delegationGrant ? {delegationGrant} : {}),
+        };
         const res = await fetchWithCorrelation(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/approve`, {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
             ...(serviceToken ? {authorization: `Bearer ${serviceToken}`} : {}),
           },
-          body: JSON.stringify(input),
+          body: JSON.stringify(approveBody),
         }, {toolName: 'approve_video_project', projectId: input.projectId});
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -692,90 +713,97 @@ export function createBrightHttpServer({
   const requestTimeoutMs = positiveTimerDelayOrDefault(env.MCP_REQUEST_TIMEOUT_MS, DEFAULT_REQUEST_TIMEOUT_MS);
   const allowRequest = makeRateLimiter({limit: rateLimit});
 
-  return createServer(async (req, res) => {
+  return createServer((req, res) => {
     const requestId = randomUUID();
     const incomingCorr = req.headers['x-correlation-id'] || req.headers['x-request-id'];
     const correlationId = typeof incomingCorr === 'string' && incomingCorr.trim()
       ? incomingCorr.trim().slice(0, 200)
       : requestId;
-    const started = Date.now();
-    const deadlineAt = started + requestTimeoutMs;
-    const host = hostnameFromHeader(req.headers.host);
-    const remote = req.socket.remoteAddress || 'unknown';
-    const method = req.method || 'GET';
-    let requestPath = '/';
-    try {
+
+    return correlationContext.run({correlationId, requestId}, async () => {
+      const started = Date.now();
+      const deadlineAt = started + requestTimeoutMs;
+      const host = hostnameFromHeader(req.headers.host);
+      const remote = req.socket.remoteAddress || 'unknown';
+      const method = req.method || 'GET';
+      let requestPath = '/';
       try {
-        requestPath = new URL(req.url || '/', 'http://localhost').pathname;
-      } catch {
-        requestPath = '/';
-      }
+        try {
+          requestPath = new URL(req.url || '/', 'http://localhost').pathname;
+        } catch {
+          requestPath = '/';
+        }
 
-      if (!allowedHosts.has(host)) {
-        writeJsonBeforeBodyConsumed(req, res, 403, {error: {code: 'HOST_NOT_ALLOWED', message: 'Host is not allowed', requestId}}, requestId);
-        return;
-      }
-      if (!isAllowedOrigin(req.headers.origin, allowedHosts)) {
-        writeJsonBeforeBodyConsumed(req, res, 403, {error: {code: 'ORIGIN_NOT_ALLOWED', message: 'Origin is not allowed', requestId}}, requestId);
-        return;
-      }
-
-      const base = `http://${req.headers.host}`;
-      const url = new URL(req.url || '/', base);
-      requestPath = url.pathname;
-      if (url.pathname === '/health' && req.method === 'GET') {
-        writeJsonBeforeBodyConsumed(req, res, 200, {ok: true}, requestId);
-        return;
-      }
-
-      // Download proxy route (authenticated by signed HMAC capability token in query)
-      if (['GET', 'HEAD'].includes(method) &&
-          (url.pathname.startsWith('/artifacts/') || url.pathname.startsWith('/api/integrations/chatgpt/artifacts/')) &&
-          url.pathname.endsWith('/download')) {
-        const segments = url.pathname.split('/');
-        const artifactId = segments[segments.length - 2];
-        const token = url.searchParams.get('token') || '';
-        if (!artifactId) {
-          writeJsonBeforeBodyConsumed(req, res, 400, {
-            error: {code: 'INVALID_REQUEST', message: 'Missing artifactId', requestId},
-          }, requestId);
+        if (!allowedHosts.has(host)) {
+          writeJsonBeforeBodyConsumed(req, res, 403, {error: {code: 'HOST_NOT_ALLOWED', message: 'Host is not allowed', requestId}}, requestId);
+          return;
+        }
+        if (!isAllowedOrigin(req.headers.origin, allowedHosts)) {
+          writeJsonBeforeBodyConsumed(req, res, 403, {error: {code: 'ORIGIN_NOT_ALLOWED', message: 'Origin is not allowed', requestId}}, requestId);
           return;
         }
 
-        const backendUrl = env.BRIGHT_BACKEND_URL?.trim() || 'http://127.0.0.1:4180';
-        const serviceToken = env.BRIGHT_INTEGRATION_TOKEN?.trim() || '';
-        const backendEndpoint = `${backendUrl}/api/integrations/chatgpt/artifacts/${encodeURIComponent(artifactId)}/download?token=${encodeURIComponent(token)}`;
-
-        const headers = {
-          accept: '*/*',
-          ...(serviceToken ? {authorization: `Bearer ${serviceToken}`} : {}),
-          'x-correlation-id': correlationId,
-          'x-request-id': requestId,
-        };
-
-        const backendRes = await fetch(backendEndpoint, {method, headers});
-        res.statusCode = backendRes.status;
-        for (const [key, value] of backendRes.headers.entries()) {
-          if (['content-type', 'content-length', 'content-disposition', 'etag', 'last-modified'].includes(key.toLowerCase())) {
-            res.setHeader(key, value);
-          }
+        const base = `http://${req.headers.host}`;
+        const url = new URL(req.url || '/', base);
+        requestPath = url.pathname;
+        if (url.pathname === '/health' && req.method === 'GET') {
+          writeJsonBeforeBodyConsumed(req, res, 200, {ok: true}, requestId);
+          return;
         }
-        res.setHeader('x-request-id', requestId);
 
-        if (method === 'HEAD' || !backendRes.body) {
+        // Download proxy route (authenticated strictly by signed HMAC capability token in query)
+        if (['GET', 'HEAD'].includes(method) &&
+            (url.pathname.startsWith('/artifacts/') || url.pathname.startsWith('/api/integrations/chatgpt/artifacts/')) &&
+            url.pathname.endsWith('/download')) {
+          const segments = url.pathname.split('/');
+          const artifactId = segments[segments.length - 2];
+          const token = (url.searchParams.get('token') || '').trim();
+          if (!artifactId) {
+            writeJsonBeforeBodyConsumed(req, res, 400, {
+              error: {code: 'INVALID_REQUEST', message: 'Missing artifactId', requestId},
+            }, requestId);
+            return;
+          }
+
+          if (!token) {
+            writeJsonBeforeBodyConsumed(req, res, 401, {
+              error: {code: 'DOWNLOAD_TOKEN_REQUIRED', message: 'Signed download token is required', requestId},
+            }, requestId);
+            return;
+          }
+
+          const backendUrl = env.BRIGHT_BACKEND_URL?.trim() || 'http://127.0.0.1:4180';
+          const backendEndpoint = `${backendUrl}/api/integrations/chatgpt/artifacts/${encodeURIComponent(artifactId)}/download?token=${encodeURIComponent(token)}`;
+
+          const headers = {
+            accept: '*/*',
+            'x-correlation-id': correlationId,
+            'x-request-id': requestId,
+          };
+
+          const backendRes = await fetch(backendEndpoint, {method, headers});
+          res.statusCode = backendRes.status;
+          for (const [key, value] of backendRes.headers.entries()) {
+            if (['content-type', 'content-length', 'content-disposition', 'etag', 'last-modified'].includes(key.toLowerCase())) {
+              res.setHeader(key, value);
+            }
+          }
+          res.setHeader('x-request-id', requestId);
+
+          if (method === 'HEAD' || !backendRes.body) {
+            res.end();
+            return;
+          }
+
+          const reader = backendRes.body.getReader();
+          while (true) {
+            const {done, value} = await reader.read();
+            if (done) break;
+            res.write(value);
+          }
           res.end();
           return;
         }
-
-        const reader = backendRes.body.getReader();
-        while (true) {
-          const {done, value} = await reader.read();
-          if (done) break;
-          res.write(value);
-        }
-        res.end();
-        return;
-      }
 
       if (!allowRequest(remote)) {
         writeJsonBeforeBodyConsumed(req, res, 429, {error: {code: 'RATE_LIMITED', message: 'Too many requests', requestId}}, requestId);
@@ -855,6 +883,7 @@ export function createBrightHttpServer({
     } finally {
       log(redactSecrets({event: 'mcp.request', requestId, correlationId, method: req.method, path: requestPath, status: res.statusCode, durationMs: Date.now() - started}));
     }
+  });
   });
 }
 

@@ -256,6 +256,17 @@ test('POST /api/integrations/chatgpt/projects/:projectId/approve enforces delega
   });
   assert.equal(blockedGrantRes.status, 404);
 
+  // Prove loopback delegation-grant endpoint fails closed on missing/empty actor
+  const invalidGrantRes = await request({
+    port,
+    path: `/api/projects/${projectId}/delegation-grant`,
+    method: 'POST',
+    headers: {host: '127.0.0.1', origin: 'http://127.0.0.1'},
+    body: {},
+  });
+  assert.equal(invalidGrantRes.status, 400);
+  assert.equal(invalidGrantRes.json?.error?.code, 'INVALID_REQUEST');
+
   // User acquires delegation grant via loopback UI endpoint
   const grantRes = await request({
     port,
@@ -286,6 +297,7 @@ test('POST /api/integrations/chatgpt/projects/:projectId/approve enforces delega
 
   assert.equal(approveRes.status, 200);
   assert.equal(approveRes.json?.revision?.approvalMode, APPROVAL_MODES.DELEGATED_E2E);
+  assert.equal(approveRes.json?.revision?.approvalActor, 'user_operator');
 });
 
 test('POST /api/integrations/chatgpt/projects/:projectId/approve blocks delegated_e2e when claims are unverified', async (t) => {

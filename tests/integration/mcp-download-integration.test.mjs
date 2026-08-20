@@ -312,7 +312,61 @@ test('Public MCP Server streams authoritative MP4 through /artifacts/:artifactId
     ttlSeconds: 600,
   });
 
-  // Request to public MCP port without Bearer token (using signed token in query)
+  // 1. Request with missing token fails with 401 DOWNLOAD_TOKEN_REQUIRED
+  const missingTokenRes = await request({
+    port: mcpPort,
+    path: '/artifacts/art-mcp-down-1/download',
+  });
+  assert.equal(missingTokenRes.status, 401);
+  assert.equal(missingTokenRes.json?.error?.code, 'DOWNLOAD_TOKEN_REQUIRED');
+
+  // 2. Request with empty token fails with 401 DOWNLOAD_TOKEN_REQUIRED
+  const emptyTokenRes = await request({
+    port: mcpPort,
+    path: '/artifacts/art-mcp-down-1/download?token=',
+  });
+  assert.equal(emptyTokenRes.status, 401);
+  assert.equal(emptyTokenRes.json?.error?.code, 'DOWNLOAD_TOKEN_REQUIRED');
+
+  // 3. Request with tampered/invalid token fails with 401 DOWNLOAD_TOKEN_INVALID
+  const tamperedTokenRes = await request({
+    port: mcpPort,
+    path: '/artifacts/art-mcp-down-1/download?token=invalid.tampered.token',
+  });
+  assert.equal(tamperedTokenRes.status, 401);
+  assert.equal(tamperedTokenRes.json?.error?.code, 'DOWNLOAD_TOKEN_INVALID');
+
+  // 4. Request with expired token fails with 401 DOWNLOAD_TOKEN_EXPIRED
+  const expiredToken = generateDownloadToken({
+    projectId: 'proj-mcp-down-1',
+    revisionId: 'rev-mcp-down-1',
+    artifactId: 'art-mcp-down-1',
+    secret: serviceToken,
+    ttlSeconds: -10,
+  });
+  const expiredRes = await request({
+    port: mcpPort,
+    path: `/artifacts/art-mcp-down-1/download?token=${encodeURIComponent(expiredToken)}`,
+  });
+  assert.equal(expiredRes.status, 401);
+  assert.equal(expiredRes.json?.error?.code, 'DOWNLOAD_TOKEN_EXPIRED');
+
+  // 5. Request with token bound to wrong artifact fails with 401 DOWNLOAD_TOKEN_INVALID
+  const wrongArtToken = generateDownloadToken({
+    projectId: 'proj-mcp-down-1',
+    revisionId: 'rev-mcp-down-1',
+    artifactId: 'art-wrong-999',
+    secret: serviceToken,
+    ttlSeconds: 600,
+  });
+  const wrongArtRes = await request({
+    port: mcpPort,
+    path: `/artifacts/art-mcp-down-1/download?token=${encodeURIComponent(wrongArtToken)}`,
+  });
+  assert.equal(wrongArtRes.status, 401);
+  assert.equal(wrongArtRes.json?.error?.code, 'DOWNLOAD_TOKEN_INVALID');
+
+  // 6. Request to public MCP port without Bearer token with valid signed token in query -> succeeds
   const proxyRes = await request({
     port: mcpPort,
     path: `/artifacts/art-mcp-down-1/download?token=${encodeURIComponent(queryToken)}`,

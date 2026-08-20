@@ -1,8 +1,8 @@
 # Bright Profile — Current Project Status
 
 **Status date:** 2026-08-20  
-**Authoritative scope:** completed standalone internal MVP baseline plus the completed implementation and verification of the ChatGPT MCP end-to-end video handoff milestone (Tasks T17-T28).  
-**Lifecycle:** standalone T01-T16 repository promotion complete; ChatGPT MCP E2E milestone (T17-T28) implementation and verification completed and green.
+**Authoritative scope:** completed standalone internal MVP baseline (T01-T16) plus completed automated implementation and verification of the ChatGPT MCP end-to-end video handoff milestone (Tasks T17-T27), with T28 live ChatGPT client acceptance staged for live deployment.  
+**Lifecycle:** standalone T01-T16 repository promotion complete; ChatGPT MCP E2E milestone (T17-T27) automated implementation and verification complete and green; T28 live ChatGPT client acceptance pending live deployment.
 
 ## Current objective
 
@@ -37,9 +37,9 @@ create
   -> download
 ```
 
-## Completed milestone: ChatGPT MCP end-to-end video handoff
+## Milestone state: ChatGPT MCP end-to-end video handoff
 
-The milestone specified in `docs/specs/chatgpt-mcp-e2e-video-handoff.md` and planned as T17-T28 in `tasks/plan.md` / `tasks/todo.md` is fully implemented and verified.
+The milestone specified in `docs/specs/chatgpt-mcp-e2e-video-handoff.md` and planned as T17-T28 in `tasks/plan.md` / `tasks/todo.md` has completed automated implementation and verification (T17-T27), with live ChatGPT client acceptance (T28) staged for live deployment.
 
 Target default ChatGPT flow:
 

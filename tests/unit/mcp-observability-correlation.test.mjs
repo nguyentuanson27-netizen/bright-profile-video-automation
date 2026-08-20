@@ -148,17 +148,23 @@ test('Observability: MCP request ID and correlation ID propagate across hops wit
     const projectId = createRes.body.result.structuredContent.projectId;
     assert.ok(projectId);
 
-    // Verify captured logs
+    // Verify captured logs across all 3 hops
+    const mcpReqLogs = capturedLogs.filter((l) => l.event === 'mcp.request' && l.path === '/mcp');
     const mcpToolLogs = capturedLogs.filter((l) => l.event === 'mcp.tool_call' && l.tool === 'create_video_project');
     const integrationReqLogs = capturedLogs.filter((l) => l.event === 'integration.request');
 
+    assert.ok(mcpReqLogs.length >= 1, 'Should log mcp.request event');
     assert.ok(mcpToolLogs.length >= 1, 'Should log mcp.tool_call event');
     assert.ok(integrationReqLogs.length >= 1, 'Should log integration.request event');
 
+    const reqLog = mcpReqLogs.find((l) => l.correlationId === clientCorrelationId);
+    assert.ok(reqLog, 'mcp.request should record client correlationId');
     const toolLog = mcpToolLogs[0];
     const intLog = integrationReqLogs[0];
 
-    assert.equal(toolLog.correlationId, intLog.correlationId, 'correlationId must match across MCP and backend');
+    assert.equal(toolLog.correlationId, clientCorrelationId, 'mcp.tool_call correlationId must equal incoming clientCorrelationId');
+    assert.equal(intLog.correlationId, clientCorrelationId, 'integration.request correlationId must equal incoming clientCorrelationId');
+    assert.equal(reqLog.correlationId, clientCorrelationId, 'mcp.request correlationId must equal incoming clientCorrelationId');
     assert.equal(toolLog.idempotencyKey, '[REDACTED]');
     assert.equal(intLog.path, '/api/integrations/chatgpt/projects/import');
 

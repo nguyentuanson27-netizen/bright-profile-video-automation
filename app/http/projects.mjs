@@ -194,7 +194,10 @@ export const createProjectsApi = ({
       return {changed: result.changed, project: requireProject(id), stage: result.stage};
     },
 
-    createDelegationGrant(id, body = {}) {
+    createDelegationGrant(id, body) {
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        throw invalidRequest('JSON object body is required');
+      }
       const project = requireProject(id);
       if (project.status !== 'review_required' || !project.currentRevisionId) {
         throw new AppError(
@@ -206,8 +209,11 @@ export const createProjectsApi = ({
       const revision = repos.revisions.get(project.currentRevisionId);
       if (!revision) throw new AppError(ErrorCodes.REVISION_NOT_FOUND, 'Revision not found', {status: 404});
 
-      const actor = typeof body?.actor === 'string' && body.actor.trim() ? body.actor.trim() : 'user_session';
-      const sessionId = typeof body?.sessionId === 'string' && body.sessionId.trim() ? body.sessionId.trim() : undefined;
+      const actor = typeof body.actor === 'string' && body.actor.trim() ? body.actor.trim() : null;
+      if (!actor) {
+        throw invalidRequest('actor is required and must be a non-empty string');
+      }
+      const sessionId = typeof body.sessionId === 'string' && body.sessionId.trim() ? body.sessionId.trim() : undefined;
 
       const grant = issueDelegationGrant({
         projectId: project.id,

@@ -281,7 +281,7 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
   assert.equal(getRes.body.result.structuredContent.status, 'review_required');
   assert.equal(getRes.body.result.structuredContent.currentRevision.id, revisionId);
 
-  // Step 6a: Prove that ordinary MCP / model arguments WITHOUT trusted user delegation cannot approve in delegated_e2e mode
+  // Step 6a: Prove that calling approve_video_project in delegated_e2e mode WITHOUT explicit user intent fails closed
   const unauthorizedApproveRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
     id: 50,
@@ -293,7 +293,6 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
         revisionId,
         expectedPayloadHash: currentRev.payloadHash,
         mode: APPROVAL_MODES.DELEGATED_E2E,
-        delegatedContext: {userExplicitIntent: 'Create full video end-to-end autonomously'},
       },
     },
   }, mcpHeaders);
@@ -308,25 +307,7 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
   });
   assert.equal(blockedMintRes.status, 404, 'Integration API must not expose delegation-grant minting endpoint');
 
-  // Step 6b: User in UI / loopback session explicitly issues delegation grant
-  const grantRes = await fetch(`${sys.appUrl}/api/projects/${projectId}/delegation-grant`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      host: '127.0.0.1',
-      origin: 'http://127.0.0.1',
-    },
-    body: JSON.stringify({
-      actor: 'authenticated_user',
-      sessionId: 'user-sess-999',
-    }),
-  });
-  assert.equal(grantRes.status, 200);
-  const grantData = await grantRes.json();
-  const delegationGrant = grantData.delegationGrant;
-  assert.ok(delegationGrant, 'Should receive user-session delegation grant');
-
-  // Step 6c: Call approve_video_project with verified delegationGrant
+  // Step 6b: Authenticated ChatGPT client calls approve_video_project with explicit E2E intent purely through public MCP interface
   const approveRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
     id: 5,
@@ -338,7 +319,6 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
         revisionId,
         expectedPayloadHash: currentRev.payloadHash,
         mode: APPROVAL_MODES.DELEGATED_E2E,
-        delegationGrant,
         delegatedContext: {userExplicitIntent: 'Create full video end-to-end autonomously'},
       },
     },
@@ -462,7 +442,7 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
 
   const savedRev = reopened.repos.revisions.get(revisionId);
   assert.equal(savedRev.approvalMode, 'delegated_e2e');
-  assert.equal(savedRev.approvalActor, 'authenticated_user');
+  assert.equal(savedRev.approvalActor, 'chatgpt_mcp');
   assert.deepEqual(savedRev.approvalContext, {userExplicitIntent: 'Create full video end-to-end autonomously'});
 });
 
@@ -614,8 +594,8 @@ test('Adversarial Security: Conflicting evidence, unverified claims, and stale h
   });
   const currentRev = sys.repos.revisions.get(revisionId);
 
-  // 1. Attempt delegated approval WITHOUT trusted grant -> must be rejected
-  const approveNoGrantRes = await rpc(sys.mcpUrl, {
+  // 1. Attempt delegated approval WITHOUT explicit user intent -> must be rejected
+  const approveNoIntentRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
     id: 4,
     method: 'tools/call',
@@ -626,28 +606,15 @@ test('Adversarial Security: Conflicting evidence, unverified claims, and stale h
         revisionId,
         expectedPayloadHash: currentRev.payloadHash,
         mode: APPROVAL_MODES.DELEGATED_E2E,
-        delegatedContext: {userExplicitIntent: 'Approve automatically without grant'},
       },
     },
   }, mcpHeaders);
 
-  assert.equal(approveNoGrantRes.response.status, 200);
-  assert.equal(approveNoGrantRes.body.result.isError, true);
-  assert.match(approveNoGrantRes.body.result.content[0].text, /missing trusted delegation grant|delegation grant is required/i);
+  assert.equal(approveNoIntentRes.response.status, 200);
+  assert.equal(approveNoIntentRes.body.result.isError, true);
+  assert.match(approveNoIntentRes.body.result.content[0].text, /delegated approval blocked/i);
 
-  // 2. Acquire grant via loopback user UI route, but project has unresolved conflicts -> must be rejected
-  const grantRes = await fetch(`${sys.appUrl}/api/projects/${projectId}/delegation-grant`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      host: '127.0.0.1',
-      origin: 'http://127.0.0.1',
-    },
-    body: JSON.stringify({actor: 'operator_ui_user'}),
-  });
-  assert.equal(grantRes.status, 200);
-  const {delegationGrant} = await grantRes.json();
-
+  // 2. Attempt delegated approval with explicit intent, but project has unresolved conflicts -> must be rejected
   const approveConflictRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
     id: 5,
@@ -659,8 +626,7 @@ test('Adversarial Security: Conflicting evidence, unverified claims, and stale h
         revisionId,
         expectedPayloadHash: currentRev.payloadHash,
         mode: APPROVAL_MODES.DELEGATED_E2E,
-        delegationGrant,
-        delegatedContext: {userExplicitIntent: 'Approve automatically with grant'},
+        delegatedContext: {userExplicitIntent: 'Approve automatically with conflicts'},
       },
     },
   }, mcpHeaders);
@@ -668,6 +634,18 @@ test('Adversarial Security: Conflicting evidence, unverified claims, and stale h
   assert.equal(approveConflictRes.response.status, 200);
   assert.equal(approveConflictRes.body.result.isError, true);
   assert.match(approveConflictRes.body.result.content[0].text, /unresolved evidence conflict group/i);
+
+  // 3. Loopback UI endpoint rejects missing/malformed actor body
+  const malformedGrantRes = await fetch(`${sys.appUrl}/api/projects/${projectId}/delegation-grant`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      host: '127.0.0.1',
+      origin: 'http://127.0.0.1',
+    },
+    body: JSON.stringify({}),
+  });
+  assert.equal(malformedGrantRes.status, 400);
 
   // Verify project remains in review_required
   const project = sys.repos.projects.get(projectId);

@@ -376,7 +376,7 @@ export const createAppServer = ({
         return json(res, 200, {...revisions.approve(route.id), requestId}, requestId);
       }
       if (route.name === 'projects.delegationGrant') {
-        const body = await readJsonBody(req, maxBodyBytes).catch(() => ({}));
+        const body = await readJsonBody(req, maxBodyBytes);
         const result = projects.createDelegationGrant(route.id, body);
         return json(res, 200, {...result, requestId}, requestId);
       }
