@@ -13,6 +13,7 @@ import {createArtifactStore} from '../../storage/artifacts.mjs';
 import {createAppServer} from '../../app/server.mjs';
 import {createBrightHttpServer} from '../../mcp/server.mjs';
 import {APPROVAL_MODES} from '../../domain/schemas.mjs';
+import {generatePkceChallenge} from '../../security/oauth.mjs';
 
 const tempDir = () => mkdtempSync(join(tmpdir(), 'bright-e2e-test-'));
 
@@ -148,25 +149,50 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
   const sys = await startTestSystem();
   t.after(sys.close);
 
+  // Step 1: Perform OAuth 2.1 Authorization Code Flow with PKCE for ChatGPT client
+  const codeVerifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
+  const codeChallenge = generatePkceChallenge(codeVerifier);
+
+  const authUrl = new URL('/oauth/authorize', sys.mcpUrl);
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('client_id', 'chatgpt-client');
+  authUrl.searchParams.set('redirect_uri', 'https://chatgpt.com/aip/oauth/callback');
+  authUrl.searchParams.set('scope', 'bright:profile:write bright:profile:read');
+  authUrl.searchParams.set('code_challenge', codeChallenge);
+  authUrl.searchParams.set('code_challenge_method', 'S256');
+
+  const authRes = await fetch(authUrl.toString(), {
+    headers: {host: '127.0.0.1'},
+    redirect: 'manual',
+  });
+  assert.equal(authRes.status, 302);
+  const authCode = new URL(authRes.headers.get('location')).searchParams.get('code');
+
+  const tokenUrl = new URL('/oauth/token', sys.mcpUrl);
+  const tokenRes = await fetch(tokenUrl.toString(), {
+    method: 'POST',
+    headers: {
+      host: '127.0.0.1',
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: authCode,
+      client_id: 'chatgpt-client',
+      redirect_uri: 'https://chatgpt.com/aip/oauth/callback',
+      code_verifier: codeVerifier,
+    }).toString(),
+  });
+  assert.equal(tokenRes.status, 200);
+  const {access_token: oauthAccessToken} = await tokenRes.json();
+  assert.ok(oauthAccessToken);
+
   const mcpHeaders = {
-    authorization: `Bearer ${sys.mcpAuthToken}`,
+    authorization: `Bearer ${oauthAccessToken}`,
     'mcp-protocol-version': '2025-06-18',
   };
 
-  // Step 1: Initialize MCP
-  const initRes = await rpc(sys.mcpUrl, {
-    jsonrpc: '2.0',
-    id: 1,
-    method: 'initialize',
-    params: {
-      protocolVersion: '2025-06-18',
-      capabilities: {},
-      clientInfo: {name: 'chatgpt-client', version: '1.0.0'},
-    },
-  }, {authorization: `Bearer ${sys.mcpAuthToken}`});
-  assert.equal(initRes.response.status, 200);
-
-  // Step 2: Call normalize_evidence
+  // Step 2: Call normalize_evidence via MCP
   const normRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
     id: 2,
@@ -281,7 +307,7 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
   assert.equal(getRes.body.result.structuredContent.status, 'review_required');
   assert.equal(getRes.body.result.structuredContent.currentRevision.id, revisionId);
 
-  // Step 6a: Prove that calling approve_video_project in delegated_e2e mode WITHOUT explicit user intent fails closed
+  // Step 6a: Prove that calling approve_video_project in delegated_e2e mode with ONLY model arguments (userExplicitIntent) without a trusted user delegation grant fails closed
   const unauthorizedApproveRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
     id: 50,
@@ -293,6 +319,7 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
         revisionId,
         expectedPayloadHash: currentRev.payloadHash,
         mode: APPROVAL_MODES.DELEGATED_E2E,
+        delegatedContext: {userExplicitIntent: 'Create full video end-to-end autonomously'},
       },
     },
   }, mcpHeaders);
@@ -307,7 +334,24 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
   });
   assert.equal(blockedMintRes.status, 404, 'Integration API must not expose delegation-grant minting endpoint');
 
-  // Step 6b: Authenticated ChatGPT client calls approve_video_project with explicit E2E intent purely through public MCP interface
+  // Step 6b: User in UI / consent session establishes delegation grant through the trusted user boundary
+  const grantRes = await fetch(`${sys.appUrl}/api/projects/${projectId}/delegation-grant`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      host: '127.0.0.1',
+      origin: 'http://127.0.0.1',
+    },
+    body: JSON.stringify({
+      actor: 'chatgpt_user',
+      sessionId: 'user-sess-999',
+    }),
+  });
+  assert.equal(grantRes.status, 200);
+  const {delegationGrant} = await grantRes.json();
+  assert.ok(delegationGrant);
+
+  // Step 6c: Authenticated ChatGPT client calls approve_video_project with verified delegationGrant
   const approveRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
     id: 5,
@@ -319,6 +363,7 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
         revisionId,
         expectedPayloadHash: currentRev.payloadHash,
         mode: APPROVAL_MODES.DELEGATED_E2E,
+        delegationGrant,
         delegatedContext: {userExplicitIntent: 'Create full video end-to-end autonomously'},
       },
     },
@@ -442,7 +487,7 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
 
   const savedRev = reopened.repos.revisions.get(revisionId);
   assert.equal(savedRev.approvalMode, 'delegated_e2e');
-  assert.equal(savedRev.approvalActor, 'chatgpt_mcp');
+  assert.equal(savedRev.approvalActor, 'chatgpt_user');
   assert.deepEqual(savedRev.approvalContext, {userExplicitIntent: 'Create full video end-to-end autonomously'});
 });
 
@@ -614,7 +659,19 @@ test('Adversarial Security: Conflicting evidence, unverified claims, and stale h
   assert.equal(approveNoIntentRes.body.result.isError, true);
   assert.match(approveNoIntentRes.body.result.content[0].text, /delegated approval blocked/i);
 
-  // 2. Attempt delegated approval with explicit intent, but project has unresolved conflicts -> must be rejected
+  // 2. Acquire grant via loopback user UI route, but project has unresolved conflicts -> must be rejected by backend safety gate
+  const grantRes = await fetch(`${sys.appUrl}/api/projects/${projectId}/delegation-grant`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      host: '127.0.0.1',
+      origin: 'http://127.0.0.1',
+    },
+    body: JSON.stringify({actor: 'operator_ui_user'}),
+  });
+  assert.equal(grantRes.status, 200);
+  const {delegationGrant} = await grantRes.json();
+
   const approveConflictRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
     id: 5,
@@ -626,6 +683,7 @@ test('Adversarial Security: Conflicting evidence, unverified claims, and stale h
         revisionId,
         expectedPayloadHash: currentRev.payloadHash,
         mode: APPROVAL_MODES.DELEGATED_E2E,
+        delegationGrant,
         delegatedContext: {userExplicitIntent: 'Approve automatically with conflicts'},
       },
     },

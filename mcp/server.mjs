@@ -2,6 +2,7 @@ import {AsyncLocalStorage} from 'node:async_hooks';
 import {randomUUID} from 'node:crypto';
 import {createServer} from 'node:http';
 import {Readable} from 'node:stream';
+import {pipeline} from 'node:stream/promises';
 import {fileURLToPath} from 'node:url';
 import {createMcpHandler, fromJsonSchema, McpServer} from '@modelcontextprotocol/server';
 import {normalizeEvidence} from '../lib/evidence/normalize-evidence.mjs';
@@ -16,7 +17,7 @@ import {
   extractBearerToken,
   redactSecrets,
 } from '../security/integration-auth.mjs';
-import {issueDelegationGrant} from '../security/delegation-grant.mjs';
+import {createOauthManager} from '../security/oauth.mjs';
 
 import {
   createVideoProjectInputSchema,
@@ -322,32 +323,27 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
         readOnlyHint: false,
         destructiveHint: false,
         openWorldHint: false,
+        securitySchemes: [{type: 'oauth2', scopes: ['bright:profile:write']}],
       },
     },
     async (input) => {
       try {
-        let delegationGrant = input.delegationGrant;
-        if (!delegationGrant && input.mode === 'delegated_e2e' && input.delegatedContext?.userExplicitIntent && serviceToken && serviceToken.length >= 16) {
-          delegationGrant = issueDelegationGrant({
-            projectId: input.projectId,
-            revisionId: input.revisionId,
-            payloadHash: input.expectedPayloadHash,
-            actor: 'chatgpt_mcp',
-            secret: serviceToken,
-            ttlSeconds: 900,
-          });
+        if (input.mode === 'delegated_e2e' && !input.delegationGrant) {
+          return {
+            isError: true,
+            content: [{
+              type: 'text',
+              text: 'Delegated approval blocked: valid user delegation grant is required for delegated_e2e mode.',
+            }],
+          };
         }
-        const approveBody = {
-          ...input,
-          ...(delegationGrant ? {delegationGrant} : {}),
-        };
         const res = await fetchWithCorrelation(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/approve`, {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
             ...(serviceToken ? {authorization: `Bearer ${serviceToken}`} : {}),
           },
-          body: JSON.stringify(approveBody),
+          body: JSON.stringify(input),
         }, {toolName: 'approve_video_project', projectId: input.projectId});
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -713,6 +709,16 @@ export function createBrightHttpServer({
   const requestTimeoutMs = positiveTimerDelayOrDefault(env.MCP_REQUEST_TIMEOUT_MS, DEFAULT_REQUEST_TIMEOUT_MS);
   const allowRequest = makeRateLimiter({limit: rateLimit});
 
+  const serviceToken = env.BRIGHT_INTEGRATION_TOKEN?.trim() || '';
+  const expectedAuthToken = String(env.MCP_AUTH_TOKEN || '').trim();
+  const isAuthConfigured = Boolean(expectedAuthToken || serviceToken || env.MCP_OAUTH_SECRET);
+  const mcpPublicUrl = env.MCP_PUBLIC_URL || env.BRIGHT_PUBLIC_URL || `http://${env.MCP_HOST || '127.0.0.1'}:${env.MCP_PORT || DEFAULT_PORT}`;
+  const oauthSecret = env.MCP_OAUTH_SECRET?.trim() || serviceToken || expectedAuthToken || 'default-oauth-secret-key-16-chars';
+  const oauthManager = createOauthManager({
+    issuer: mcpPublicUrl,
+    secret: oauthSecret,
+  });
+
   return createServer((req, res) => {
     const requestId = randomUUID();
     const incomingCorr = req.headers['x-correlation-id'] || req.headers['x-request-id'];
@@ -751,6 +757,139 @@ export function createBrightHttpServer({
           return;
         }
 
+        // Apply rate limit across all non-health application routes
+        if (!allowRequest(remote)) {
+          writeJsonBeforeBodyConsumed(req, res, 429, {error: {code: 'RATE_LIMITED', message: 'Too many requests', requestId}}, requestId);
+          return;
+        }
+
+        const effectivePublicUrl = env.MCP_PUBLIC_URL || env.BRIGHT_PUBLIC_URL || `http://${req.headers.host || `${env.MCP_HOST || '127.0.0.1'}:${env.MCP_PORT || DEFAULT_PORT}`}`;
+
+        // RFC 9470 OAuth Protected Resource Metadata
+        if (url.pathname === '/.well-known/oauth-protected-resource' && req.method === 'GET') {
+          writeJsonBeforeBodyConsumed(req, res, 200, oauthManager.getProtectedResourceMetadata(effectivePublicUrl), requestId);
+          return;
+        }
+
+        // RFC 8414 OAuth Authorization Server Metadata & OpenID Configuration
+        if (['/.well-known/oauth-authorization-server', '/.well-known/openid-configuration'].includes(url.pathname) && req.method === 'GET') {
+          writeJsonBeforeBodyConsumed(req, res, 200, oauthManager.getAuthorizationServerMetadata(effectivePublicUrl), requestId);
+          return;
+        }
+
+        // OAuth 2.1 Authorize endpoint
+        if (url.pathname === '/oauth/authorize' && req.method === 'GET') {
+          const responseType = url.searchParams.get('response_type');
+          const clientId = url.searchParams.get('client_id');
+          const redirectUri = url.searchParams.get('redirect_uri');
+          const scope = url.searchParams.get('scope') || 'bright:profile:write bright:profile:read';
+          const state = url.searchParams.get('state');
+          const codeChallenge = url.searchParams.get('code_challenge');
+          const codeChallengeMethod = url.searchParams.get('code_challenge_method') || 'S256';
+
+          if (responseType !== 'code') {
+            writeJsonBeforeBodyConsumed(req, res, 400, {
+              error: {code: 'UNSUPPORTED_RESPONSE_TYPE', message: 'response_type must be code', requestId},
+            }, requestId);
+            return;
+          }
+
+          try {
+            const code = oauthManager.createAuthorizationCode({
+              clientId,
+              redirectUri,
+              scope,
+              codeChallenge,
+              codeChallengeMethod,
+              userId: 'chatgpt_user',
+            });
+
+            if (redirectUri) {
+              const redirectUrl = new URL(redirectUri);
+              redirectUrl.searchParams.set('code', code);
+              if (state) redirectUrl.searchParams.set('state', state);
+              res.statusCode = 302;
+              res.setHeader('Location', redirectUrl.toString());
+              res.setHeader('x-request-id', requestId);
+              res.end();
+              return;
+            }
+
+            writeJsonBeforeBodyConsumed(req, res, 200, {code, state}, requestId);
+            return;
+          } catch (err) {
+            writeJsonBeforeBodyConsumed(req, res, err.status || 400, {
+              error: {code: err.code || 'INVALID_REQUEST', message: err.message, requestId},
+            }, requestId);
+            return;
+          }
+        }
+
+        // OAuth 2.1 Token endpoint
+        if (url.pathname === '/oauth/token' && req.method === 'POST') {
+          const rawBody = await readBody(req, maxBodyBytes, deadlineAt);
+          let parsedBody = {};
+          const contentType = req.headers['content-type'] || '';
+          if (contentType.includes('application/x-www-form-urlencoded')) {
+            const params = new URLSearchParams(rawBody.toString('utf8'));
+            for (const [k, v] of params.entries()) parsedBody[k] = v;
+          } else {
+            try {
+              parsedBody = JSON.parse(rawBody.toString('utf8'));
+            } catch {
+              writeJsonBeforeBodyConsumed(req, res, 400, {
+                error: {code: 'INVALID_REQUEST', message: 'Invalid token request body', requestId},
+              }, requestId);
+              return;
+            }
+          }
+
+          if (parsedBody.grant_type !== 'authorization_code') {
+            writeJsonBeforeBodyConsumed(req, res, 400, {
+              error: {code: 'UNSUPPORTED_GRANT_TYPE', message: 'grant_type must be authorization_code', requestId},
+            }, requestId);
+            return;
+          }
+
+          try {
+            const tokenResponse = oauthManager.exchangeCodeForToken({
+              code: parsedBody.code,
+              clientId: parsedBody.client_id,
+              redirectUri: parsedBody.redirect_uri,
+              codeVerifier: parsedBody.code_verifier,
+            });
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+            res.setHeader('Cache-Control', 'no-store');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('x-request-id', requestId);
+            res.end(JSON.stringify(tokenResponse));
+            return;
+          } catch (err) {
+            writeJsonBeforeBodyConsumed(req, res, err.status || 400, {
+              error: {code: err.code || 'INVALID_GRANT', message: err.message, requestId},
+            }, requestId);
+            return;
+          }
+        }
+
+        // RFC 7591 Dynamic Client Registration
+        if (url.pathname === '/oauth/register' && req.method === 'POST') {
+          const clientId = `client_${randomUUID()}`;
+          res.statusCode = 201;
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.setHeader('x-request-id', requestId);
+          res.end(JSON.stringify({
+            client_id: clientId,
+            client_name: 'ChatGPT MCP Client',
+            redirect_uris: ['https://chatgpt.com/aip/oauth/callback', 'https://chat.openai.com/aip/oauth/callback'],
+            grant_types: ['authorization_code'],
+            response_types: ['code'],
+            token_endpoint_auth_method: 'none',
+          }));
+          return;
+        }
+
         // Download proxy route (authenticated strictly by signed HMAC capability token in query)
         if (['GET', 'HEAD'].includes(method) &&
             (url.pathname.startsWith('/artifacts/') || url.pathname.startsWith('/api/integrations/chatgpt/artifacts/')) &&
@@ -775,13 +914,23 @@ export function createBrightHttpServer({
           const backendUrl = env.BRIGHT_BACKEND_URL?.trim() || 'http://127.0.0.1:4180';
           const backendEndpoint = `${backendUrl}/api/integrations/chatgpt/artifacts/${encodeURIComponent(artifactId)}/download?token=${encodeURIComponent(token)}`;
 
+          const downloadTimeoutMs = positiveTimerDelayOrDefault(env.MCP_DOWNLOAD_TIMEOUT_MS, 60_000);
+          const abortController = new AbortController();
+          req.on('close', () => {
+            if (!res.writableEnded) {
+              abortController.abort();
+            }
+          });
+          const timeoutSignal = AbortSignal.timeout(downloadTimeoutMs);
+          const combinedSignal = AbortSignal.any([abortController.signal, timeoutSignal]);
+
           const headers = {
             accept: '*/*',
             'x-correlation-id': correlationId,
             'x-request-id': requestId,
           };
 
-          const backendRes = await fetch(backendEndpoint, {method, headers});
+          const backendRes = await fetch(backendEndpoint, {method, headers, signal: combinedSignal});
           res.statusCode = backendRes.status;
           for (const [key, value] of backendRes.headers.entries()) {
             if (['content-type', 'content-length', 'content-disposition', 'etag', 'last-modified'].includes(key.toLowerCase())) {
@@ -795,95 +944,108 @@ export function createBrightHttpServer({
             return;
           }
 
-          const reader = backendRes.body.getReader();
-          while (true) {
-            const {done, value} = await reader.read();
-            if (done) break;
-            res.write(value);
-          }
-          res.end();
+          const nodeReadable = Readable.fromWeb(backendRes.body);
+          await pipeline(nodeReadable, res);
           return;
         }
 
-      if (!allowRequest(remote)) {
-        writeJsonBeforeBodyConsumed(req, res, 429, {error: {code: 'RATE_LIMITED', message: 'Too many requests', requestId}}, requestId);
-        return;
-      }
-      if (url.pathname !== '/mcp') {
-        writeJsonBeforeBodyConsumed(req, res, 404, {error: {code: 'NOT_FOUND', message: 'Route not found', requestId}}, requestId);
-        return;
-      }
-
-      if (['GET', 'HEAD'].includes(method) && requestDeclaresBody(req)) {
-        writeJsonBeforeBodyConsumed(req, res, 400, {
-          error: {
-            code: 'REQUEST_BODY_NOT_ALLOWED',
-            message: 'Request body is not allowed for this method',
-            requestId,
-          },
-        }, requestId);
-        return;
-      }
-
-      const expectedAuthToken = String(env.MCP_AUTH_TOKEN || '').trim();
-      if (expectedAuthToken.length === 0) {
-        writeJsonBeforeBodyConsumed(req, res, 401, {
-          error: {
-            code: 'AUTH_NOT_CONFIGURED',
-            message: 'MCP server authentication is not configured',
-            requestId,
-          },
-        }, requestId);
-        return;
-      }
-      const token = extractBearerToken(req.headers.authorization);
-      if (!token || !compareTokensConstantTime(token, expectedAuthToken)) {
-        writeJsonBeforeBodyConsumed(req, res, 401, {
-          error: {
-            code: 'UNAUTHORIZED',
-            message: 'Unauthorized',
-            requestId,
-          },
-        }, requestId);
-        return;
-      }
-
-      let body;
-      if (!['GET', 'HEAD'].includes(method)) body = await readBody(req, maxBodyBytes, deadlineAt);
-      const headers = new Headers();
-      for (const [key, value] of Object.entries(req.headers)) {
-        if (value === undefined) continue;
-        headers.set(key, Array.isArray(value) ? value.join(', ') : value);
-      }
-      const request = new Request(url, {
-        method: req.method,
-        headers,
-        ...(body?.length ? {body} : {}),
-      });
-      const response = await withTimeout(activeHandler.fetch(request), remainingDeadlineMs(deadlineAt));
-      await writeWebResponse(response, res, requestId);
-    } catch (error) {
-      const status = Number(error?.status) || 500;
-      if (!res.headersSent) {
-        const errorBody = {
-          error: {
-            code: status === 413 ? 'REQUEST_TOO_LARGE' : status === 504 ? 'REQUEST_TIMEOUT' : 'INTERNAL_ERROR',
-            message: status === 413 ? 'Request body is too large' : status === 504 ? 'Request timed out' : 'Internal server error',
-            requestId,
-          },
-        };
-        if (status === 413 || status === 504) {
-          writeJsonBeforeBodyConsumed(req, res, status, errorBody, requestId);
-        } else {
-          writeJson(res, status, errorBody, requestId);
+        if (url.pathname !== '/mcp') {
+          writeJsonBeforeBodyConsumed(req, res, 404, {error: {code: 'NOT_FOUND', message: 'Route not found', requestId}}, requestId);
+          return;
         }
-      } else {
-        res.destroy();
+
+        if (['GET', 'HEAD'].includes(method) && requestDeclaresBody(req)) {
+          writeJsonBeforeBodyConsumed(req, res, 400, {
+            error: {
+              code: 'REQUEST_BODY_NOT_ALLOWED',
+              message: 'Request body is not allowed for this method',
+              requestId,
+            },
+          }, requestId);
+          return;
+        }
+
+        if (!isAuthConfigured) {
+          writeJsonBeforeBodyConsumed(req, res, 401, {
+            error: {
+              code: 'AUTH_NOT_CONFIGURED',
+              message: 'MCP server authentication is not configured',
+              requestId,
+            },
+          }, requestId);
+          return;
+        }
+
+        const token = extractBearerToken(req.headers.authorization);
+        if (!token) {
+          res.setHeader('WWW-Authenticate', `Bearer realm="bright-mcp", error="invalid_token", error_description="Bearer token is required", resource="${mcpPublicUrl}"`);
+          writeJsonBeforeBodyConsumed(req, res, 401, {
+            error: {
+              code: 'UNAUTHORIZED',
+              message: 'Bearer token is required',
+              requestId,
+            },
+          }, requestId);
+          return;
+        }
+
+        let verifiedUser = null;
+        try {
+          verifiedUser = oauthManager.verifyAccessToken(token);
+        } catch {
+          if (expectedAuthToken && compareTokensConstantTime(token, expectedAuthToken)) {
+            verifiedUser = {sub: 'chatgpt_user', scope: 'bright:profile:write'};
+          }
+        }
+
+        if (!verifiedUser) {
+          res.setHeader('WWW-Authenticate', `Bearer realm="bright-mcp", error="invalid_token", error_description="Access token is invalid or expired", resource="${mcpPublicUrl}"`);
+          writeJsonBeforeBodyConsumed(req, res, 401, {
+            error: {
+              code: 'UNAUTHORIZED',
+              message: 'Unauthorized',
+              requestId,
+            },
+          }, requestId);
+          return;
+        }
+
+        let body;
+        if (!['GET', 'HEAD'].includes(method)) body = await readBody(req, maxBodyBytes, deadlineAt);
+        const headers = new Headers();
+        for (const [key, value] of Object.entries(req.headers)) {
+          if (value === undefined) continue;
+          headers.set(key, Array.isArray(value) ? value.join(', ') : value);
+        }
+        const request = new Request(url, {
+          method: req.method,
+          headers,
+          ...(body?.length ? {body} : {}),
+        });
+        const response = await withTimeout(activeHandler.fetch(request), remainingDeadlineMs(deadlineAt));
+        await writeWebResponse(response, res, requestId);
+      } catch (error) {
+        const status = Number(error?.status) || 500;
+        if (!res.headersSent) {
+          const errorBody = {
+            error: {
+              code: status === 413 ? 'REQUEST_TOO_LARGE' : status === 504 ? 'REQUEST_TIMEOUT' : 'INTERNAL_ERROR',
+              message: status === 413 ? 'Request body is too large' : status === 504 ? 'Request timed out' : 'Internal server error',
+              requestId,
+            },
+          };
+          if (status === 413 || status === 504) {
+            writeJsonBeforeBodyConsumed(req, res, status, errorBody, requestId);
+          } else {
+            writeJson(res, status, errorBody, requestId);
+          }
+        } else {
+          res.destroy();
+        }
+      } finally {
+        log(redactSecrets({event: 'mcp.request', requestId, correlationId, method: req.method, path: requestPath, status: res.statusCode, durationMs: Date.now() - started}));
       }
-    } finally {
-      log(redactSecrets({event: 'mcp.request', requestId, correlationId, method: req.method, path: requestPath, status: res.statusCode, durationMs: Date.now() - started}));
-    }
-  });
+    });
   });
 }
 

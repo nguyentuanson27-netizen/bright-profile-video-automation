@@ -376,3 +376,57 @@ test('Public MCP Server streams authoritative MP4 through /artifacts/:artifactId
   assert.equal(proxyRes.headers['content-type'], 'video/mp4');
   assert.equal(proxyRes.buffer.toString('utf8'), 'streamed via public mcp proxy');
 });
+
+test('Public MCP Server enforces rate limiting on public download proxy', async (t) => {
+  const serviceToken = 'service-secret-token-key-123456';
+  const dir = tempDir();
+  const db = openDatabase(join(dir, 'test-rate.sqlite'));
+  migrateDatabase(db);
+  const repos = createRepositories(db);
+  const jobs = createJobStore(db);
+  const artifactStore = createArtifactStore(db);
+
+  const server = createAppServer({
+    db,
+    repos,
+    jobs,
+    artifactStore,
+    dataDir: dir,
+    integrationToken: serviceToken,
+  });
+
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const appPort = server.address().port;
+
+  // Configure strict rate limit of 2 requests per minute
+  const mcpServer = (await import('../../mcp/server.mjs')).createBrightHttpServer({
+    env: {
+      MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+      BRIGHT_BACKEND_URL: `http://127.0.0.1:${appPort}`,
+      BRIGHT_INTEGRATION_TOKEN: serviceToken,
+      MCP_RATE_LIMIT_PER_MINUTE: 2,
+    },
+  });
+
+  mcpServer.listen(0, '127.0.0.1');
+  await once(mcpServer, 'listening');
+  const mcpPort = mcpServer.address().port;
+
+  t.after(async () => {
+    await new Promise((res) => mcpServer.close(res));
+    await new Promise((res) => server.close(res));
+    db.close();
+  });
+
+  // 1st and 2nd request succeed or reach token check
+  const res1 = await request({port: mcpPort, path: '/artifacts/art-1/download'});
+  assert.equal(res1.status, 401); // token required
+  const res2 = await request({port: mcpPort, path: '/artifacts/art-1/download'});
+  assert.equal(res2.status, 401);
+
+  // 3rd request exceeds rate limit of 2
+  const res3 = await request({port: mcpPort, path: '/artifacts/art-1/download'});
+  assert.equal(res3.status, 429);
+  assert.equal(res3.json?.error?.code, 'RATE_LIMITED');
+});

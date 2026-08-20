@@ -221,6 +221,7 @@ test('approve_video_project tool submits user_reviewed or delegated_e2e approval
         revisionId: 'rev-1',
         expectedPayloadHash: '1'.repeat(64),
         mode: 'delegated_e2e',
+        delegationGrant: 'grant-token-123456',
         delegatedContext: {userExplicitIntent: 'Approve and build video'},
       },
     },
