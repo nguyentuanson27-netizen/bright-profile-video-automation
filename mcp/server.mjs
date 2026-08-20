@@ -16,6 +16,12 @@ import {
   redactSecrets,
 } from '../security/integration-auth.mjs';
 
+import {
+  createVideoProjectInputSchema,
+  getVideoProjectInputSchema,
+  videoProjectStatusOutputSchema,
+} from './schemas/tool-schemas.mjs';
+
 const DEFAULT_PORT = 4190;
 const DEFAULT_MAX_BODY_BYTES = 2 * 1024 * 1024;
 const DEFAULT_RATE_LIMIT = 60;
@@ -23,6 +29,9 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const inputSchema = fromJsonSchema(evidenceInputSchema);
 const outputSchema = fromJsonSchema(evidenceBundleSchema);
+const createProjectSchema = fromJsonSchema(createVideoProjectInputSchema);
+const getProjectSchema = fromJsonSchema(getVideoProjectInputSchema);
+const projectStatusSchema = fromJsonSchema(videoProjectStatusOutputSchema);
 
 const formatToolSummary = (bundle) => [
   `Normalized ${bundle.stats.inputItems} candidates into ${bundle.stats.retainedEvidence} evidence records.`,
@@ -31,7 +40,10 @@ const formatToolSummary = (bundle) => [
   `Rejected ${bundle.stats.rejectedItems} malformed evidence items.`,
 ].join(' ');
 
-export function buildBrightMcpServer() {
+export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) {
+  const backendUrl = env.BRIGHT_BACKEND_URL?.trim() || 'http://127.0.0.1:4180';
+  const serviceToken = env.BRIGHT_INTEGRATION_TOKEN?.trim() || '';
+
   const server = new McpServer({name: 'bright-evidence', version: '1.0.0'});
   server.registerTool(
     'normalize_evidence',
@@ -67,11 +79,104 @@ export function buildBrightMcpServer() {
       }
     },
   );
+
+  server.registerTool(
+    'create_video_project',
+    {
+      title: 'Create and start video project from normalized evidence',
+      description: 'Import normalized EvidenceBundle into Bright Profile system and automatically queue structured generation stage. Default workflow stops safely at review_required for user review.',
+      inputSchema: createProjectSchema,
+      outputSchema: projectStatusSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) => {
+      try {
+        assertEvidenceBundle(input.evidenceBundle);
+        const res = await fetchFn(`${backendUrl}/api/integrations/chatgpt/projects/import`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            ...(serviceToken ? {authorization: `Bearer ${serviceToken}`} : {}),
+          },
+          body: JSON.stringify(input),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          return {
+            isError: true,
+            content: [{type: 'text', text: json?.error?.message || `Import failed with status ${res.status}`}],
+          };
+        }
+        return {
+          content: [{
+            type: 'text',
+            text: `Project ${json.project.projectId} imported (status: ${json.project.status}, stage: ${json.stage?.type || 'queued'}).`,
+          }],
+          structuredContent: json.project,
+        };
+      } catch (error) {
+        return {
+          isError: true,
+          content: [{type: 'text', text: error?.message || 'Failed to create video project.'}],
+        };
+      }
+    },
+  );
+
+  server.registerTool(
+    'get_video_project',
+    {
+      title: 'Get video project status and progress',
+      description: 'Query status, active stage, failure reasons, evidence summary, and downloadable output artifact for a video project.',
+      inputSchema: getProjectSchema,
+      outputSchema: projectStatusSchema,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) => {
+      try {
+        const res = await fetchFn(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}`, {
+          method: 'GET',
+          headers: {
+            accept: 'application/json',
+            ...(serviceToken ? {authorization: `Bearer ${serviceToken}`} : {}),
+          },
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          return {
+            isError: true,
+            content: [{type: 'text', text: json?.error?.message || `Get project failed with status ${res.status}`}],
+          };
+        }
+        return {
+          content: [{
+            type: 'text',
+            text: `Project ${json.projectId} status: ${json.status}${json.progress?.currentStage ? ` (stage: ${json.progress.currentStage}, state: ${json.progress.stageStatus})` : ''}.`,
+          }],
+          structuredContent: json,
+        };
+      } catch (error) {
+        return {
+          isError: true,
+          content: [{type: 'text', text: error?.message || 'Failed to get video project.'}],
+        };
+      }
+    },
+  );
+
   return server;
 }
 
-export function createBrightMcpHandler() {
-  return createMcpHandler(buildBrightMcpServer);
+export function createBrightMcpHandler({env = process.env, fetchFn = fetch} = {}) {
+  return createMcpHandler(() => buildBrightMcpServer({env, fetchFn}));
 }
 
 const parsePublicMcpUrl = (value) => {
@@ -256,10 +361,11 @@ const writeWebResponse = async (response, res, requestId) => {
 };
 
 export function createBrightHttpServer({
-  handler = createBrightMcpHandler(),
   env = process.env,
+  handler,
   log = (event) => console.error(JSON.stringify(event)),
 } = {}) {
+  const activeHandler = handler || createBrightMcpHandler({env});
   const allowedHosts = parseAllowedHosts(env);
   const maxBodyBytes = positiveFiniteOrDefault(env.MCP_MAX_BODY_BYTES, DEFAULT_MAX_BODY_BYTES);
   const rateLimit = positiveFiniteOrDefault(env.MCP_RATE_LIMIT_PER_MINUTE, DEFAULT_RATE_LIMIT);
@@ -345,7 +451,7 @@ export function createBrightHttpServer({
         headers,
         ...(body?.length ? {body} : {}),
       });
-      const response = await withTimeout(handler.fetch(request), remainingDeadlineMs(deadlineAt));
+      const response = await withTimeout(activeHandler.fetch(request), remainingDeadlineMs(deadlineAt));
       await writeWebResponse(response, res, requestId);
     } catch (error) {
       const status = Number(error?.status) || 500;
