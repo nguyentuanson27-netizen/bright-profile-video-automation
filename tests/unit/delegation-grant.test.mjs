@@ -1,4 +1,4 @@
-﻿import test from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   issueDelegationGrant,
@@ -135,4 +135,31 @@ test('verifyDelegationGrant rejects tampered grant', () => {
     }),
     {code: 'DELEGATED_APPROVAL_BLOCKED'},
   );
+});
+
+test('issueDelegationGrant binds actor and sessionId and verifyDelegationGrant extracts them', () => {
+  const secret = 'service-secret-token-key-123456';
+  const nowMs = 1700000000000;
+  const grant = issueDelegationGrant({
+    projectId: 'proj-1',
+    revisionId: 'rev-1',
+    payloadHash: 'a'.repeat(64),
+    actor: 'operator_ui',
+    sessionId: 'session-xyz-123',
+    secret,
+    ttlSeconds: 600,
+    nowMs,
+  });
+
+  const verified = verifyDelegationGrant({
+    grant,
+    projectId: 'proj-1',
+    revisionId: 'rev-1',
+    payloadHash: 'a'.repeat(64),
+    secret,
+    nowMs,
+  });
+
+  assert.equal(verified.actor, 'operator_ui');
+  assert.equal(verified.sessionId, 'session-xyz-123');
 });

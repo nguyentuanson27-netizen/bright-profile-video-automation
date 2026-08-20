@@ -5,6 +5,7 @@ import {stat} from 'node:fs/promises';
 import {extname, resolve, sep} from 'node:path';
 
 import {AppError} from '../domain/errors.mjs';
+import {redactSecrets} from '../security/integration-auth.mjs';
 import {createArtifactStore} from '../storage/artifacts.mjs';
 import {createArtifactsApi} from './http/artifacts.mjs';
 import {createIntegrationsApi} from './http/integrations.mjs';
@@ -208,6 +209,7 @@ export const createAppServer = ({
   const projects = createProjectsApi({
     repos,
     jobs,
+    serviceToken: integrationToken,
     now,
     nowMs,
     projectIdFactory,
@@ -226,6 +228,7 @@ export const createAppServer = ({
     artifactStore: resolvedArtifactStore,
     dataDir: resolvedDataDir,
     serviceToken: integrationToken,
+    mcpPublicUrl: process.env.MCP_PUBLIC_URL || process.env.BRIGHT_PUBLIC_URL || 'http://127.0.0.1:4190',
     now,
     nowMs,
     projectIdFactory,
@@ -242,6 +245,12 @@ export const createAppServer = ({
     const requestId = typeof requestIdValue === 'string' && requestIdValue.length > 0
       ? requestIdValue.slice(0, 200)
       : randomUUID();
+    const correlationId = typeof req.headers['x-correlation-id'] === 'string' && req.headers['x-correlation-id'].trim()
+      ? req.headers['x-correlation-id'].trim().slice(0, 200)
+      : (typeof req.headers['x-request-id'] === 'string' && req.headers['x-request-id'].trim()
+        ? req.headers['x-request-id'].trim().slice(0, 200)
+        : requestId);
+    const reqStartedAt = Date.now();
     try {
       const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
       const route = matchRoute(req.method ?? 'GET', pathname);
@@ -308,10 +317,6 @@ export const createAppServer = ({
           const body = await readJsonBody(req, maxBodyBytes);
           return json(res, 200, {...integrations.approveProject(route.id, body), requestId}, requestId);
         }
-        if (route.name === 'integrations.chatgpt.projects.delegationGrant') {
-          const result = integrations.createDelegationGrant(route.id);
-          return json(res, 200, {...result, requestId}, requestId);
-        }
         if (route.name === 'integrations.chatgpt.projects.render') {
           const result = integrations.startRender(route.id);
           return json(res, 202, {...result, requestId}, requestId);
@@ -370,6 +375,11 @@ export const createAppServer = ({
       if (route.name === 'projects.approve') {
         return json(res, 200, {...revisions.approve(route.id), requestId}, requestId);
       }
+      if (route.name === 'projects.delegationGrant') {
+        const body = await readJsonBody(req, maxBodyBytes).catch(() => ({}));
+        const result = projects.createDelegationGrant(route.id, body);
+        return json(res, 200, {...result, requestId}, requestId);
+      }
       if (route.name === 'projects.artifacts.output') {
         const output = await artifacts.getOutput(route.id);
         sendOutput(res, output, requestId);
@@ -383,6 +393,18 @@ export const createAppServer = ({
         error: {code: safeCode(error), message: safeMessage(error, status)},
         requestId,
       }, requestId);
+    } finally {
+      const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
+      if (pathname.startsWith('/api/integrations/')) {
+        console.error(JSON.stringify(redactSecrets({
+          event: 'integration.request',
+          correlationId,
+          method: req.method,
+          path: pathname,
+          status: res.statusCode,
+          durationMs: Date.now() - reqStartedAt,
+        })));
+      }
     }
   });
 };

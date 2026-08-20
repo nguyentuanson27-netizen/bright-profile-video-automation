@@ -1,9 +1,9 @@
-const projectActionPattern = /^\/api\/projects\/([^/]+)\/(research|generate|render|retry|cancel|sources|draft|approve)$/;
+const projectActionPattern = /^\/api\/projects\/([^/]+)\/(research|generate|render|retry|cancel|sources|draft|approve|delegation-grant)$/;
 const projectOutputPattern = /^\/api\/projects\/([^/]+)\/artifacts\/output$/;
 const projectPattern = /^\/api\/projects\/([^/]+)$/;
 
 const integrationImportPattern = /^\/api\/integrations\/chatgpt\/projects\/import$/;
-const integrationActionPattern = /^\/api\/integrations\/chatgpt\/projects\/([^/]+)\/(draft|approve|render|retry|cancel|delegation-grant)$/;
+const integrationActionPattern = /^\/api\/integrations\/chatgpt\/projects\/([^/]+)\/(draft|approve|render|retry|cancel)$/;
 const integrationProjectPattern = /^\/api\/integrations\/chatgpt\/projects\/([^/]+)$/;
 const integrationArtifactPattern = /^\/api\/integrations\/chatgpt\/artifacts\/([^/]+)\/download$/;
 
@@ -35,7 +35,6 @@ export const matchRoute = (method, pathname) => {
     if (!id) return null;
     if (method === 'POST') {
       if (action === 'draft') return {name: 'integrations.chatgpt.projects.draft.edit', id};
-      if (action === 'delegation-grant') return {name: 'integrations.chatgpt.projects.delegationGrant', id};
       return {name: `integrations.chatgpt.projects.${action}`, id};
     }
     return null;
@@ -67,8 +66,10 @@ export const matchRoute = (method, pathname) => {
     if (method === 'GET' && name === 'sources') return {name: 'projects.sources', id};
     if (method === 'GET' && name === 'draft') return {name: 'projects.draft.get', id};
     if (method === 'PUT' && name === 'draft') return {name: 'projects.draft.edit', id};
-    if (method === 'POST' && ['research', 'generate', 'render', 'retry', 'cancel', 'approve'].includes(name)) {
-      return {name: name === 'approve' ? 'projects.approve' : `projects.${name}`, id};
+    if (method === 'POST') {
+      if (name === 'approve') return {name: 'projects.approve', id};
+      if (name === 'delegation-grant') return {name: 'projects.delegationGrant', id};
+      return {name: `projects.${name}`, id};
     }
     return null;
   }

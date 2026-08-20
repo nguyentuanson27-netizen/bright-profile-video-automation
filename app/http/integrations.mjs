@@ -13,7 +13,6 @@ import {
   verifyDownloadToken,
 } from '../../security/download-token.mjs';
 import {
-  issueDelegationGrant,
   verifyDelegationGrant,
 } from '../../security/delegation-grant.mjs';
 import {assertValidBearerToken} from '../../security/integration-auth.mjs';
@@ -46,6 +45,7 @@ export const createIntegrationsApi = ({
   artifactStore,
   dataDir: _dataDir,
   serviceToken,
+  mcpPublicUrl,
   now = Date.now,
   nowMs = Date.now,
   projectIdFactory = randomUUID,
@@ -112,7 +112,9 @@ export const createIntegrationsApi = ({
         });
         query = `?token=${encodeURIComponent(token)}`;
       }
-      downloadUrl = `/api/integrations/chatgpt/artifacts/${encodeURIComponent(outputArtifact.id)}/download${query}`;
+      const baseUrl = (mcpPublicUrl || '').trim().replace(/\/+$/, '');
+      const path = `/artifacts/${encodeURIComponent(outputArtifact.id)}/download${query}`;
+      downloadUrl = baseUrl ? `${baseUrl}${path}` : path;
     }
 
     const output = {
@@ -289,36 +291,6 @@ export const createIntegrationsApi = ({
       };
     },
 
-    createDelegationGrant(projectId) {
-      const project = requireProject(projectId);
-      if (project.status !== 'review_required' || !project.currentRevisionId) {
-        throw new AppError(
-          ErrorCodes.DELEGATED_APPROVAL_BLOCKED,
-          'Delegation grant can only be issued for projects in review_required status',
-          {status: 409},
-        );
-      }
-      const revision = repos.revisions.get(project.currentRevisionId);
-      if (!revision) throw new AppError(ErrorCodes.REVISION_NOT_FOUND, 'Revision not found', {status: 404});
-
-      const grant = issueDelegationGrant({
-        projectId: project.id,
-        revisionId: revision.id,
-        payloadHash: revision.payloadHash,
-        secret: serviceToken,
-        ttlSeconds: 900,
-        nowMs: nowMs(),
-      });
-
-      return {
-        projectId: project.id,
-        revisionId: revision.id,
-        payloadHash: revision.payloadHash,
-        delegationGrant: grant,
-        expiresInSeconds: 900,
-      };
-    },
-
     approveProject(projectId, body) {
       const project = requireProject(projectId);
       const input = validateApproveProjectInput(body);
@@ -338,6 +310,7 @@ export const createIntegrationsApi = ({
         );
       }
 
+      let approvalActor = 'chatgpt_mcp';
       if (input.mode === APPROVAL_MODES.DELEGATED_E2E) {
         if (!input.delegationGrant) {
           throw new AppError(
@@ -347,7 +320,7 @@ export const createIntegrationsApi = ({
           );
         }
 
-        verifyDelegationGrant({
+        const verifiedGrant = verifyDelegationGrant({
           grant: input.delegationGrant,
           projectId,
           revisionId: currentRevision.id,
@@ -355,6 +328,7 @@ export const createIntegrationsApi = ({
           secret: serviceToken,
           nowMs: nowMs(),
         });
+        approvalActor = verifiedGrant.actor || 'user_session';
 
         // Server-side safety checks
         if (project.status !== 'review_required') {
@@ -399,7 +373,7 @@ export const createIntegrationsApi = ({
         revisionId: input.revisionId,
         expectedPayloadHash: input.expectedPayloadHash,
         approvalMode: input.mode,
-        approvalActor: 'chatgpt_mcp',
+        approvalActor,
         approvalContext: input.delegatedContext ?? null,
       });
 

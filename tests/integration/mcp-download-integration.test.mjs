@@ -207,3 +207,118 @@ test('GET /api/integrations/chatgpt/artifacts/:artifactId/download streams autho
   assert.equal(unauthRes.status, 401);
   assert.equal(unauthRes.json?.error?.code, 'UNAUTHORIZED');
 });
+
+test('Public MCP Server streams authoritative MP4 through /artifacts/:artifactId/download proxy', async (t) => {
+  const serviceToken = 'service-secret-token-key-123456';
+  const mcpAuthToken = 'mcp-public-auth-token-123456';
+  const dir = tempDir();
+  const db = openDatabase(join(dir, 'test-proxy.sqlite'));
+  migrateDatabase(db);
+  const repos = createRepositories(db);
+  const jobs = createJobStore(db);
+  const artifactStore = createArtifactStore(db);
+
+  const server = createAppServer({
+    db,
+    repos,
+    jobs,
+    artifactStore,
+    dataDir: dir,
+    integrationToken: serviceToken,
+  });
+
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const appPort = server.address().port;
+
+  const mcpServer = (await import('../../mcp/server.mjs')).createBrightHttpServer({
+    env: {
+      MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+      MCP_AUTH_TOKEN: mcpAuthToken,
+      BRIGHT_BACKEND_URL: `http://127.0.0.1:${appPort}`,
+      BRIGHT_INTEGRATION_TOKEN: serviceToken,
+    },
+  });
+
+  mcpServer.listen(0, '127.0.0.1');
+  await once(mcpServer, 'listening');
+  const mcpPort = mcpServer.address().port;
+
+  t.after(async () => {
+    await new Promise((res) => mcpServer.close(res));
+    await new Promise((res) => server.close(res));
+    db.close();
+  });
+
+  // Setup project and artifact in DB
+  const timestamp = new Date().toISOString();
+  repos.projects.createWithSources({
+    id: 'proj-mcp-down-1',
+    creator: 'Creator',
+    topic: 'Topic',
+    instructions: '',
+    status: 'approved',
+    origin: 'chatgpt_mcp',
+    idempotencyKey: 'k-mcp-down-1',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }, []);
+
+  repos.revisions.create({
+    id: 'rev-mcp-down-1',
+    projectId: 'proj-mcp-down-1',
+    revisionNo: 1,
+    payload: {creatorName: 'Creator', summary: 'Summary'},
+    payloadHash: 'a'.repeat(64),
+  });
+
+  db.prepare(`
+    UPDATE projects
+    SET approved_revision_id = 'rev-mcp-down-1', current_revision_id = 'rev-mcp-down-1', status = 'approved'
+    WHERE id = 'proj-mcp-down-1'
+  `).run();
+
+  const videoContent = Buffer.from('streamed via public mcp proxy');
+  const videoRelPath = 'artifacts/proj-mcp-down-1/rev-mcp-down-1/authoritative.mp4';
+  const videoAbsPath = join(dir, videoRelPath);
+  const {mkdirSync} = await import('node:fs');
+  const {dirname} = await import('node:path');
+  mkdirSync(dirname(videoAbsPath), {recursive: true});
+  writeFileSync(videoAbsPath, videoContent);
+
+  const sha256 = (await import('node:crypto')).createHash('sha256').update(videoContent).digest('hex');
+  db.prepare(`
+    INSERT INTO artifacts (
+      id, project_id, revision_id, stage_id, attempt_id, kind, relative_path,
+      mime_type, byte_size, sha256, is_authoritative, created_at
+    ) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, 1, ?)
+  `).run(
+    'art-mcp-down-1',
+    'proj-mcp-down-1',
+    'rev-mcp-down-1',
+    'output_mp4',
+    videoRelPath,
+    'video/mp4',
+    videoContent.length,
+    sha256,
+    timestamp,
+  );
+
+  const queryToken = generateDownloadToken({
+    projectId: 'proj-mcp-down-1',
+    revisionId: 'rev-mcp-down-1',
+    artifactId: 'art-mcp-down-1',
+    secret: serviceToken,
+    ttlSeconds: 600,
+  });
+
+  // Request to public MCP port without Bearer token (using signed token in query)
+  const proxyRes = await request({
+    port: mcpPort,
+    path: `/artifacts/art-mcp-down-1/download?token=${encodeURIComponent(queryToken)}`,
+  });
+
+  assert.equal(proxyRes.status, 200);
+  assert.equal(proxyRes.headers['content-type'], 'video/mp4');
+  assert.equal(proxyRes.buffer.toString('utf8'), 'streamed via public mcp proxy');
+});

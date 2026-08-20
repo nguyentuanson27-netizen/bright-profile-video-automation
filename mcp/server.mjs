@@ -53,6 +53,63 @@ const formatToolSummary = (bundle) => [
 export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) {
   const backendUrl = env.BRIGHT_BACKEND_URL?.trim() || 'http://127.0.0.1:4180';
   const serviceToken = env.BRIGHT_INTEGRATION_TOKEN?.trim() || '';
+  const mcpPublicUrl = env.MCP_PUBLIC_URL || env.BRIGHT_PUBLIC_URL || `http://${env.MCP_HOST || '127.0.0.1'}:${env.MCP_PORT || DEFAULT_PORT}`;
+
+  const fetchWithCorrelation = async (endpoint, options = {}, { toolName, projectId, idempotencyKey } = {}) => {
+    const started = Date.now();
+    const correlationId = randomUUID();
+    const headers = {
+      ...options.headers,
+      'x-correlation-id': correlationId,
+      'x-request-id': correlationId,
+    };
+    try {
+      const res = await fetchFn(endpoint, {...options, headers});
+      console.error(JSON.stringify(redactSecrets({
+        event: 'mcp.tool_call',
+        correlationId,
+        tool: toolName,
+        projectId,
+        idempotencyKey,
+        status: res.ok ? 'ok' : 'error',
+        httpStatus: res.status,
+        durationMs: Date.now() - started,
+      })));
+      return res;
+    } catch (err) {
+      console.error(JSON.stringify(redactSecrets({
+        event: 'mcp.tool_call',
+        correlationId,
+        tool: toolName,
+        projectId,
+        idempotencyKey,
+        status: 'error',
+        error: err?.message,
+        durationMs: Date.now() - started,
+      })));
+      throw err;
+    }
+  };
+
+  const normalizeProjectOutput = (project) => {
+    if (!project || typeof project !== 'object') return project;
+    const copy = {...project};
+    if (copy.output?.downloadUrl) {
+      const urlStr = copy.output.downloadUrl;
+      const base = (mcpPublicUrl || '').trim().replace(/\/+$/, '');
+      if (base) {
+        let pathAndQuery = urlStr;
+        try {
+          const parsed = new URL(urlStr);
+          pathAndQuery = `${parsed.pathname}${parsed.search}`;
+        } catch {
+          if (!urlStr.startsWith('/')) pathAndQuery = `/${urlStr}`;
+        }
+        copy.output = {...copy.output, downloadUrl: `${base}${pathAndQuery}`};
+      }
+    }
+    return copy;
+  };
 
   const server = new McpServer({name: 'bright-evidence', version: '1.0.0'});
   server.registerTool(
@@ -69,14 +126,31 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
       },
     },
     async (input) => {
+      const started = Date.now();
+      const correlationId = randomUUID();
       try {
         assertEvidenceEnvelope(input);
         const bundle = assertEvidenceBundle(normalizeEvidence(input));
+        console.error(JSON.stringify(redactSecrets({
+          event: 'mcp.tool_call',
+          correlationId,
+          tool: 'normalize_evidence',
+          status: 'ok',
+          durationMs: Date.now() - started,
+        })));
         return {
           content: [{type: 'text', text: formatToolSummary(bundle)}],
           structuredContent: {...bundle},
         };
       } catch (error) {
+        console.error(JSON.stringify(redactSecrets({
+          event: 'mcp.tool_call',
+          correlationId,
+          tool: 'normalize_evidence',
+          status: 'error',
+          error: error?.message,
+          durationMs: Date.now() - started,
+        })));
         return {
           isError: true,
           content: [{
@@ -106,14 +180,14 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
     async (input) => {
       try {
         assertEvidenceBundle(input.evidenceBundle);
-        const res = await fetchFn(`${backendUrl}/api/integrations/chatgpt/projects/import`, {
+        const res = await fetchWithCorrelation(`${backendUrl}/api/integrations/chatgpt/projects/import`, {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
             ...(serviceToken ? {authorization: `Bearer ${serviceToken}`} : {}),
           },
           body: JSON.stringify(input),
-        });
+        }, {toolName: 'create_video_project', idempotencyKey: input.idempotencyKey});
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
           return {
@@ -121,12 +195,13 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
             content: [{type: 'text', text: json?.error?.message || `Import failed with status ${res.status}`}],
           };
         }
+        const project = normalizeProjectOutput(json.project);
         return {
           content: [{
             type: 'text',
-            text: `Project ${json.project.projectId} imported (status: ${json.project.status}, stage: ${json.stage?.type || 'queued'}).`,
+            text: `Project ${project.projectId} imported (status: ${project.status}, stage: ${json.stage?.type || 'queued'}).`,
           }],
-          structuredContent: json.project,
+          structuredContent: project,
         };
       } catch (error) {
         return {
@@ -152,13 +227,13 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
     },
     async (input) => {
       try {
-        const res = await fetchFn(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}`, {
+        const res = await fetchWithCorrelation(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}`, {
           method: 'GET',
           headers: {
             accept: 'application/json',
             ...(serviceToken ? {authorization: `Bearer ${serviceToken}`} : {}),
           },
-        });
+        }, {toolName: 'get_video_project', projectId: input.projectId});
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
           return {
@@ -166,7 +241,7 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
             content: [{type: 'text', text: json?.error?.message || `Get project failed with status ${res.status}`}],
           };
         }
-        const projectData = json.project || json;
+        const projectData = normalizeProjectOutput(json.project || json);
         return {
           content: [{
             type: 'text',
@@ -198,14 +273,14 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
     },
     async (input) => {
       try {
-        const res = await fetchFn(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/draft`, {
+        const res = await fetchWithCorrelation(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/draft`, {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
             ...(serviceToken ? {authorization: `Bearer ${serviceToken}`} : {}),
           },
           body: JSON.stringify(input),
-        });
+        }, {toolName: 'edit_video_draft', projectId: input.projectId});
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
           return {
@@ -213,12 +288,13 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
             content: [{type: 'text', text: json?.error?.message || `Edit draft failed with status ${res.status}`}],
           };
         }
+        const project = normalizeProjectOutput(json.project);
         return {
           content: [{
             type: 'text',
-            text: `Project ${json.project.projectId} draft updated (revision: ${json.revision?.id}).`,
+            text: `Project ${project.projectId} draft updated (revision: ${json.revision?.id}).`,
           }],
-          structuredContent: json.project,
+          structuredContent: project,
         };
       } catch (error) {
         return {
@@ -244,14 +320,14 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
     },
     async (input) => {
       try {
-        const res = await fetchFn(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/approve`, {
+        const res = await fetchWithCorrelation(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/approve`, {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
             ...(serviceToken ? {authorization: `Bearer ${serviceToken}`} : {}),
           },
           body: JSON.stringify(input),
-        });
+        }, {toolName: 'approve_video_project', projectId: input.projectId});
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
           return {
@@ -259,12 +335,13 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
             content: [{type: 'text', text: json?.error?.message || `Approve project failed with status ${res.status}`}],
           };
         }
+        const project = normalizeProjectOutput(json.project);
         return {
           content: [{
             type: 'text',
-            text: `Project ${json.project.projectId} approved (mode: ${json.revision?.approvalMode || input.mode}).`,
+            text: `Project ${project.projectId} approved (mode: ${json.revision?.approvalMode || input.mode}).`,
           }],
-          structuredContent: json.project,
+          structuredContent: project,
         };
       } catch (error) {
         return {
@@ -290,13 +367,13 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
     },
     async (input) => {
       try {
-        const res = await fetchFn(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/render`, {
+        const res = await fetchWithCorrelation(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/render`, {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
             ...(serviceToken ? {authorization: `Bearer ${serviceToken}`} : {}),
           },
-        });
+        }, {toolName: 'start_video_render', projectId: input.projectId});
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
           return {
@@ -304,12 +381,13 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
             content: [{type: 'text', text: json?.error?.message || `Start render failed with status ${res.status}`}],
           };
         }
+        const project = normalizeProjectOutput(json.project);
         return {
           content: [{
             type: 'text',
-            text: `Rendering started for project ${json.project.projectId} (stage: ${json.stage?.type || 'media_ingest'}).`,
+            text: `Rendering started for project ${project.projectId} (stage: ${json.stage?.type || 'media_ingest'}).`,
           }],
-          structuredContent: json.project,
+          structuredContent: project,
         };
       } catch (error) {
         return {
@@ -335,13 +413,13 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
     },
     async (input) => {
       try {
-        const res = await fetchFn(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/retry`, {
+        const res = await fetchWithCorrelation(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/retry`, {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
             ...(serviceToken ? {authorization: `Bearer ${serviceToken}`} : {}),
           },
-        });
+        }, {toolName: 'retry_video_project', projectId: input.projectId});
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
           return {
@@ -349,12 +427,13 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
             content: [{type: 'text', text: json?.error?.message || `Retry failed with status ${res.status}`}],
           };
         }
+        const project = normalizeProjectOutput(json.project);
         return {
           content: [{
             type: 'text',
-            text: `Stage retry requested for project ${json.project.projectId} (stage: ${json.stage?.type}, status: ${json.stage?.state}).`,
+            text: `Stage retry requested for project ${project.projectId} (stage: ${json.stage?.type}, status: ${json.stage?.state}).`,
           }],
-          structuredContent: json.project,
+          structuredContent: project,
         };
       } catch (error) {
         return {
@@ -380,13 +459,13 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
     },
     async (input) => {
       try {
-        const res = await fetchFn(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/cancel`, {
+        const res = await fetchWithCorrelation(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/cancel`, {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
             ...(serviceToken ? {authorization: `Bearer ${serviceToken}`} : {}),
           },
-        });
+        }, {toolName: 'cancel_video_project', projectId: input.projectId});
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
           return {
@@ -394,12 +473,13 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
             content: [{type: 'text', text: json?.error?.message || `Cancel failed with status ${res.status}`}],
           };
         }
+        const project = normalizeProjectOutput(json.project);
         return {
           content: [{
             type: 'text',
-            text: `Stage cancelled for project ${json.project.projectId} (stage: ${json.stage?.type}, status: ${json.stage?.state}).`,
+            text: `Stage cancelled for project ${project.projectId} (stage: ${json.stage?.type}, status: ${json.stage?.state}).`,
           }],
-          structuredContent: json.project,
+          structuredContent: project,
         };
       } catch (error) {
         return {
@@ -424,9 +504,11 @@ const parsePublicMcpUrl = (value) => {
   try {
     url = new URL(raw);
   } catch {
-    throw new Error('MCP_PUBLIC_URL must be an absolute HTTPS URL');
+    throw new Error('MCP_PUBLIC_URL must be an absolute URL');
   }
-  if (url.protocol !== 'https:') throw new Error('MCP_PUBLIC_URL must use HTTPS');
+  if (url.protocol !== 'https:' && !['127.0.0.1', 'localhost', '::1', '[::1]'].includes(url.hostname.toLowerCase())) {
+    throw new Error('MCP_PUBLIC_URL must use HTTPS');
+  }
   return url;
 };
 
@@ -612,10 +694,15 @@ export function createBrightHttpServer({
 
   return createServer(async (req, res) => {
     const requestId = randomUUID();
+    const incomingCorr = req.headers['x-correlation-id'] || req.headers['x-request-id'];
+    const correlationId = typeof incomingCorr === 'string' && incomingCorr.trim()
+      ? incomingCorr.trim().slice(0, 200)
+      : requestId;
     const started = Date.now();
     const deadlineAt = started + requestTimeoutMs;
     const host = hostnameFromHeader(req.headers.host);
     const remote = req.socket.remoteAddress || 'unknown';
+    const method = req.method || 'GET';
     let requestPath = '/';
     try {
       try {
@@ -641,6 +728,55 @@ export function createBrightHttpServer({
         return;
       }
 
+      // Download proxy route (authenticated by signed HMAC capability token in query)
+      if (['GET', 'HEAD'].includes(method) &&
+          (url.pathname.startsWith('/artifacts/') || url.pathname.startsWith('/api/integrations/chatgpt/artifacts/')) &&
+          url.pathname.endsWith('/download')) {
+        const segments = url.pathname.split('/');
+        const artifactId = segments[segments.length - 2];
+        const token = url.searchParams.get('token') || '';
+        if (!artifactId) {
+          writeJsonBeforeBodyConsumed(req, res, 400, {
+            error: {code: 'INVALID_REQUEST', message: 'Missing artifactId', requestId},
+          }, requestId);
+          return;
+        }
+
+        const backendUrl = env.BRIGHT_BACKEND_URL?.trim() || 'http://127.0.0.1:4180';
+        const serviceToken = env.BRIGHT_INTEGRATION_TOKEN?.trim() || '';
+        const backendEndpoint = `${backendUrl}/api/integrations/chatgpt/artifacts/${encodeURIComponent(artifactId)}/download?token=${encodeURIComponent(token)}`;
+
+        const headers = {
+          accept: '*/*',
+          ...(serviceToken ? {authorization: `Bearer ${serviceToken}`} : {}),
+          'x-correlation-id': correlationId,
+          'x-request-id': requestId,
+        };
+
+        const backendRes = await fetch(backendEndpoint, {method, headers});
+        res.statusCode = backendRes.status;
+        for (const [key, value] of backendRes.headers.entries()) {
+          if (['content-type', 'content-length', 'content-disposition', 'etag', 'last-modified'].includes(key.toLowerCase())) {
+            res.setHeader(key, value);
+          }
+        }
+        res.setHeader('x-request-id', requestId);
+
+        if (method === 'HEAD' || !backendRes.body) {
+          res.end();
+          return;
+        }
+
+        const reader = backendRes.body.getReader();
+        while (true) {
+          const {done, value} = await reader.read();
+          if (done) break;
+          res.write(value);
+        }
+        res.end();
+        return;
+      }
+
       if (!allowRequest(remote)) {
         writeJsonBeforeBodyConsumed(req, res, 429, {error: {code: 'RATE_LIMITED', message: 'Too many requests', requestId}}, requestId);
         return;
@@ -650,7 +786,6 @@ export function createBrightHttpServer({
         return;
       }
 
-      const method = req.method || 'GET';
       if (['GET', 'HEAD'].includes(method) && requestDeclaresBody(req)) {
         writeJsonBeforeBodyConsumed(req, res, 400, {
           error: {
@@ -718,7 +853,7 @@ export function createBrightHttpServer({
         res.destroy();
       }
     } finally {
-      log(redactSecrets({event: 'mcp.request', requestId, method: req.method, path: requestPath, status: res.statusCode, durationMs: Date.now() - started}));
+      log(redactSecrets({event: 'mcp.request', requestId, correlationId, method: req.method, path: requestPath, status: res.statusCode, durationMs: Date.now() - started}));
     }
   });
 }

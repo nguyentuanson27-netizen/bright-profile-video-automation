@@ -89,19 +89,28 @@ const startTestSystem = async () => {
   const appPort = appServer.address().port;
   const appUrl = `http://127.0.0.1:${appPort}`;
 
+  const net = await import('node:net');
+  const tempServer = net.createServer();
+  tempServer.listen(0, '127.0.0.1');
+  await once(tempServer, 'listening');
+  const mcpPort = tempServer.address().port;
+  await new Promise((res) => tempServer.close(res));
+
+  const mcpPublicUrl = `http://127.0.0.1:${mcpPort}`;
   const mcpServer = createBrightHttpServer({
     env: {
       MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
       MCP_AUTH_TOKEN: mcpAuthToken,
+      MCP_PORT: String(mcpPort),
+      MCP_PUBLIC_URL: mcpPublicUrl,
       BRIGHT_BACKEND_URL: appUrl,
       BRIGHT_INTEGRATION_TOKEN: serviceToken,
     },
   });
 
-  mcpServer.listen(0, '127.0.0.1');
+  mcpServer.listen(mcpPort, '127.0.0.1');
   await once(mcpServer, 'listening');
-  const mcpPort = mcpServer.address().port;
-  const mcpUrl = `http://127.0.0.1:${mcpPort}/mcp`;
+  const mcpUrl = `${mcpPublicUrl}/mcp`;
 
   const close = async () => {
     await new Promise((res) => mcpServer.close(res));
@@ -272,16 +281,52 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
   assert.equal(getRes.body.result.structuredContent.status, 'review_required');
   assert.equal(getRes.body.result.structuredContent.currentRevision.id, revisionId);
 
-  // Step 6: Acquire trusted delegation grant and call approve_video_project with mode = delegated_e2e
-  const grantRes = await fetch(`${sys.appUrl}/api/integrations/chatgpt/projects/${projectId}/delegation-grant`, {
+  // Step 6a: Prove that ordinary MCP / model arguments WITHOUT trusted user delegation cannot approve in delegated_e2e mode
+  const unauthorizedApproveRes = await rpc(sys.mcpUrl, {
+    jsonrpc: '2.0',
+    id: 50,
+    method: 'tools/call',
+    params: {
+      name: 'approve_video_project',
+      arguments: {
+        projectId,
+        revisionId,
+        expectedPayloadHash: currentRev.payloadHash,
+        mode: APPROVAL_MODES.DELEGATED_E2E,
+        delegatedContext: {userExplicitIntent: 'Create full video end-to-end autonomously'},
+      },
+    },
+  }, mcpHeaders);
+  assert.equal(unauthorizedApproveRes.response.status, 200);
+  assert.equal(unauthorizedApproveRes.body.result.isError, true);
+  assert.ok(unauthorizedApproveRes.body.result.content[0].text.includes('Delegated approval blocked'));
+
+  // Prove integration API cannot self-mint delegation grant using service token
+  const blockedMintRes = await fetch(`${sys.appUrl}/api/integrations/chatgpt/projects/${projectId}/delegation-grant`, {
     method: 'POST',
     headers: {authorization: `Bearer ${sys.serviceToken}`},
+  });
+  assert.equal(blockedMintRes.status, 404, 'Integration API must not expose delegation-grant minting endpoint');
+
+  // Step 6b: User in UI / loopback session explicitly issues delegation grant
+  const grantRes = await fetch(`${sys.appUrl}/api/projects/${projectId}/delegation-grant`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      host: '127.0.0.1',
+      origin: 'http://127.0.0.1',
+    },
+    body: JSON.stringify({
+      actor: 'authenticated_user',
+      sessionId: 'user-sess-999',
+    }),
   });
   assert.equal(grantRes.status, 200);
   const grantData = await grantRes.json();
   const delegationGrant = grantData.delegationGrant;
-  assert.ok(delegationGrant, 'Should receive server-issued delegation grant');
+  assert.ok(delegationGrant, 'Should receive user-session delegation grant');
 
+  // Step 6c: Call approve_video_project with verified delegationGrant
   const approveRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
     id: 5,
@@ -401,8 +446,9 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
   assert.equal(completedStatus.output.sha256, mp4Sha);
   assert.ok(completedStatus.output.downloadUrl);
 
-  // Step 10: Download the completed MP4 using the signed download URL
-  const downloadRes = await httpGet(`${sys.appUrl}${completedStatus.output.downloadUrl}`);
+  // Step 10: Download the completed MP4 using the absolute public download URL via MCP gateway
+  assert.ok(completedStatus.output.downloadUrl.startsWith('http://'), 'downloadUrl must be an absolute URL');
+  const downloadRes = await httpGet(completedStatus.output.downloadUrl);
   assert.equal(downloadRes.status, 200);
   assert.equal(downloadRes.headers['content-type'], 'video/mp4');
   assert.equal(downloadRes.buffer.toString('utf8'), 'Authoritative 1080p MP4 Video Content Stream');
@@ -416,7 +462,7 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
 
   const savedRev = reopened.repos.revisions.get(revisionId);
   assert.equal(savedRev.approvalMode, 'delegated_e2e');
-  assert.equal(savedRev.approvalActor, 'chatgpt_mcp');
+  assert.equal(savedRev.approvalActor, 'authenticated_user');
   assert.deepEqual(savedRev.approvalContext, {userExplicitIntent: 'Create full video end-to-end autonomously'});
 });
 
@@ -589,10 +635,15 @@ test('Adversarial Security: Conflicting evidence, unverified claims, and stale h
   assert.equal(approveNoGrantRes.body.result.isError, true);
   assert.match(approveNoGrantRes.body.result.content[0].text, /missing trusted delegation grant|delegation grant is required/i);
 
-  // 2. Acquire grant, but project has unresolved conflicts -> must be rejected
-  const grantRes = await fetch(`${sys.appUrl}/api/integrations/chatgpt/projects/${projectId}/delegation-grant`, {
+  // 2. Acquire grant via loopback user UI route, but project has unresolved conflicts -> must be rejected
+  const grantRes = await fetch(`${sys.appUrl}/api/projects/${projectId}/delegation-grant`, {
     method: 'POST',
-    headers: {authorization: `Bearer ${sys.serviceToken}`},
+    headers: {
+      'content-type': 'application/json',
+      host: '127.0.0.1',
+      origin: 'http://127.0.0.1',
+    },
+    body: JSON.stringify({actor: 'operator_ui_user'}),
   });
   assert.equal(grantRes.status, 200);
   const {delegationGrant} = await grantRes.json();

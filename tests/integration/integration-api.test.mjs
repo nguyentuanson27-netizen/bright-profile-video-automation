@@ -247,15 +247,26 @@ test('POST /api/integrations/chatgpt/projects/:projectId/approve enforces delega
   });
   const revision = repos.revisions.get(revisionId);
 
-  // Acquire delegation grant
-  const grantRes = await request({
+  // Prove integration API does NOT expose delegation-grant endpoint
+  const blockedGrantRes = await request({
     port,
     path: `/api/integrations/chatgpt/projects/${projectId}/delegation-grant`,
     method: 'POST',
     headers: {authorization: 'Bearer secure-token-123'},
   });
+  assert.equal(blockedGrantRes.status, 404);
+
+  // User acquires delegation grant via loopback UI endpoint
+  const grantRes = await request({
+    port,
+    path: `/api/projects/${projectId}/delegation-grant`,
+    method: 'POST',
+    headers: {host: '127.0.0.1', origin: 'http://127.0.0.1'},
+    body: {actor: 'user_operator', sessionId: 'sess-123'},
+  });
   assert.equal(grantRes.status, 200);
   const delegationGrant = grantRes.json.delegationGrant;
+  assert.equal(grantRes.json.actor, 'user_operator');
 
   // Approve with delegated_e2e mode
   const approveRes = await request({
@@ -336,9 +347,10 @@ test('POST /api/integrations/chatgpt/projects/:projectId/approve blocks delegate
   // 2. With grant, unverified claims fail
   const grantRes = await request({
     port,
-    path: `/api/integrations/chatgpt/projects/${projectId}/delegation-grant`,
+    path: `/api/projects/${projectId}/delegation-grant`,
     method: 'POST',
-    headers: {authorization: 'Bearer secure-token-123'},
+    headers: {host: '127.0.0.1', origin: 'http://127.0.0.1'},
+    body: {actor: 'user_operator'},
   });
   assert.equal(grantRes.status, 200);
   const delegationGrant = grantRes.json.delegationGrant;

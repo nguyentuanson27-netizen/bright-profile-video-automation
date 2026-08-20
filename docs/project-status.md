@@ -111,7 +111,7 @@ The promoted implementation includes:
 - deterministic fake-provider full-flow regression that reaches a downloadable authoritative MP4 without remote provider calls;
 - frontend build, aggregate lint, dependency audit, health, render smoke, Compose/container and MCP regression gates in CI.
 
-The currently implemented Bright Evidence MCP `normalize_evidence` integration remains a separate read-only ChatGPT boundary. The T17-T28 milestone is the planned change that will connect that ChatGPT research/evidence surface to the standalone backend without making MCP the owner of backend state or rendering.
+The Bright Evidence MCP service connects the ChatGPT research/evidence surface directly to the standalone backend via authenticated HTTP integration endpoints (`/api/integrations/chatgpt/*`), providing full write/handoff capabilities without making MCP the owner of database state or rendering pipelines.
 
 ## Verification evidence
 
@@ -138,7 +138,7 @@ PR #13 promoted the integrated milestone to `main`.
 
 The post-merge workflow verifies the frozen install, standalone/MCP production audits, SQLite migration smoke, full unit/integration suite, aggregate lint, Vite build, syntax, standalone API/UI health, MCP health, Remotion smoke, standalone Compose/app-worker container boundaries, retained MCP Compose/container checks, and teardown.
 
-Repository promotion is therefore complete. This statement does **not** claim that the waived browser walkthrough passed, does **not** claim that repository promotion itself deployed a runtime host, and does **not** claim that the new T17-T28 ChatGPT MCP E2E milestone is implemented.
+Standalone repository promotion is therefore complete. This statement does **not** claim that the waived browser walkthrough passed and does **not** claim that repository promotion itself deployed a runtime host. The ChatGPT MCP E2E milestone (T17-T27) automated implementation is verified green, with T28 live ChatGPT client acceptance staged for live deployment.
 
 ## Security and integrity boundaries retained
 
@@ -155,7 +155,7 @@ The internal scope still requires fail-closed security at external and persisten
 - the standalone Compose host port is loopback-only by default and the worker publishes no HTTP port;
 - provider credentials remain environment/deployment-secret concerns and are not persisted in application records or committed to Git.
 
-The T17-T28 milestone adds another security boundary: authenticated ChatGPT/MCP write actions plus private service-to-service authorization. Until that boundary is implemented and verified, the existing unauthenticated read-only MCP deployment must not be broadened into durable project/render mutation authority.
+The T17-T28 milestone establishes a strict security boundary: write-capable MCP actions require external Bearer token authentication, backend communication uses a private service-to-service credential, and delegated autonomous execution requires a server-issued, cryptographically verified delegation grant with 5-point safety gate validation.
 
 ## Frozen MVP contract and traceability
 
@@ -185,7 +185,7 @@ The standalone real-browser walkthrough remains open because it was waived rathe
 
 The PR #13 waiver is limited to the completed internal MVP repository promotion and does not lower the standing browser/accessibility quality gate for future browser-facing releases.
 
-The new ChatGPT MCP E2E milestone has its own future live acceptance gates defined in the new spec/plan: one default-review ChatGPT run and one explicitly authorized E2E-to-MP4 run. Neither has been executed yet.
+The new ChatGPT MCP E2E milestone has its own future live acceptance gates defined in the new spec/plan: one default-review ChatGPT run and one explicitly authorized E2E-to-MP4 run. Live client walkthroughs are staged for live deployment.
 
 If a persistent internal host is deployed or its topology/auth changes during T17-T28, that is a ship operation: record the deployed commit/image, take a consistent pre-deploy data snapshot when database changes are involved, verify health and representative flow after deployment, and use the documented rollback procedure on failure.
 
@@ -210,9 +210,10 @@ When documentation conflicts for current work, use this order:
 - standalone repository promotion verdict: **complete / SHIP-ready at repository level for the completed baseline**.
 - standalone browser keyboard/focus/console smoke: **waived for PR #13 only; not verified; follow-up open**.
 - ChatGPT MCP E2E spec: **approved**.
-- T17-T28 plan/checklist: **prepared; implementation not started**.
-- ChatGPT MCP write/auth/backend handoff: **not implemented**.
-- live ChatGPT default-review acceptance: **not run**.
-- live ChatGPT explicit E2E-to-MP4 acceptance: **not run**.
+- T17-T27 automated implementation & verification: **complete and green (276/276 tests passing)**.
+- ChatGPT MCP authenticated write/auth/backend handoff: **implemented and verified**.
+- delegated E2E server safety gate & delegation grant: **implemented and verified**.
+- public MCP signed streaming download proxy: **implemented and verified**.
+- T28 live ChatGPT UI acceptance: **automated/documentation gates complete; live manual/client verification staged for live deployment**.
 
 See `docs/ship/standalone-mvp-ship-audit.md` for completed standalone ship evidence/rollback procedure and `docs/specs/chatgpt-mcp-e2e-video-handoff.md` for the new milestone contract.

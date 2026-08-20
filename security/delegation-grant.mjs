@@ -1,4 +1,4 @@
-﻿import {createHmac, timingSafeEqual} from 'node:crypto';
+import {createHmac, timingSafeEqual} from 'node:crypto';
 import {AppError, ErrorCodes} from '../domain/errors.mjs';
 
 const DEFAULT_TTL_SECONDS = 900; // 15 minutes
@@ -13,6 +13,8 @@ export const issueDelegationGrant = ({
   projectId,
   revisionId,
   payloadHash,
+  actor = 'user_session',
+  sessionId,
   secret,
   ttlSeconds = DEFAULT_TTL_SECONDS,
   nowMs = Date.now(),
@@ -20,6 +22,7 @@ export const issueDelegationGrant = ({
   if (typeof projectId !== 'string' || !projectId) throw new TypeError('projectId is required');
   if (typeof revisionId !== 'string' || !revisionId) throw new TypeError('revisionId is required');
   if (typeof payloadHash !== 'string' || !payloadHash) throw new TypeError('payloadHash is required');
+  if (typeof actor !== 'string' || !actor.trim()) throw new TypeError('actor must be a non-empty string');
   if (typeof secret !== 'string' || secret.length < 16) {
     throw new TypeError('secret must be a string of at least 16 characters');
   }
@@ -29,6 +32,8 @@ export const issueDelegationGrant = ({
     p: projectId,
     r: revisionId,
     h: payloadHash,
+    a: actor.trim(),
+    ...(sessionId ? {s: String(sessionId)} : {}),
     act: 'delegated_e2e',
     exp,
   });
@@ -81,6 +86,10 @@ export const verifyDelegationGrant = ({
     throw blockedError('Delegation grant has expired');
   }
 
+  if (typeof payload.a !== 'string' || !payload.a.trim()) {
+    throw blockedError('Delegation grant missing actor context');
+  }
+
   if (payload.act !== 'delegated_e2e') {
     throw blockedError('Delegation grant action is invalid');
   }
@@ -101,6 +110,8 @@ export const verifyDelegationGrant = ({
     projectId: payload.p,
     revisionId: payload.r,
     payloadHash: payload.h,
+    actor: payload.a,
+    sessionId: payload.s,
     action: payload.act,
     expiresAtSec: payload.exp,
   };
