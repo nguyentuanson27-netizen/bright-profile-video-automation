@@ -310,6 +310,7 @@ export const projectStatusOutputSchema = {
         sha256: {type: 'string'},
       },
     },
+    requestId: {type: 'string'},
   },
 };
 

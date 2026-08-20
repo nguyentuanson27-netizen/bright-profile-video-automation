@@ -166,12 +166,13 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
             content: [{type: 'text', text: json?.error?.message || `Get project failed with status ${res.status}`}],
           };
         }
+        const projectData = json.project || json;
         return {
           content: [{
             type: 'text',
-            text: `Project ${json.projectId} status: ${json.status}${json.progress?.currentStage ? ` (stage: ${json.progress.currentStage}, state: ${json.progress.stageStatus})` : ''}.`,
+            text: `Project ${projectData.projectId} status: ${projectData.status}${projectData.progress?.currentStage ? ` (stage: ${projectData.progress.currentStage}, state: ${projectData.progress.stageStatus})` : ''}.`,
           }],
-          structuredContent: json,
+          structuredContent: projectData,
         };
       } catch (error) {
         return {
