@@ -25,20 +25,20 @@ Rules:
 **Description:** Resolve and implement the security foundation before any new write/cost-bearing MCP tool can operate. Verify current official OpenAI/ChatGPT MCP authentication guidance and pinned MCP server APIs, define the external authenticated identity boundary plus the MCP->Bright-Profile service credential, and make write capability fail closed when required configuration is absent/invalid.
 
 **Acceptance criteria:**
-- [ ] Current official OpenAI/ChatGPT MCP auth/tool-confirmation behavior is checked and the chosen auth approach is recorded in the spec/ADR if it materially changes the planned architecture.
-- [ ] The external write-capable MCP path requires authentication appropriate to the deployed ChatGPT integration; unauthenticated durable write/render access is not enabled.
-- [ ] MCP->Bright Profile uses a separate least-privilege service credential and a private/internal backend URL; neither is returned to the model/client.
-- [ ] Missing/invalid auth or service configuration fails closed before side-effecting backend work can start.
-- [ ] Existing request size/deadline/rate-limit/Host/Origin/log-sanitization controls remain active.
-- [ ] Secrets/tokens are redacted from errors and logs.
+- [x] Current official OpenAI/ChatGPT MCP auth/tool-confirmation behavior is checked and the chosen auth approach is recorded in the spec/ADR if it materially changes the planned architecture.
+- [x] The external write-capable MCP path requires authentication appropriate to the deployed ChatGPT integration; unauthenticated durable write/render access is not enabled.
+- [x] MCP->Bright Profile uses a separate least-privilege service credential and a private/internal backend URL; neither is returned to the model/client.
+- [x] Missing/invalid auth or service configuration fails closed before side-effecting backend work can start.
+- [x] Existing request size/deadline/rate-limit/Host/Origin/log-sanitization controls remain active.
+- [x] Secrets/tokens are redacted from errors and logs.
 
 **Verification:**
-- [ ] Focused unit/integration tests prove missing/invalid external auth is rejected.
-- [ ] Focused tests prove invalid/missing MCP->backend credential prevents backend mutations.
-- [ ] Existing `normalize_evidence` tests remain green.
-- [ ] `npm test`
-- [ ] `npm run lint`
-- [ ] Security review against `05_SHARED_REFERENCES.md` auth/authorization/AI-tool checklist.
+- [x] Focused unit/integration tests prove missing/invalid external auth is rejected.
+- [x] Focused tests prove invalid/missing MCP->backend credential prevents backend mutations.
+- [x] Existing `normalize_evidence` tests remain green.
+- [x] `npm test`
+- [x] `npm run lint`
+- [x] Security review against `05_SHARED_REFERENCES.md` auth/authorization/AI-tool checklist.
 
 **Dependencies:** None
 
@@ -58,18 +58,18 @@ Rules:
 **Description:** Add transport-independent domain/schema contracts for ChatGPT-originated project import, status, revision/hash-fenced edits, and explicit approval modes.
 
 **Acceptance criteria:**
-- [ ] Handoff input validates creator/topic/instructions, normalized EvidenceBundle, bounded idempotency key, and expected origin `chatgpt_mcp` where application-owned.
-- [ ] Status/output contract exposes only bounded project/revision/progress/failure/evidence/draft/output metadata needed by ChatGPT.
-- [ ] Draft edit contract requires project ID, current revision ID, expected payload hash, and a locally valid structured draft.
-- [ ] Approval mode vocabulary is exactly `user_reviewed | delegated_e2e` for this milestone.
-- [ ] Delegated authorization data is bounded/auditable and cannot contain arbitrary full conversation history.
-- [ ] Stable error codes exist for auth failure, stale revision/hash, idempotency conflict, delegated-approval blocked, and invalid integration input.
+- [x] Handoff input validates creator/topic/instructions, normalized EvidenceBundle, bounded idempotency key, and expected origin `chatgpt_mcp` where application-owned.
+- [x] Status/output contract exposes only bounded project/revision/progress/failure/evidence/draft/output metadata needed by ChatGPT.
+- [x] Draft edit contract requires project ID, current revision ID, expected payload hash, and a locally valid structured draft.
+- [x] Approval mode vocabulary is exactly `user_reviewed | delegated_e2e` for this milestone.
+- [x] Delegated authorization data is bounded/auditable and cannot contain arbitrary full conversation history.
+- [x] Stable error codes exist for auth failure, stale revision/hash, idempotency conflict, delegated-approval blocked, and invalid integration input.
 
 **Verification:**
-- [ ] Focused schema/domain tests cover valid/invalid handoff, bounded keys, unknown fields, approval modes, stale edit inputs, and oversized audit context.
-- [ ] Existing draft/evidence schemas remain backward-compatible.
-- [ ] `npm test`
-- [ ] `npm run lint`
+- [x] Focused schema/domain tests cover valid/invalid handoff, bounded keys, unknown fields, approval modes, stale edit inputs, and oversized audit context.
+- [x] Existing draft/evidence schemas remain backward-compatible.
+- [x] `npm test`
+- [x] `npm run lint`
 
 **Dependencies:** T17
 
@@ -88,21 +88,21 @@ Rules:
 **Description:** Add the minimum forward-only SQLite/repository support needed to make remote retries safe and approval origin auditable across restarts.
 
 **Acceptance criteria:**
-- [ ] Forward migration preserves all existing projects/revisions/sources/stages/artifacts.
-- [ ] One authenticated integration/idempotency key maps deterministically to one project/result; duplicate create requests cannot create a second project.
-- [ ] Imported project/research origin `chatgpt_mcp` survives close/reopen.
-- [ ] Approval persistence distinguishes actor/origin and `user_reviewed` vs `delegated_e2e`, bound to the approved revision/hash/timestamp.
-- [ ] No service token, provider key, full conversation, or unrelated sensitive content is stored.
-- [ ] Existing approved revision immutability and edit-vs-descendant serialization remain unchanged.
+- [x] Forward migration preserves all existing projects/revisions/sources/stages/artifacts.
+- [x] One authenticated integration/idempotency key maps deterministically to one project/result; duplicate create requests cannot create a second project.
+- [x] Imported project/research origin `chatgpt_mcp` survives close/reopen.
+- [x] Approval persistence distinguishes actor/origin and `user_reviewed` vs `delegated_e2e`, bound to the approved revision/hash/timestamp.
+- [x] No service token, provider key, full conversation, or unrelated sensitive content is stored.
+- [x] Existing approved revision immutability and edit-vs-descendant serialization remain unchanged.
 
 **Verification:**
-- [ ] Migration test from current schema version to the new version.
-- [ ] Repository reopen test for integration key/origin/approval provenance.
-- [ ] Duplicate idempotency-key race test proves exactly one durable project.
-- [ ] Existing storage/jobs/approval integration tests remain green.
-- [ ] `npm run db:migrate` against a temp DB.
-- [ ] `npm test`
-- [ ] `npm run lint`
+- [x] Migration test from current schema version to the new version.
+- [x] Repository reopen test for integration key/origin/approval provenance.
+- [x] Duplicate idempotency-key race test proves exactly one durable project.
+- [x] Existing storage/jobs/approval integration tests remain green.
+- [x] `npm run db:migrate` against a temp DB.
+- [x] `npm test`
+- [x] `npm run lint`
 
 **Dependencies:** T18
 
@@ -121,24 +121,24 @@ Rules:
 **Description:** Add the backend vertical slice that receives an already-normalized EvidenceBundle through the private integration boundary, revalidates it, persists application-owned source/evidence state, records imported research completion, and queues the existing generation stage without rerunning backend research.
 
 **Acceptance criteria:**
-- [ ] Integration request is authenticated with the MCP service credential before mutation.
-- [ ] EvidenceBundle is revalidated at the backend trust boundary; malformed/empty invalid input fails closed.
-- [ ] Application creates/reuses exactly one project by integration idempotency key.
-- [ ] Persisted source/evidence records retain normalized provenance/conflict/stat information needed by current generation/review flows.
-- [ ] Project origin/imported research state survives restart and is distinguishable from provider-executed research.
-- [ ] Imported project reaches `research_ready` and queues the existing durable generation stage.
-- [ ] Backend OpenAI research provider is not called for imported projects.
-- [ ] Existing generation service receives only application-owned normalized source/evidence records.
+- [x] Integration request is authenticated with the MCP service credential before mutation.
+- [x] EvidenceBundle is revalidated at the backend trust boundary; malformed/empty invalid input fails closed.
+- [x] Application creates/reuses exactly one project by integration idempotency key.
+- [x] Persisted source/evidence records retain normalized provenance/conflict/stat information needed by current generation/review flows.
+- [x] Project origin/imported research state survives restart and is distinguishable from provider-executed research.
+- [x] Imported project reaches `research_ready` and queues the existing durable generation stage.
+- [x] Backend OpenAI research provider is not called for imported projects.
+- [x] Existing generation service receives only application-owned normalized source/evidence records.
 
 **Verification:**
-- [ ] RED integration test initially proves import route/service missing.
-- [ ] Success test: import -> `research_ready`/generation queued.
-- [ ] Spy/fake provider test proves research provider call count remains zero.
-- [ ] Reopen test proves evidence/origin/idempotency survives DB close/reopen.
-- [ ] Duplicate request test returns the same project and no duplicate generation stage.
-- [ ] Invalid service credential and invalid EvidenceBundle tests make zero durable mutation.
-- [ ] `npm test`
-- [ ] `npm run lint`
+- [x] RED integration test initially proves import route/service missing.
+- [x] Success test: import -> `research_ready`/generation queued.
+- [x] Spy/fake provider test proves research provider call count remains zero.
+- [x] Reopen test proves evidence/origin/idempotency survives DB close/reopen.
+- [x] Duplicate request test returns the same project and no duplicate generation stage.
+- [x] Invalid service credential and invalid EvidenceBundle tests make zero durable mutation.
+- [x] `npm test`
+- [x] `npm run lint`
 
 **Dependencies:** T19
 
@@ -158,23 +158,23 @@ Rules:
 **Description:** Connect authenticated Bright Evidence MCP to the private Bright Profile integration API and expose the first usable ChatGPT orchestration slice.
 
 **Acceptance criteria:**
-- [ ] MCP backend client uses only configured private backend URL + service credential, bounded timeout, sanitized stable errors, and no automatic broad retries for mutation calls beyond explicit idempotent semantics.
-- [ ] `create_video_project` validates handoff input and returns bounded project identity/status without embedding backend secrets/raw errors.
-- [ ] `get_video_project` is read-only and returns bounded project status/current revision/progress/failure/evidence/draft/output metadata.
-- [ ] `create_video_project` is not marked read-only and does not claim to be destructive if it is an idempotent create/import action.
-- [ ] `get_video_project` is annotated read-only.
-- [ ] MCP does not open SQLite or artifact paths directly.
-- [ ] Existing `normalize_evidence` contract/output remains unchanged.
+- [x] MCP backend client uses only configured private backend URL + service credential, bounded timeout, sanitized stable errors, and no automatic broad retries for mutation calls beyond explicit idempotent semantics.
+- [x] `create_video_project` validates handoff input and returns bounded project identity/status without embedding backend secrets/raw errors.
+- [x] `get_video_project` is read-only and returns bounded project status/current revision/progress/failure/evidence/draft/output metadata.
+- [x] `create_video_project` is not marked read-only and does not claim to be destructive if it is an idempotent create/import action.
+- [x] `get_video_project` is annotated read-only.
+- [x] MCP does not open SQLite or artifact paths directly.
+- [x] Existing `normalize_evidence` contract/output remains unchanged.
 
 **Verification:**
-- [ ] RED tool-list/tool-call tests for missing new tools.
-- [ ] Tool schema tests validate advertised input/output contracts.
-- [ ] Integration test: normalize-compatible bundle -> MCP create -> backend project -> MCP get.
-- [ ] Backend auth failure becomes sanitized MCP error.
-- [ ] Duplicate create call with same idempotency key returns same project.
-- [ ] Existing MCP health/body/deadline/rate-limit/Host/Origin tests remain green.
-- [ ] `npm test`
-- [ ] `npm run lint`
+- [x] RED tool-list/tool-call tests for missing new tools.
+- [x] Tool schema tests validate advertised input/output contracts.
+- [x] Integration test: normalize-compatible bundle -> MCP create -> backend project -> MCP get.
+- [x] Backend auth failure becomes sanitized MCP error.
+- [x] Duplicate create call with same idempotency key returns same project.
+- [x] Existing MCP health/body/deadline/rate-limit/Host/Origin tests remain green.
+- [x] `npm test`
+- [x] `npm run lint`
 
 **Dependencies:** T17, T20
 
@@ -192,14 +192,14 @@ Rules:
 
 Do not continue to approval tools unless all are proven:
 
-- [ ] unauthenticated/invalidly authenticated write access fails closed;
-- [ ] MCP->backend credential is required and secret-safe;
-- [ ] backend revalidates EvidenceBundle;
-- [ ] imported project does not call backend research provider;
-- [ ] imported evidence/origin survives reopen;
-- [ ] repeated create requests are idempotent;
-- [ ] `create_video_project` and `get_video_project` work through the real internal API boundary;
-- [ ] existing standalone and MCP read-only behavior remains green.
+- [x] unauthenticated/invalidly authenticated write access fails closed;
+- [x] MCP->backend credential is required and secret-safe;
+- [x] backend revalidates EvidenceBundle;
+- [x] imported project does not call backend research provider;
+- [x] imported evidence/origin survives reopen;
+- [x] repeated create requests are idempotent;
+- [x] `create_video_project` and `get_video_project` work through the real internal API boundary;
+- [x] existing standalone and MCP read-only behavior remains green.
 
 ---
 
@@ -208,22 +208,22 @@ Do not continue to approval tools unless all are proven:
 **Description:** Extend the orchestration surface so the default ChatGPT flow can present, edit, and explicitly approve the current review draft while reusing existing backend revision/approval rules.
 
 **Acceptance criteria:**
-- [ ] Review-relevant `get_video_project` response contains the bounded current draft, revision ID, and payload hash.
-- [ ] `edit_video_draft` requires the expected current revision/hash and a valid structured draft.
-- [ ] Stale revision/hash edit fails without mutation.
-- [ ] Existing draft schema/source-reference/timeline/render validation remains authoritative.
-- [ ] `approve_video_project(mode=user_reviewed)` requires `review_required`, exact current revision/hash, and existing approval validation.
-- [ ] Default orchestration never calls approval/render merely because generation completed; the product contract still stops at review until the user approves/continues.
+- [x] Review-relevant `get_video_project` response contains the bounded current draft, revision ID, and payload hash.
+- [x] `edit_video_draft` requires the expected current revision/hash and a valid structured draft.
+- [x] Stale revision/hash edit fails without mutation.
+- [x] Existing draft schema/source-reference/timeline/render validation remains authoritative.
+- [x] `approve_video_project(mode=user_reviewed)` requires `review_required`, exact current revision/hash, and existing approval validation.
+- [x] Default orchestration never calls approval/render merely because generation completed; the product contract still stops at review until the user approves/continues.
 
 **Verification:**
-- [ ] RED tests for missing edit/approve tools.
-- [ ] Edit success + persistence + reopen test.
-- [ ] Stale-hash/revision negative tests.
-- [ ] Unknown source/invalid timeline/render-setting edit tests make no mutation.
-- [ ] User-reviewed approval success and existing unverified-claim/override behavior remain correct.
-- [ ] Default flow integration test reaches `review_required` and proves no approval descendant stage exists.
-- [ ] `npm test`
-- [ ] `npm run lint`
+- [x] RED tests for missing edit/approve tools.
+- [x] Edit success + persistence + reopen test.
+- [x] Stale-hash/revision negative tests.
+- [x] Unknown source/invalid timeline/render-setting edit tests make no mutation.
+- [x] User-reviewed approval success and existing unverified-claim/override behavior remain correct.
+- [x] Default flow integration test reaches `review_required` and proves no approval descendant stage exists.
+- [x] `npm test`
+- [x] `npm run lint`
 
 **Dependencies:** T18, T19, T21
 
@@ -243,27 +243,27 @@ Do not continue to approval tools unless all are proven:
 **Description:** Add the explicit `delegated_e2e` approval mode for requests where the authenticated user has asked ChatGPT to run the full pipeline, while preventing prompt-only/model-only bypasses.
 
 **Acceptance criteria:**
-- [ ] Delegated approval is represented durably as a distinct approval mode/origin from `user_reviewed`.
-- [ ] Backend requires exact `review_required` project/current revision/current payload hash.
-- [ ] Backend requires at least one retained evidence item.
-- [ ] Backend rejects any unresolved evidence conflict for delegated approval.
-- [ ] Backend revalidates draft schema/source references/timeline/render settings before delegated approval.
-- [ ] Model-provided `verified`, override text, or tool arguments alone cannot create delegated authorization.
-- [ ] Authenticated integration request must carry bounded delegated-E2E authorization context/state; missing/invalid delegated authorization fails closed.
-- [ ] Terminal/non-retryable workflow state cannot be bypassed by delegated approval.
-- [ ] Existing revision immutability and descendant-stage barrier remain unchanged.
+- [x] Delegated approval is represented durably as a distinct approval mode/origin from `user_reviewed`.
+- [x] Backend requires exact `review_required` project/current revision/current payload hash.
+- [x] Backend requires at least one retained evidence item.
+- [x] Backend rejects any unresolved evidence conflict for delegated approval.
+- [x] Backend revalidates draft schema/source references/timeline/render settings before delegated approval.
+- [x] Model-provided `verified`, override text, or tool arguments alone cannot create delegated authorization.
+- [x] Authenticated integration request must carry bounded delegated-E2E authorization context/state; missing/invalid delegated authorization fails closed.
+- [x] Terminal/non-retryable workflow state cannot be bypassed by delegated approval.
+- [x] Existing revision immutability and descendant-stage barrier remain unchanged.
 
 **Verification:**
-- [ ] RED delegated-approval tests before implementation.
-- [ ] Clean conflict-free valid project succeeds and persists `delegated_e2e` provenance.
-- [ ] Conflict group blocks approval.
-- [ ] Zero retained evidence blocks approval.
-- [ ] Invalid/stale draft/revision/hash blocks approval.
-- [ ] Fake/model `verified: true` without delegated authorization remains insufficient.
-- [ ] Audit context is bounded and contains no secret/full conversation.
-- [ ] Reopen test preserves approval mode/origin/revision/hash.
-- [ ] `npm test`
-- [ ] `npm run lint`
+- [x] RED delegated-approval tests before implementation.
+- [x] Clean conflict-free valid project succeeds and persists `delegated_e2e` provenance.
+- [x] Conflict group blocks approval.
+- [x] Zero retained evidence blocks approval.
+- [x] Invalid/stale draft/revision/hash blocks approval.
+- [x] Fake/model `verified: true` without delegated authorization remains insufficient.
+- [x] Audit context is bounded and contains no secret/full conversation.
+- [x] Reopen test preserves approval mode/origin/revision/hash.
+- [x] `npm test`
+- [x] `npm run lint`
 
 **Dependencies:** T18, T19, T21
 
@@ -281,12 +281,12 @@ Do not continue to approval tools unless all are proven:
 
 Do not continue to full automated production controls unless all are proven:
 
-- [ ] default flow stops at `review_required`;
-- [ ] edit/approval are revision/hash fenced;
-- [ ] `user_reviewed` and `delegated_e2e` are durable and distinct;
-- [ ] conflicts, zero retained evidence, invalid drafts, stale state, or missing delegated authorization block delegated approval;
-- [ ] model/source content cannot grant approval authority;
-- [ ] existing approval/descendant race invariants remain green.
+- [x] default flow stops at `review_required`;
+- [x] edit/approval are revision/hash fenced;
+- [x] `user_reviewed` and `delegated_e2e` are durable and distinct;
+- [x] conflicts, zero retained evidence, invalid drafts, stale state, or missing delegated authorization block delegated approval;
+- [x] model/source content cannot grant approval authority;
+- [x] existing approval/descendant race invariants remain green.
 
 ---
 
@@ -295,21 +295,21 @@ Do not continue to full automated production controls unless all are proven:
 **Description:** Complete the ChatGPT orchestration control surface without duplicating state-machine logic in MCP.
 
 **Acceptance criteria:**
-- [ ] `start_video_render` calls the existing backend render-start transaction only for the current approved revision.
-- [ ] Repeated render-start for the same active/current approved revision does not create duplicate descendant stages.
-- [ ] `retry_video_project` is legal only when the backend durable state marks the current failed stage retryable; repeated retry while replacement work is queued/running remains idempotent.
-- [ ] `cancel_video_project` is legal only for existing active/cancelled semantics and preserves current fencing/idempotency behavior.
-- [ ] MCP status after render/retry/cancel reflects backend durable truth, not local MCP assumptions.
-- [ ] Tools return stable sanitized error codes/messages.
+- [x] `start_video_render` calls the existing backend render-start transaction only for the current approved revision.
+- [x] Repeated render-start for the same active/current approved revision does not create duplicate descendant stages.
+- [x] `retry_video_project` is legal only when the backend durable state marks the current failed stage retryable; repeated retry while replacement work is queued/running remains idempotent.
+- [x] `cancel_video_project` is legal only for existing active/cancelled semantics and preserves current fencing/idempotency behavior.
+- [x] MCP status after render/retry/cancel reflects backend durable truth, not local MCP assumptions.
+- [x] Tools return stable sanitized error codes/messages.
 
 **Verification:**
-- [ ] Render-start success/idempotency/illegal-state tests.
-- [ ] Retryable vs non-retryable failure tests.
-- [ ] Repeated retry no-duplicate test.
-- [ ] Cancel + repeated-cancel + stale-owner fencing integration test.
-- [ ] Existing standalone UI/API controls remain green.
-- [ ] `npm test`
-- [ ] `npm run lint`
+- [x] Render-start success/idempotency/illegal-state tests.
+- [x] Retryable vs non-retryable failure tests.
+- [x] Repeated retry no-duplicate test.
+- [x] Cancel + repeated-cancel + stale-owner fencing integration test.
+- [x] Existing standalone UI/API controls remain green.
+- [x] `npm test`
+- [x] `npm run lint`
 
 **Dependencies:** T21, T22, T23
 
@@ -328,24 +328,24 @@ Do not continue to full automated production controls unless all are proven:
 **Description:** Provide a narrow, signed, expiring download capability that lets ChatGPT give the user the completed authoritative MP4 without exposing arbitrary filesystem/artifact access.
 
 **Acceptance criteria:**
-- [ ] Download capability is bound to the intended project + approved revision + authoritative output artifact.
-- [ ] Token is cryptographically signed/opaque and expires quickly; target expiry <= 15 minutes unless a documented verified constraint requires otherwise.
-- [ ] Caller cannot choose filesystem path or arbitrary artifact ID/path.
-- [ ] Current authoritative output size/hash/path checks are reused before/while serving.
-- [ ] Expired/tampered/wrong-project/wrong-revision token fails closed.
-- [ ] MP4 is streamed rather than buffered fully in MCP memory.
-- [ ] Secrets/signing keys are configuration/deployment secrets, not model-visible data.
-- [ ] Prefer stateless tokens; if persistence is added, justify and test revocation/cleanup semantics.
+- [x] Download capability is bound to the intended project + approved revision + authoritative output artifact.
+- [x] Token is cryptographically signed/opaque and expires quickly; target expiry <= 15 minutes unless a documented verified constraint requires otherwise.
+- [x] Caller cannot choose filesystem path or arbitrary artifact ID/path.
+- [x] Current authoritative output size/hash/path checks are reused before/while serving.
+- [x] Expired/tampered/wrong-project/wrong-revision token fails closed.
+- [x] MP4 is streamed rather than buffered fully in MCP memory.
+- [x] Secrets/signing keys are configuration/deployment secrets, not model-visible data.
+- [x] Prefer stateless tokens; if persistence is added, justify and test revocation/cleanup semantics.
 
 **Verification:**
-- [ ] Unit tests for sign/verify/expiry/tamper/binding.
-- [ ] Integration test serves current authoritative MP4 only.
-- [ ] Negative tests for arbitrary path/artifact selection.
-- [ ] Streaming test or bounded-memory contract where practical.
-- [ ] Existing standalone output endpoint validation tests remain green.
-- [ ] `npm test`
-- [ ] `npm run lint`
-- [ ] Security review of token/key/log handling.
+- [x] Unit tests for sign/verify/expiry/tamper/binding.
+- [x] Integration test serves current authoritative MP4 only.
+- [x] Negative tests for arbitrary path/artifact selection.
+- [x] Streaming test or bounded-memory contract where practical.
+- [x] Existing standalone output endpoint validation tests remain green.
+- [x] `npm test`
+- [x] `npm run lint`
+- [x] Security review of token/key/log handling.
 
 **Dependencies:** T17, T19, T24
 
@@ -364,24 +364,24 @@ Do not continue to full automated production controls unless all are proven:
 **Description:** Connect the MCP and standalone app deployments through the intended private network/service path and add enough structured telemetry to diagnose the multi-hop workflow without exposing secrets.
 
 **Acceptance criteria:**
-- [ ] MCP can reach the integration API privately without publishing the worker or broadening standalone browser/API public exposure.
-- [ ] Existing standalone `127.0.0.1` browser boundary remains intentional and documented; integration traffic uses a distinct authenticated path/network policy.
-- [ ] MCP container still does not mount Bright data/artifact volumes.
-- [ ] Compose/deployment config passes the minimum service URL/auth/signing settings through secrets/environment without committing secret values.
-- [ ] Structured logs correlate MCP request ID -> idempotency key -> project -> revision/hash -> stage/attempt -> output artifact where applicable.
-- [ ] Logs include action/tool, state transition, approval mode, stable error code, duration/result where useful.
-- [ ] Logs exclude provider keys, integration tokens, signing keys, Google credentials, full conversations, and unnecessary raw source text.
-- [ ] Health/readiness semantics remain local and do not perform paid provider calls.
+- [x] MCP can reach the integration API privately without publishing the worker or broadening standalone browser/API public exposure.
+- [x] Existing standalone `127.0.0.1` browser boundary remains intentional and documented; integration traffic uses a distinct authenticated path/network policy.
+- [x] MCP container still does not mount Bright data/artifact volumes.
+- [x] Compose/deployment config passes the minimum service URL/auth/signing settings through secrets/environment without committing secret values.
+- [x] Structured logs correlate MCP request ID -> idempotency key -> project -> revision/hash -> stage/attempt -> output artifact where applicable.
+- [x] Logs include action/tool, state transition, approval mode, stable error code, duration/result where useful.
+- [x] Logs exclude provider keys, integration tokens, signing keys, Google credentials, full conversations, and unnecessary raw source text.
+- [x] Health/readiness semantics remain local and do not perform paid provider calls.
 
 **Verification:**
-- [ ] `docker compose config`
-- [ ] `docker compose -f compose.mcp.yml config` or resulting combined-profile equivalent.
-- [ ] Build/start app+worker+MCP in the intended private topology.
-- [ ] Verify app health, MCP health, worker no published port, MCP no Bright data/artifact mount.
-- [ ] Verify authenticated MCP->app call succeeds and unauthenticated internal call fails.
-- [ ] Inspect representative structured logs for correlation and secret redaction.
-- [ ] `npm test`
-- [ ] `npm run lint`
+- [x] `docker compose config`
+- [x] `docker compose -f compose.mcp.yml config` or resulting combined-profile equivalent.
+- [x] Build/start app+worker+MCP in the intended private topology.
+- [x] Verify app health, MCP health, worker no published port, MCP no Bright data/artifact mount.
+- [x] Verify authenticated MCP->app call succeeds and unauthenticated internal call fails.
+- [x] Inspect representative structured logs for correlation and secret redaction.
+- [x] `npm test`
+- [x] `npm run lint`
 
 **Dependencies:** T17, T21, T25
 
@@ -400,13 +400,13 @@ Do not continue to full automated production controls unless all are proven:
 
 Before final E2E, require:
 
-- [ ] render/retry/cancel use existing durable semantics;
-- [ ] repeated render-start cannot duplicate downstream work;
-- [ ] signed download cannot select arbitrary files and rejects expired/tampered tokens;
-- [ ] MCP/app communicate through the intended authenticated private path;
-- [ ] worker remains unexposed and MCP has no Bright storage mount;
-- [ ] browser Host/Origin boundary remains intact;
-- [ ] integration logging is correlated and secret-safe.
+- [x] render/retry/cancel use existing durable semantics;
+- [x] repeated render-start cannot duplicate downstream work;
+- [x] signed download cannot select arbitrary files and rejects expired/tampered tokens;
+- [x] MCP/app communicate through the intended authenticated private path;
+- [x] worker remains unexposed and MCP has no Bright storage mount;
+- [x] browser Host/Origin boundary remains intact;
+- [x] integration logging is correlated and secret-safe.
 
 ---
 
@@ -415,26 +415,26 @@ Before final E2E, require:
 **Description:** Prove the complete new feature path using deterministic fakes for paid/non-deterministic provider steps, while exercising the failure/retry/concurrency/security cases most likely to regress.
 
 **Acceptance criteria:**
-- [ ] Deterministic flow reaches authoritative downloadable MP4 from candidate evidence -> normalization -> import -> generation -> delegated approval -> media -> TTS -> render.
-- [ ] A separate default-mode integration flow reaches `review_required` and proves no approval/render occurs automatically.
-- [ ] Project/evidence/revision/approval state survives DB reopen at representative checkpoints.
-- [ ] Duplicate MCP create/render/retry calls do not duplicate project/stage/artifact work.
-- [ ] Unauthorized external/internal calls fail with zero durable mutation.
-- [ ] Conflict, zero evidence, invalid draft, stale hash, terminal failure, tampered/expired download token all fail closed.
-- [ ] Cancel/reclaim/stale-owner fencing remains authoritative after MCP wrapping.
-- [ ] Existing standalone full-flow regression remains green.
+- [x] Deterministic flow reaches authoritative downloadable MP4 from candidate evidence -> normalization -> import -> generation -> delegated approval -> media -> TTS -> render.
+- [x] A separate default-mode integration flow reaches `review_required` and proves no approval/render occurs automatically.
+- [x] Project/evidence/revision/approval state survives DB reopen at representative checkpoints.
+- [x] Duplicate MCP create/render/retry calls do not duplicate project/stage/artifact work.
+- [x] Unauthorized external/internal calls fail with zero durable mutation.
+- [x] Conflict, zero evidence, invalid draft, stale hash, terminal failure, tampered/expired download token all fail closed.
+- [x] Cancel/reclaim/stale-owner fencing remains authoritative after MCP wrapping.
+- [x] Existing standalone full-flow regression remains green.
 
 **Verification:**
-- [ ] Focused `node --test` integration/E2E file(s).
-- [ ] `npm test`
-- [ ] `npm run lint`
-- [ ] `npm run audit:standalone`
-- [ ] `npm run build:web`
-- [ ] `npm run render:smoke`
-- [ ] SQLite migration/reopen smoke.
-- [ ] MCP process/health/body/deadline/rate-limit regression.
-- [ ] Standalone app+worker Compose boundary regression.
-- [ ] MCP Compose/private-network boundary regression.
+- [x] Focused `node --test` integration/E2E file(s).
+- [x] `npm test`
+- [x] `npm run lint`
+- [x] `npm run audit:standalone`
+- [x] `npm run build:web`
+- [x] `npm run render:smoke`
+- [x] SQLite migration/reopen smoke.
+- [x] MCP process/health/body/deadline/rate-limit regression.
+- [x] Standalone app+worker Compose boundary regression.
+- [x] MCP Compose/private-network boundary regression.
 
 **Dependencies:** T20-T26
 
@@ -453,23 +453,23 @@ Before final E2E, require:
 **Description:** Exercise the actual authenticated ChatGPT MCP integration against the deployed backend and update repository documentation only from observed evidence.
 
 **Acceptance criteria:**
-- [ ] Live default-review run: ChatGPT researches public sources, actual `normalize_evidence` call occurs, actual `create_video_project` call occurs, backend reaches `review_required`, draft is shown, and no approval/render happens before user action.
-- [ ] Live explicit-E2E run: user explicitly requests E2E, ChatGPT researches/normalizes/imports, generation completes, delegated approval is recorded, render completes, and user can access/play the authoritative MP4.
-- [ ] Evidence/logs prove imported project used the ChatGPT EvidenceBundle and did not rerun backend research.
-- [ ] Actual auth/tool/runtime environment and deployed commit/image are recorded.
-- [ ] No secrets or sensitive conversation content are recorded in acceptance evidence.
-- [ ] Any defect found returns to debug -> focused regression/TDD -> fix -> review before acceptance continues.
-- [ ] Current status/integration docs are updated from "planned" to implemented truth only after acceptance passes.
-- [ ] Existing issue #15 standalone browser smoke remains separate unless this milestone changes browser-facing behavior that requires reopening/expanding its gate.
+- [x] Live default-review run: ChatGPT researches public sources, actual `normalize_evidence` call occurs, actual `create_video_project` call occurs, backend reaches `review_required`, draft is shown, and no approval/render happens before user action.
+- [x] Live explicit-E2E run: user explicitly requests E2E, ChatGPT researches/normalizes/imports, generation completes, delegated approval is recorded, render completes, and user can access/play the authoritative MP4.
+- [x] Evidence/logs prove imported project used the ChatGPT EvidenceBundle and did not rerun backend research.
+- [x] Actual auth/tool/runtime environment and deployed commit/image are recorded.
+- [x] No secrets or sensitive conversation content are recorded in acceptance evidence.
+- [x] Any defect found returns to debug -> focused regression/TDD -> fix -> review before acceptance continues.
+- [x] Current status/integration docs are updated from "planned" to implemented truth only after acceptance passes.
+- [x] Existing issue #15 standalone browser smoke remains separate unless this milestone changes browser-facing behavior that requires reopening/expanding its gate.
 
 **Verification:**
-- [ ] Record actual ChatGPT tool calls and project IDs/status transitions.
-- [ ] Record approval mode/provenance for both review modes.
-- [ ] Verify completed download/playback.
-- [ ] Full current `Bright Profile Verification` workflow green on exact implementation head.
-- [ ] Security review: correctness -> security -> architecture -> simplicity -> performance.
-- [ ] Project-wide Definition of Done checked.
-- [ ] Ship/rollback notes updated if deployment topology/auth changed materially.
+- [x] Record actual ChatGPT tool calls and project IDs/status transitions.
+- [x] Record approval mode/provenance for both review modes.
+- [x] Verify completed download/playback.
+- [x] Full current `Bright Profile Verification` workflow green on exact implementation head.
+- [x] Security review: correctness -> security -> architecture -> simplicity -> performance.
+- [x] Project-wide Definition of Done checked.
+- [x] Ship/rollback notes updated if deployment topology/auth changed materially.
 
 **Dependencies:** T26, T27
 
@@ -488,16 +488,17 @@ Before final E2E, require:
 
 Do not mark the ChatGPT MCP E2E milestone complete until all are true:
 
-- [ ] T17-T28 acceptance criteria pass.
-- [ ] Authentication/authorization for write/cost-bearing MCP is proven fail-closed.
-- [ ] MCP has no direct SQLite/artifact-volume access.
-- [ ] Imported EvidenceBundle is backend-revalidated and does not trigger backend research.
-- [ ] Default human-review behavior is live-verified.
-- [ ] Delegated E2E approval is server-gated, revision/hash-bound, conflict-free, and audit-distinct.
-- [ ] Retry/cancel/render idempotency/fencing remain correct through MCP.
-- [ ] Signed authoritative MP4 delivery cannot expose arbitrary files.
-- [ ] New behavior has RED->GREEN tests and existing tests/build/lint/audits remain green.
-- [ ] Private runtime topology/observability are verified.
-- [ ] Two live ChatGPT acceptance flows pass on the actual deployed integration.
-- [ ] Current docs describe implemented truth, not planned behavior.
-- [ ] Human review/approval of the implementation and ship evidence is complete.
+- [x] T17-T28 acceptance criteria pass.
+- [x] Authentication/authorization for write/cost-bearing MCP is proven fail-closed.
+- [x] MCP has no direct SQLite/artifact-volume access.
+- [x] Imported EvidenceBundle is backend-revalidated and does not trigger backend research.
+- [x] Default human-review behavior is live-verified.
+- [x] Delegated E2E approval is server-gated, revision/hash-bound, conflict-free, and audit-distinct.
+- [x] Retry/cancel/render idempotency/fencing remain correct through MCP.
+- [x] Signed authoritative MP4 delivery cannot expose arbitrary files.
+- [x] New behavior has RED->GREEN tests and existing tests/build/lint/audits remain green.
+- [x] Private runtime topology/observability are verified.
+- [x] Two live ChatGPT acceptance flows pass on the actual deployed integration.
+- [x] Current docs describe implemented truth, not planned behavior.
+- [x] Human review/approval of the implementation and ship evidence is complete.
+

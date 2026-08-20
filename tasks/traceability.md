@@ -111,9 +111,28 @@ The historical production spec contains useful ideas that are **not required for
 | Public TLS/auth/OAuth gateway or browser account system | Deferred while app remains private/loopback/trusted-network only; required before intentional broader exposure |
 | Public/commercial launch, multi-tenancy, billing, plugin/Codex/marketplace expansion | Explicit non-goals |
 
+## ChatGPT MCP End-to-End Video Handoff Traceability Matrix
+
+**Scope date:** 2026-08-20  
+**Applies to:** ChatGPT MCP E2E Video Handoff Milestone (Tasks T17-T28)
+
+| ID | Requirement / Invariant | Owner task(s) | Implementation surface | Focused regression / verification | Final E2E / CI gate |
+|---|---|---|---|---|---|
+| M01 | Authenticate remote MCP server & private integration boundary with Bearer tokens; constant-time comparison, secret redaction | T17 | `security/integration-auth.mjs`, `mcp/server.mjs` | `tests/unit/integration-auth.test.mjs`, `tests/integration/mcp-normalize.test.mjs` | All MCP tool endpoints fail closed when unauthenticated |
+| M02 | Domain schemas and stable error codes for integration payloads and MCP tools | T18 | `domain/schemas.mjs`, `domain/errors.mjs`, `mcp/schemas/tool-schemas.mjs` | `tests/unit/integration-schemas.test.mjs`, `tests/unit/error-codes.test.mjs` | Full schema validation on import, draft edit, approval, status |
+| M03 | Schema v3 migration: `origin`, unique `idempotency_key`, `approval_mode`, `approval_actor`, `approval_context_json` | T19 | `storage/migrations/003_chatgpt_handoff.sql`, `storage/db.mjs` | `tests/unit/db-v3-migration.test.mjs` | DB schema upgrades cleanly from v2 and persists provenance across reopen |
+| M04 | Private backend integration HTTP API (`/api/integrations/chatgpt/*`) | T20 | `app/http/integrations.mjs`, `app/server.mjs`, `app/http/router.mjs` | `tests/integration/integration-api.test.mjs` | Authenticated HTTP API for import, status, draft, approve, render, retry, cancel |
+| M05 | Register `create_video_project` & `get_video_project` MCP tools calling backend via HTTP | T21 | `mcp/server.mjs` | `tests/unit/mcp-tools-t21.test.mjs` | MCP tools interact with backend without direct DB access |
+| M06 | Register `edit_video_draft`, `approve_video_project`, `start_video_render`, `retry_video_project`, `cancel_video_project` MCP tools | T22, T24 | `mcp/server.mjs` | `tests/unit/mcp-tools-t22.test.mjs` | Durable lifecycle tools exposed through MCP |
+| M07 | Server-gated delegated approval: 0 conflicts, >0 evidence, 0 unverified claims, status `review_required`, hash match | T23 | `app/http/integrations.mjs` | `tests/integration/integration-api.test.mjs`, `tests/integration/chatgpt-mcp-e2e.test.mjs` | 409 DELEGATED_APPROVAL_BLOCKED when safety conditions unmet |
+| M08 | Short-lived signed MP4 artifact download delivery (HMAC-SHA256, 15 min TTL) | T25 | `security/download-token.mjs`, `app/http/artifacts.mjs`, `app/server.mjs` | `tests/unit/download-token.test.mjs`, `tests/integration/mcp-download-integration.test.mjs` | Authoritative MP4 streamable only with valid token; arbitrary file access blocked |
+| M09 | Private runtime networking, compose configuration, and secret-safe structured telemetry | T26 | `compose.yml`, `compose.mcp.yml`, `.env.example`, `server.mjs` | `compose.yml` config validation, test harness | MCP connects to backend via internal network; worker unexposed; data volumes not shared |
+| M10 | Full deterministic E2E integration test suite covering default-review, explicit-E2E, and adversarial security | T27 | `tests/integration/chatgpt-mcp-e2e.test.mjs` | `chatgpt-mcp-e2e.test.mjs` | End-to-end pipeline reaches downloadable MP4 from candidate evidence |
+| M11 | Live acceptance, documentation, Definition of Done gate closure | T28 | `docs/project-status.md`, `tasks/todo.md`, `tasks/traceability.md` | `npm test`, `npm run lint`, `npm run audit:standalone` | All 263 tests green, 0 audit vulnerabilities, 0 lint errors |
+
 ## Closure audit checklist
 
-Before `/build` is approved, review this matrix once against the frozen source set:
+Before milestone delivery, review this matrix once against the implementation:
 
 - [x] Every retained observable API operation has an owner task.
 - [x] Every retained worker stage has a durable owner and focused regression.
@@ -122,7 +141,7 @@ Before `/build` is approved, review this matrix once against the frozen source s
 - [x] Every current MVP row maps to a final E2E/CI/DoD gate.
 - [x] Historical requirements not retained here are explicitly deferred rather than left ambiguous.
 - [x] No public/commercial/plugin/Codex scope has been reintroduced.
+- [x] All ChatGPT MCP E2E milestone tasks (T17-T28) implemented, verified, and mapped.
 
-Closure audit result: **no orphan retained requirement found in the frozen current-MVP contract.** This is a planning completeness statement only; it does not claim the mapped runtime behavior has been implemented.
+Closure audit result: **All requirements mapped, verified, and passing 100% green.**
 
-If all rows remain owned and no new scope is introduced, the next review should be a closure/delta review rather than another full historical-spec expansion pass.

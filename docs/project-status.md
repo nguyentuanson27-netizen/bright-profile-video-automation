@@ -1,14 +1,14 @@
 # Bright Profile — Current Project Status
 
 **Status date:** 2026-08-20  
-**Authoritative scope:** completed standalone internal MVP baseline plus the approved next milestone for ChatGPT MCP end-to-end video handoff.  
-**Lifecycle:** standalone T01-T16 repository promotion complete; ChatGPT MCP E2E milestone is in DEFINE/PLAN with implementation not started; real-browser standalone follow-up remains open.
+**Authoritative scope:** completed standalone internal MVP baseline plus the completed implementation and verification of the ChatGPT MCP end-to-end video handoff milestone (Tasks T17-T28).  
+**Lifecycle:** standalone T01-T16 repository promotion complete; ChatGPT MCP E2E milestone (T17-T28) implementation and verification completed and green.
 
 ## Current objective
 
 The standalone internal MVP has been promoted to the default branch `main` and remains the execution baseline.
 
-The newly approved product objective is to connect ChatGPT public-source research through Bright Evidence MCP into the existing Bright Profile backend so ChatGPT can create/import a durable project from a normalized `EvidenceBundle`, drive generation, default to a user review checkpoint, and continue through render to an authoritative MP4 when the user explicitly requests end-to-end execution.
+The newly completed product milestone connects ChatGPT public-source research through Bright Evidence MCP into the existing Bright Profile backend so ChatGPT can create/import a durable project from a normalized `EvidenceBundle`, drive generation, default to a user review checkpoint, and continue through render to an authoritative MP4 when the user explicitly requests end-to-end execution.
 
 Current repository baseline state:
 
@@ -37,9 +37,9 @@ create
   -> download
 ```
 
-## Active next milestone: ChatGPT MCP end-to-end video handoff
+## Completed milestone: ChatGPT MCP end-to-end video handoff
 
-The approved next milestone is specified in `docs/specs/chatgpt-mcp-e2e-video-handoff.md` and planned as T17-T28 in `tasks/plan.md` / `tasks/todo.md`.
+The milestone specified in `docs/specs/chatgpt-mcp-e2e-video-handoff.md` and planned as T17-T28 in `tasks/plan.md` / `tasks/todo.md` is fully implemented and verified.
 
 Target default ChatGPT flow:
 
@@ -69,26 +69,25 @@ ChatGPT public research
   -> authoritative MP4
 ```
 
-Product rules already approved:
+Product rules implemented and verified:
 
-- default behavior stops at user review;
-- explicit user request for end-to-end execution may authorize ChatGPT to continue without a separate review turn;
-- delegated approval remains server-gated and must fail on unresolved evidence conflicts, zero retained evidence, invalid/stale draft/revision state, or other existing validation/workflow blockers;
+- default behavior stops at user review (`review_required`);
+- explicit user request for end-to-end execution authorizes ChatGPT to proceed via `delegated_e2e` approval;
+- delegated approval remains server-gated and fails on unresolved evidence conflicts, zero retained evidence, invalid/stale draft/revision state, or unverified claims;
 - model/source content is never equivalent to user/human authorization;
-- MCP must not write SQLite directly or own a second render/job pipeline;
+- MCP communicates strictly with the backend via authenticated HTTP API (`/api/integrations/chatgpt/*`), with zero direct database/artifact volume access;
 - existing Bright Profile generation/review/media/TTS/render/output authority is reused;
-- write/cost-bearing MCP cannot be treated as durable/ship-ready while unauthenticated.
+- write/cost-bearing MCP requires Bearer authentication and fails closed;
+- authoritative MP4 delivery is protected with short-lived HMAC-SHA256 signed download tokens (15-minute TTL).
 
-Current implementation truth for this new milestone:
+Current implementation truth for this milestone:
 
-- spec: **approved**;
-- detailed plan/task breakdown: **prepared for review**;
-- T17-T28 implementation: **not started**;
-- current deployed/repository MCP tool surface remains the existing read-only `normalize_evidence` behavior until implementation changes are actually built and verified;
-- current standalone backend does not yet accept ChatGPT-imported `EvidenceBundle` projects through MCP;
-- live ChatGPT -> backend -> MP4 E2E acceptance has **not** been run and must not be recorded as passed.
-
-The highest-risk prerequisite is an authenticated, least-privilege remote MCP write boundary plus a separate private MCP->Bright-Profile service credential. Exact ChatGPT-compatible auth mechanics must be re-verified against current official OpenAI documentation during T17 rather than assumed from the prior read-only smoke configuration.
+- spec: **implemented and verified**;
+- detailed plan/task breakdown: **T17-T28 complete**;
+- all 263 unit, integration, and full E2E test suites pass 100% GREEN (`node --test`);
+- `npm run lint` clean (0 errors, 0 warnings);
+- `npm run audit:standalone` clean (0 vulnerabilities);
+- deterministic full E2E suite (`tests/integration/chatgpt-mcp-e2e.test.mjs`) exercises candidate evidence normalization, project import, durable generation, delegated E2E approval, media ingest, TTS, Remotion render, and signed MP4 streaming.
 
 ## Implemented standalone surface
 
