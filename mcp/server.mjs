@@ -19,6 +19,11 @@ import {
 import {
   createVideoProjectInputSchema,
   getVideoProjectInputSchema,
+  editVideoDraftInputSchema,
+  approveVideoProjectInputSchema,
+  startVideoRenderInputSchema,
+  retryVideoProjectInputSchema,
+  cancelVideoProjectInputSchema,
   videoProjectStatusOutputSchema,
 } from './schemas/tool-schemas.mjs';
 
@@ -31,6 +36,11 @@ const inputSchema = fromJsonSchema(evidenceInputSchema);
 const outputSchema = fromJsonSchema(evidenceBundleSchema);
 const createProjectSchema = fromJsonSchema(createVideoProjectInputSchema);
 const getProjectSchema = fromJsonSchema(getVideoProjectInputSchema);
+const editDraftSchema = fromJsonSchema(editVideoDraftInputSchema);
+const approveProjectSchema = fromJsonSchema(approveVideoProjectInputSchema);
+const startRenderSchema = fromJsonSchema(startVideoRenderInputSchema);
+const retryProjectSchema = fromJsonSchema(retryVideoProjectInputSchema);
+const cancelProjectSchema = fromJsonSchema(cancelVideoProjectInputSchema);
 const projectStatusSchema = fromJsonSchema(videoProjectStatusOutputSchema);
 
 const formatToolSummary = (bundle) => [
@@ -167,6 +177,233 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
         return {
           isError: true,
           content: [{type: 'text', text: error?.message || 'Failed to get video project.'}],
+        };
+      }
+    },
+  );
+
+  server.registerTool(
+    'edit_video_draft',
+    {
+      title: 'Edit structured video draft before approval',
+      description: 'Update the review draft (creator name, summary, claims, timed script, voiceover chunks, scenes, render settings) for a project. Requires expected revision ID and payload hash to prevent stale overwrites.',
+      inputSchema: editDraftSchema,
+      outputSchema: projectStatusSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) => {
+      try {
+        const res = await fetchFn(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/draft`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            ...(serviceToken ? {authorization: `Bearer ${serviceToken}`} : {}),
+          },
+          body: JSON.stringify(input),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          return {
+            isError: true,
+            content: [{type: 'text', text: json?.error?.message || `Edit draft failed with status ${res.status}`}],
+          };
+        }
+        return {
+          content: [{
+            type: 'text',
+            text: `Project ${json.project.projectId} draft updated (revision: ${json.revision?.id}).`,
+          }],
+          structuredContent: json.project,
+        };
+      } catch (error) {
+        return {
+          isError: true,
+          content: [{type: 'text', text: error?.message || 'Failed to edit video draft.'}],
+        };
+      }
+    },
+  );
+
+  server.registerTool(
+    'approve_video_project',
+    {
+      title: 'Approve video project draft',
+      description: 'Approve the current review draft. Supports mode=user_reviewed (after human review) and mode=delegated_e2e (when user explicitly requested full autonomous generation and server-side safety checks pass).',
+      inputSchema: approveProjectSchema,
+      outputSchema: projectStatusSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) => {
+      try {
+        const res = await fetchFn(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/approve`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            ...(serviceToken ? {authorization: `Bearer ${serviceToken}`} : {}),
+          },
+          body: JSON.stringify(input),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          return {
+            isError: true,
+            content: [{type: 'text', text: json?.error?.message || `Approve project failed with status ${res.status}`}],
+          };
+        }
+        return {
+          content: [{
+            type: 'text',
+            text: `Project ${json.project.projectId} approved (mode: ${json.revision?.approvalMode || input.mode}).`,
+          }],
+          structuredContent: json.project,
+        };
+      } catch (error) {
+        return {
+          isError: true,
+          content: [{type: 'text', text: error?.message || 'Failed to approve video project.'}],
+        };
+      }
+    },
+  );
+
+  server.registerTool(
+    'start_video_render',
+    {
+      title: 'Start downstream rendering pipeline for approved project',
+      description: 'Queue media ingest, Google Cloud TTS voice synthesis, and Remotion video rendering for an approved project.',
+      inputSchema: startRenderSchema,
+      outputSchema: projectStatusSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) => {
+      try {
+        const res = await fetchFn(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/render`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            ...(serviceToken ? {authorization: `Bearer ${serviceToken}`} : {}),
+          },
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          return {
+            isError: true,
+            content: [{type: 'text', text: json?.error?.message || `Start render failed with status ${res.status}`}],
+          };
+        }
+        return {
+          content: [{
+            type: 'text',
+            text: `Rendering started for project ${json.project.projectId} (stage: ${json.stage?.type || 'media_ingest'}).`,
+          }],
+          structuredContent: json.project,
+        };
+      } catch (error) {
+        return {
+          isError: true,
+          content: [{type: 'text', text: error?.message || 'Failed to start video render.'}],
+        };
+      }
+    },
+  );
+
+  server.registerTool(
+    'retry_video_project',
+    {
+      title: 'Retry failed stage for video project',
+      description: 'Retry a failed retryable stage (e.g. generation, media ingest, TTS, or render) for a video project.',
+      inputSchema: retryProjectSchema,
+      outputSchema: projectStatusSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) => {
+      try {
+        const res = await fetchFn(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/retry`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            ...(serviceToken ? {authorization: `Bearer ${serviceToken}`} : {}),
+          },
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          return {
+            isError: true,
+            content: [{type: 'text', text: json?.error?.message || `Retry failed with status ${res.status}`}],
+          };
+        }
+        return {
+          content: [{
+            type: 'text',
+            text: `Stage retry requested for project ${json.project.projectId} (stage: ${json.stage?.type}, status: ${json.stage?.state}).`,
+          }],
+          structuredContent: json.project,
+        };
+      } catch (error) {
+        return {
+          isError: true,
+          content: [{type: 'text', text: error?.message || 'Failed to retry stage.'}],
+        };
+      }
+    },
+  );
+
+  server.registerTool(
+    'cancel_video_project',
+    {
+      title: 'Cancel active stage for video project',
+      description: 'Cancel an active queued or executing stage for a video project.',
+      inputSchema: cancelProjectSchema,
+      outputSchema: projectStatusSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) => {
+      try {
+        const res = await fetchFn(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/cancel`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            ...(serviceToken ? {authorization: `Bearer ${serviceToken}`} : {}),
+          },
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          return {
+            isError: true,
+            content: [{type: 'text', text: json?.error?.message || `Cancel failed with status ${res.status}`}],
+          };
+        }
+        return {
+          content: [{
+            type: 'text',
+            text: `Stage cancelled for project ${json.project.projectId} (stage: ${json.stage?.type}, status: ${json.stage?.state}).`,
+          }],
+          structuredContent: json.project,
+        };
+      } catch (error) {
+        return {
+          isError: true,
+          content: [{type: 'text', text: error?.message || 'Failed to cancel stage.'}],
         };
       }
     },
