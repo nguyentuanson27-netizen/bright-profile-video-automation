@@ -168,11 +168,9 @@ jobs:
           mkdir -p .secrets
           printf '{}\n' > .secrets/google-application-credentials.json
           OPENAI_API_KEY=test-key docker compose -f compose.yml build app worker
-          OPENAI_API_KEY=test-key docker compose -f compose.yml up -d app worker
+          OPENAI_API_KEY=test-key docker compose -f compose.yml up -d --no-deps app
           app_container="$(docker compose -f compose.yml ps -q app)"
-          worker_container="$(docker compose -f compose.yml ps -q worker)"
           test -n "$app_container"
-          test -n "$worker_container"
           for attempt in $(seq 1 30); do
             status="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$app_container")"
             if [ "$status" = healthy ]; then break; fi
@@ -183,6 +181,10 @@ jobs:
             fi
             sleep 1
           done
+          test "$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$app_container")" = healthy
+          OPENAI_API_KEY=test-key docker compose -f compose.yml up -d worker
+          worker_container="$(docker compose -f compose.yml ps -q worker)"
+          test -n "$worker_container"
           test "$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$app_container")" = healthy
           test "$(docker compose -f compose.yml exec -T app id -u)" != 0
           test "$(docker inspect --format='{{.State.Running}}' "$worker_container")" = true
