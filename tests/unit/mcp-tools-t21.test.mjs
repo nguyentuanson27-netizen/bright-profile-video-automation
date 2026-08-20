@@ -19,6 +19,7 @@ const rpc = async (url, body, extraHeaders = {}) => {
     headers: {
       accept: 'application/json, text/event-stream',
       'content-type': 'application/json',
+      authorization: 'Bearer test-mcp-token-123456',
       ...extraHeaders,
     },
     body: JSON.stringify(body),
@@ -43,6 +44,7 @@ test('MCP server registers create_video_project and get_video_project in tools/l
   const server = createBrightHttpServer({
     env: {
       MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+      MCP_AUTH_TOKEN: 'test-mcp-token-123456',
       BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
       BRIGHT_INTEGRATION_TOKEN: 'service-token',
     },
@@ -99,6 +101,7 @@ test('create_video_project tool calls private backend and returns structured pro
   const customServer = createBrightHttpServer({
     env: {
       MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+      MCP_AUTH_TOKEN: 'test-mcp-token-123456',
       BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
       BRIGHT_INTEGRATION_TOKEN: 'service-token-xyz',
     },
@@ -177,6 +180,7 @@ test('get_video_project tool calls private backend and returns structured projec
   const customServer = createBrightHttpServer({
     env: {
       MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+      MCP_AUTH_TOKEN: 'test-mcp-token-123456',
       BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
       BRIGHT_INTEGRATION_TOKEN: 'service-token-xyz',
     },

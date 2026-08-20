@@ -650,27 +650,35 @@ export function createBrightHttpServer({
         return;
       }
 
-      const expectedAuthToken = String(env.MCP_AUTH_TOKEN || '').trim();
-      if (expectedAuthToken) {
-        const token = extractBearerToken(req.headers.authorization);
-        if (!token || !compareTokensConstantTime(token, expectedAuthToken)) {
-          writeJsonBeforeBodyConsumed(req, res, 401, {
-            error: {
-              code: 'UNAUTHORIZED',
-              message: 'Unauthorized',
-              requestId,
-            },
-          }, requestId);
-          return;
-        }
-      }
-
       const method = req.method || 'GET';
       if (['GET', 'HEAD'].includes(method) && requestDeclaresBody(req)) {
         writeJsonBeforeBodyConsumed(req, res, 400, {
           error: {
             code: 'REQUEST_BODY_NOT_ALLOWED',
             message: 'Request body is not allowed for this method',
+            requestId,
+          },
+        }, requestId);
+        return;
+      }
+
+      const expectedAuthToken = String(env.MCP_AUTH_TOKEN || '').trim();
+      if (expectedAuthToken.length === 0) {
+        writeJsonBeforeBodyConsumed(req, res, 401, {
+          error: {
+            code: 'AUTH_NOT_CONFIGURED',
+            message: 'MCP server authentication is not configured',
+            requestId,
+          },
+        }, requestId);
+        return;
+      }
+      const token = extractBearerToken(req.headers.authorization);
+      if (!token || !compareTokensConstantTime(token, expectedAuthToken)) {
+        writeJsonBeforeBodyConsumed(req, res, 401, {
+          error: {
+            code: 'UNAUTHORIZED',
+            message: 'Unauthorized',
             requestId,
           },
         }, requestId);

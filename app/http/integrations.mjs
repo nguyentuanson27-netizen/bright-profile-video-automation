@@ -12,6 +12,10 @@ import {
   generateDownloadToken,
   verifyDownloadToken,
 } from '../../security/download-token.mjs';
+import {
+  issueDelegationGrant,
+  verifyDelegationGrant,
+} from '../../security/delegation-grant.mjs';
 import {assertValidBearerToken} from '../../security/integration-auth.mjs';
 
 const invalidRequest = (message) => new AppError('INVALID_REQUEST', message, {status: 400});
@@ -285,6 +289,36 @@ export const createIntegrationsApi = ({
       };
     },
 
+    createDelegationGrant(projectId) {
+      const project = requireProject(projectId);
+      if (project.status !== 'review_required' || !project.currentRevisionId) {
+        throw new AppError(
+          ErrorCodes.DELEGATED_APPROVAL_BLOCKED,
+          'Delegation grant can only be issued for projects in review_required status',
+          {status: 409},
+        );
+      }
+      const revision = repos.revisions.get(project.currentRevisionId);
+      if (!revision) throw new AppError(ErrorCodes.REVISION_NOT_FOUND, 'Revision not found', {status: 404});
+
+      const grant = issueDelegationGrant({
+        projectId: project.id,
+        revisionId: revision.id,
+        payloadHash: revision.payloadHash,
+        secret: serviceToken,
+        ttlSeconds: 900,
+        nowMs: nowMs(),
+      });
+
+      return {
+        projectId: project.id,
+        revisionId: revision.id,
+        payloadHash: revision.payloadHash,
+        delegationGrant: grant,
+        expiresInSeconds: 900,
+      };
+    },
+
     approveProject(projectId, body) {
       const project = requireProject(projectId);
       const input = validateApproveProjectInput(body);
@@ -305,6 +339,23 @@ export const createIntegrationsApi = ({
       }
 
       if (input.mode === APPROVAL_MODES.DELEGATED_E2E) {
+        if (!input.delegationGrant) {
+          throw new AppError(
+            ErrorCodes.DELEGATED_APPROVAL_BLOCKED,
+            'Delegated approval blocked: missing trusted delegation grant',
+            {status: 409},
+          );
+        }
+
+        verifyDelegationGrant({
+          grant: input.delegationGrant,
+          projectId,
+          revisionId: currentRevision.id,
+          payloadHash: currentRevision.payloadHash,
+          secret: serviceToken,
+          nowMs: nowMs(),
+        });
+
         // Server-side safety checks
         if (project.status !== 'review_required') {
           throw new AppError(

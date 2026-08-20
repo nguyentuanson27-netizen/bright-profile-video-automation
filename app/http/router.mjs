@@ -3,7 +3,7 @@ const projectOutputPattern = /^\/api\/projects\/([^/]+)\/artifacts\/output$/;
 const projectPattern = /^\/api\/projects\/([^/]+)$/;
 
 const integrationImportPattern = /^\/api\/integrations\/chatgpt\/projects\/import$/;
-const integrationActionPattern = /^\/api\/integrations\/chatgpt\/projects\/([^/]+)\/(draft|approve|render|retry|cancel)$/;
+const integrationActionPattern = /^\/api\/integrations\/chatgpt\/projects\/([^/]+)\/(draft|approve|render|retry|cancel|delegation-grant)$/;
 const integrationProjectPattern = /^\/api\/integrations\/chatgpt\/projects\/([^/]+)$/;
 const integrationArtifactPattern = /^\/api\/integrations\/chatgpt\/artifacts\/([^/]+)\/download$/;
 
@@ -35,6 +35,7 @@ export const matchRoute = (method, pathname) => {
     if (!id) return null;
     if (method === 'POST') {
       if (action === 'draft') return {name: 'integrations.chatgpt.projects.draft.edit', id};
+      if (action === 'delegation-grant') return {name: 'integrations.chatgpt.projects.delegationGrant', id};
       return {name: `integrations.chatgpt.projects.${action}`, id};
     }
     return null;

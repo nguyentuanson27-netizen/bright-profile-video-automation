@@ -8,6 +8,7 @@ const start = async (maxBodyBytes) => {
   const server = createBrightHttpServer({
     env: {
       MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+      MCP_AUTH_TOKEN: 'test-mcp-token-123456',
       MCP_MAX_BODY_BYTES: maxBodyBytes,
     },
     log: () => {},
@@ -29,6 +30,7 @@ const postStatus = (url, body) => new Promise((resolve, reject) => {
       host: parsed.host,
       'content-type': 'application/json',
       'content-length': Buffer.byteLength(body),
+      authorization: 'Bearer test-mcp-token-123456',
     },
   }, (res) => {
     res.resume();

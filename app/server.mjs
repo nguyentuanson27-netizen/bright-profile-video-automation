@@ -191,6 +191,7 @@ export const createAppServer = ({
   mediaIngestMaxAttempts = 4,
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
   integrationToken,
+  allowedIntegrationHosts = ['127.0.0.1', 'localhost', 'app', '::1', '[::1]'],
 } = {}) => {
   if (!db || typeof db.prepare !== 'function') throw new TypeError('database is required');
   if (!dataDir) throw new TypeError('dataDir is required');
@@ -200,6 +201,10 @@ export const createAppServer = ({
   if (typeof requestIdFactory !== 'function') throw new TypeError('requestIdFactory is required');
   const resolvedDataDir = resolve(dataDir);
   const resolvedWebDir = webDir ? resolve(webDir) : undefined;
+  const integrationHostsSet = new Set([
+    ...LOOPBACK_HOSTS,
+    ...(allowedIntegrationHosts || []).map((h) => String(h).trim().toLowerCase()).filter(Boolean),
+  ]);
   const projects = createProjectsApi({
     repos,
     jobs,
@@ -238,9 +243,18 @@ export const createAppServer = ({
       ? requestIdValue.slice(0, 200)
       : randomUUID();
     try {
-      assertBrowserBoundary(req);
       const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
       const route = matchRoute(req.method ?? 'GET', pathname);
+
+      if (route && (route.name.startsWith('health.') || route.name.startsWith('integrations.'))) {
+        const host = hostnameFromAuthority(req.headers.host);
+        if (!host || !integrationHostsSet.has(host)) {
+          throw new AppError('HOST_NOT_ALLOWED', 'Request Host is not allowed', {status: 403});
+        }
+      } else {
+        assertBrowserBoundary(req);
+      }
+
       if (!route) {
         if (await tryServeWeb(req, res, pathname, resolvedWebDir)) return undefined;
         return json(res, 404, {error: {code: 'NOT_FOUND', message: 'Route not found'}, requestId}, requestId);
@@ -270,8 +284,8 @@ export const createAppServer = ({
         if (route.name === 'integrations.chatgpt.artifacts.download') {
           const urlObj = new URL(req.url ?? '/', 'http://localhost');
           const token = urlObj.searchParams.get('token');
-          integrations.assertDownloadAuth(authHeader, token, route.id);
-          const output = await artifacts.getArtifactById(route.id);
+          const tokenClaims = integrations.assertDownloadAuth(authHeader, token, route.id);
+          const output = await artifacts.getArtifactById(route.id, tokenClaims);
           sendOutput(res, output, requestId);
           return undefined;
         }
@@ -293,6 +307,10 @@ export const createAppServer = ({
         if (route.name === 'integrations.chatgpt.projects.approve') {
           const body = await readJsonBody(req, maxBodyBytes);
           return json(res, 200, {...integrations.approveProject(route.id, body), requestId}, requestId);
+        }
+        if (route.name === 'integrations.chatgpt.projects.delegationGrant') {
+          const result = integrations.createDelegationGrant(route.id);
+          return json(res, 200, {...result, requestId}, requestId);
         }
         if (route.name === 'integrations.chatgpt.projects.render') {
           const result = integrations.startRender(route.id);

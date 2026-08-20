@@ -7,7 +7,7 @@ import {createBrightHttpServer} from '../../mcp/server.mjs';
 const start = async ({env = {}, handler} = {}) => {
   const server = createBrightHttpServer({
     ...(handler ? {handler} : {}),
-    env: {MCP_ALLOWED_HOSTS: '127.0.0.1,localhost', ...env},
+    env: {MCP_ALLOWED_HOSTS: '127.0.0.1,localhost', MCP_AUTH_TOKEN: 'test-mcp-token-123456', ...env},
     log: () => {},
   });
   server.listen(0, '127.0.0.1');
@@ -61,7 +61,10 @@ test('overflow MCP_REQUEST_TIMEOUT_MS falls back instead of becoming an immediat
 
   const response = await fetch(url, {
     method: 'POST',
-    headers: {'content-type': 'application/json'},
+    headers: {
+      'content-type': 'application/json',
+      authorization: 'Bearer test-mcp-token-123456',
+    },
     body: '{}',
   });
   const body = await response.json();

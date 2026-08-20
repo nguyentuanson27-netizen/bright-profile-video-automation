@@ -154,7 +154,52 @@ test('GET /api/integrations/chatgpt/artifacts/:artifactId/download streams autho
   assert.equal(invalidRes.status, 401);
   assert.equal(invalidRes.json?.error?.code, 'DOWNLOAD_TOKEN_INVALID');
 
-  // 4. Download without any auth fails
+  // 4. Download with token for wrong project fails
+  const wrongProjectToken = generateDownloadToken({
+    projectId: 'wrong-proj-999',
+    revisionId: 'rev-down-1',
+    artifactId: art.id,
+    secret: serviceToken,
+    ttlSeconds: 600,
+  });
+  const wrongProjRes = await request({
+    port,
+    path: `/api/integrations/chatgpt/artifacts/${art.id}/download?token=${encodeURIComponent(wrongProjectToken)}`,
+  });
+  assert.equal(wrongProjRes.status, 401);
+  assert.equal(wrongProjRes.json?.error?.code, 'DOWNLOAD_TOKEN_INVALID');
+
+  // 5. Download with token for wrong revision fails
+  const wrongRevToken = generateDownloadToken({
+    projectId: 'proj-down-1',
+    revisionId: 'wrong-rev-999',
+    artifactId: art.id,
+    secret: serviceToken,
+    ttlSeconds: 600,
+  });
+  const wrongRevRes = await request({
+    port,
+    path: `/api/integrations/chatgpt/artifacts/${art.id}/download?token=${encodeURIComponent(wrongRevToken)}`,
+  });
+  assert.equal(wrongRevRes.status, 401);
+  assert.equal(wrongRevRes.json?.error?.code, 'DOWNLOAD_TOKEN_INVALID');
+
+  // 6. Download with expired token fails
+  const expiredToken = generateDownloadToken({
+    projectId: 'proj-down-1',
+    revisionId: 'rev-down-1',
+    artifactId: art.id,
+    secret: serviceToken,
+    ttlSeconds: -10,
+  });
+  const expiredRes = await request({
+    port,
+    path: `/api/integrations/chatgpt/artifacts/${art.id}/download?token=${encodeURIComponent(expiredToken)}`,
+  });
+  assert.equal(expiredRes.status, 401);
+  assert.equal(expiredRes.json?.error?.code, 'DOWNLOAD_TOKEN_EXPIRED');
+
+  // 7. Download without any auth fails
   const unauthRes = await request({
     port,
     path: `/api/integrations/chatgpt/artifacts/${art.id}/download`,

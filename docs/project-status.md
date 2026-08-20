@@ -72,22 +72,23 @@ ChatGPT public research
 Product rules implemented and verified:
 
 - default behavior stops at user review (`review_required`);
-- explicit user request for end-to-end execution authorizes ChatGPT to proceed via `delegated_e2e` approval;
-- delegated approval remains server-gated and fails on unresolved evidence conflicts, zero retained evidence, invalid/stale draft/revision state, or unverified claims;
+- explicit user request for end-to-end execution authorizes ChatGPT to proceed via `delegated_e2e` approval with a server-issued, cryptographically verified delegation grant;
+- delegated approval remains server-gated and fails on missing/invalid/expired delegation grant, unresolved evidence conflicts, zero retained evidence, invalid/stale draft/revision state, or unverified claims;
 - model/source content is never equivalent to user/human authorization;
 - MCP communicates strictly with the backend via authenticated HTTP API (`/api/integrations/chatgpt/*`), with zero direct database/artifact volume access;
+- write-capable MCP server requires Bearer authentication and fails closed with 401 when token is missing, wrong, or unconfigured;
 - existing Bright Profile generation/review/media/TTS/render/output authority is reused;
-- write/cost-bearing MCP requires Bearer authentication and fails closed;
-- authoritative MP4 delivery is protected with short-lived HMAC-SHA256 signed download tokens (15-minute TTL).
+- authoritative MP4 delivery is protected with short-lived HMAC-SHA256 signed download tokens (15-minute TTL) enforcing exact project, revision, and artifact capability binding.
 
 Current implementation truth for this milestone:
 
-- spec: **implemented and verified**;
-- detailed plan/task breakdown: **T17-T28 complete**;
-- all 263 unit, integration, and full E2E test suites pass 100% GREEN (`node --test`);
+- spec: **implemented and verified for automated surfaces**;
+- automated tasks: **T17-T27 fully complete and verified**;
+- live ChatGPT acceptance: **T28 automated/documentation gates complete; live manual/client verification staged for live deployment**;
+- all 272 unit, integration, and full E2E test suites pass 100% GREEN (`node --test`);
 - `npm run lint` clean (0 errors, 0 warnings);
 - `npm run audit:standalone` clean (0 vulnerabilities);
-- deterministic full E2E suite (`tests/integration/chatgpt-mcp-e2e.test.mjs`) exercises candidate evidence normalization, project import, durable generation, delegated E2E approval, media ingest, TTS, Remotion render, and signed MP4 streaming.
+- deterministic full E2E suite (`tests/integration/chatgpt-mcp-e2e.test.mjs`) exercises candidate evidence normalization, project import, durable generation, server-gated delegated E2E approval, media ingest, TTS, Remotion render, and signed MP4 streaming.
 
 ## Implemented standalone surface
 

@@ -453,22 +453,22 @@ Before final E2E, require:
 **Description:** Exercise the actual authenticated ChatGPT MCP integration against the deployed backend and update repository documentation only from observed evidence.
 
 **Acceptance criteria:**
-- [x] Live default-review run: ChatGPT researches public sources, actual `normalize_evidence` call occurs, actual `create_video_project` call occurs, backend reaches `review_required`, draft is shown, and no approval/render happens before user action.
-- [x] Live explicit-E2E run: user explicitly requests E2E, ChatGPT researches/normalizes/imports, generation completes, delegated approval is recorded, render completes, and user can access/play the authoritative MP4.
+- [ ] Live default-review run: ChatGPT researches public sources, actual `normalize_evidence` call occurs, actual `create_video_project` call occurs, backend reaches `review_required`, draft is shown, and no approval/render happens before user action.
+- [ ] Live explicit-E2E run: user explicitly requests E2E, ChatGPT researches/normalizes/imports, generation completes, delegated approval is recorded, render completes, and user can access/play the authoritative MP4.
 - [x] Evidence/logs prove imported project used the ChatGPT EvidenceBundle and did not rerun backend research.
-- [x] Actual auth/tool/runtime environment and deployed commit/image are recorded.
+- [ ] Actual auth/tool/runtime environment and deployed commit/image are recorded upon live run.
 - [x] No secrets or sensitive conversation content are recorded in acceptance evidence.
 - [x] Any defect found returns to debug -> focused regression/TDD -> fix -> review before acceptance continues.
-- [x] Current status/integration docs are updated from "planned" to implemented truth only after acceptance passes.
+- [x] Current status/integration docs are updated from "planned" to implemented truth for automated surface.
 - [x] Existing issue #15 standalone browser smoke remains separate unless this milestone changes browser-facing behavior that requires reopening/expanding its gate.
 
 **Verification:**
-- [x] Record actual ChatGPT tool calls and project IDs/status transitions.
-- [x] Record approval mode/provenance for both review modes.
-- [x] Verify completed download/playback.
+- [ ] Record actual ChatGPT tool calls and project IDs/status transitions during live acceptance.
+- [ ] Record approval mode/provenance for both review modes during live acceptance.
+- [ ] Verify completed download/playback during live acceptance.
 - [x] Full current `Bright Profile Verification` workflow green on exact implementation head.
 - [x] Security review: correctness -> security -> architecture -> simplicity -> performance.
-- [x] Project-wide Definition of Done checked.
+- [ ] Project-wide Definition of Done checked.
 - [x] Ship/rollback notes updated if deployment topology/auth changed materially.
 
 **Dependencies:** T26, T27
@@ -488,17 +488,17 @@ Before final E2E, require:
 
 Do not mark the ChatGPT MCP E2E milestone complete until all are true:
 
-- [x] T17-T28 acceptance criteria pass.
+- [x] T17-T27 implementation & verification acceptance criteria pass.
 - [x] Authentication/authorization for write/cost-bearing MCP is proven fail-closed.
 - [x] MCP has no direct SQLite/artifact-volume access.
 - [x] Imported EvidenceBundle is backend-revalidated and does not trigger backend research.
-- [x] Default human-review behavior is live-verified.
-- [x] Delegated E2E approval is server-gated, revision/hash-bound, conflict-free, and audit-distinct.
+- [ ] Default human-review behavior is live-verified on live ChatGPT client.
+- [x] Delegated E2E approval is server-gated with trusted delegation grant, revision/hash-bound, conflict-free, and audit-distinct.
 - [x] Retry/cancel/render idempotency/fencing remain correct through MCP.
-- [x] Signed authoritative MP4 delivery cannot expose arbitrary files.
+- [x] Signed authoritative MP4 delivery cannot expose arbitrary files and validates exact capability binding.
 - [x] New behavior has RED->GREEN tests and existing tests/build/lint/audits remain green.
 - [x] Private runtime topology/observability are verified.
-- [x] Two live ChatGPT acceptance flows pass on the actual deployed integration.
-- [x] Current docs describe implemented truth, not planned behavior.
-- [x] Human review/approval of the implementation and ship evidence is complete.
+- [ ] Two live ChatGPT acceptance flows pass on the actual deployed integration.
+- [x] Current docs describe implemented truth for code & test suites.
+- [ ] Human review/approval of the implementation and ship evidence is complete.
 

@@ -70,6 +70,7 @@ export const loadConfig = (env = process.env, {cwd = process.cwd()} = {}) => {
     integration: Object.freeze({
       serviceToken: env.BRIGHT_INTEGRATION_TOKEN?.trim() || undefined,
       backendUrl: env.BRIGHT_BACKEND_URL?.trim() || 'http://127.0.0.1:4180',
+      allowedHosts: env.BRIGHT_ALLOWED_INTEGRATION_HOSTS?.split(',').map((h) => h.trim().toLowerCase()).filter(Boolean) || ['127.0.0.1', 'localhost', 'app', '::1', '[::1]'],
     }),
   });
 };

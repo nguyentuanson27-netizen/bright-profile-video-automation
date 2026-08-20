@@ -58,6 +58,7 @@ jobs:
           node --check app/http/projects.mjs
           node --check app/http/revisions.mjs
           node --check app/http/artifacts.mjs
+          node --check app/http/integrations.mjs
           node --check app/services/research-project.mjs
           node --check app/services/generate-project.mjs
           node --check app/services/approve-project.mjs
@@ -75,6 +76,9 @@ jobs:
           node --check storage/artifacts.mjs
           node --check security/url-policy.mjs
           node --check security/safe-fetch.mjs
+          node --check security/integration-auth.mjs
+          node --check security/download-token.mjs
+          node --check security/delegation-grant.mjs
           node --check worker/job-runner.mjs
           node --check worker.mjs
           node --check server.mjs
@@ -86,6 +90,7 @@ jobs:
           node --check scripts/db-migrate.mjs
           node --check security/standalone-audit-policy.mjs
           node --check mcp/server.mjs
+          node --check mcp/schemas/tool-schemas.mjs
           node --check lib/evidence/primitives.mjs
           node --check lib/evidence/normalize-evidence.mjs
           node --check lib/evidence/schema-validator.mjs
@@ -210,7 +215,7 @@ jobs:
           PY
       - name: Build and verify isolated MCP container
         run: |
-          docker compose -f compose.mcp.yml up -d --build
+          MCP_AUTH_TOKEN=test-mcp-auth-token-123456 BRIGHT_INTEGRATION_TOKEN=test-integration-token-123456 docker compose -f compose.mcp.yml up -d --build
           container="$(docker compose -f compose.mcp.yml ps -q bright-evidence-mcp)"
           test -n "$container"
           for attempt in $(seq 1 30); do

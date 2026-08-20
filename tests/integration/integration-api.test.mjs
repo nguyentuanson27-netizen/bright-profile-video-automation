@@ -247,6 +247,16 @@ test('POST /api/integrations/chatgpt/projects/:projectId/approve enforces delega
   });
   const revision = repos.revisions.get(revisionId);
 
+  // Acquire delegation grant
+  const grantRes = await request({
+    port,
+    path: `/api/integrations/chatgpt/projects/${projectId}/delegation-grant`,
+    method: 'POST',
+    headers: {authorization: 'Bearer secure-token-123'},
+  });
+  assert.equal(grantRes.status, 200);
+  const delegationGrant = grantRes.json.delegationGrant;
+
   // Approve with delegated_e2e mode
   const approveRes = await request({
     port,
@@ -258,6 +268,7 @@ test('POST /api/integrations/chatgpt/projects/:projectId/approve enforces delega
       revisionId: revision.id,
       expectedPayloadHash: revision.payloadHash,
       mode: APPROVAL_MODES.DELEGATED_E2E,
+      delegationGrant,
       delegatedContext: {userExplicitIntent: 'Create full video end to end'},
     },
   });
@@ -305,6 +316,33 @@ test('POST /api/integrations/chatgpt/projects/:projectId/approve blocks delegate
   });
   const revision = repos.revisions.get(revisionId);
 
+  // 1. Missing grant fails
+  const noGrantRes = await request({
+    port,
+    path: `/api/integrations/chatgpt/projects/${projectId}/approve`,
+    method: 'POST',
+    headers: {authorization: 'Bearer secure-token-123'},
+    body: {
+      projectId,
+      revisionId: revision.id,
+      expectedPayloadHash: revision.payloadHash,
+      mode: APPROVAL_MODES.DELEGATED_E2E,
+      delegatedContext: {userExplicitIntent: 'Run E2E'},
+    },
+  });
+  assert.equal(noGrantRes.status, 409);
+  assert.equal(noGrantRes.json?.error?.code, 'DELEGATED_APPROVAL_BLOCKED');
+
+  // 2. With grant, unverified claims fail
+  const grantRes = await request({
+    port,
+    path: `/api/integrations/chatgpt/projects/${projectId}/delegation-grant`,
+    method: 'POST',
+    headers: {authorization: 'Bearer secure-token-123'},
+  });
+  assert.equal(grantRes.status, 200);
+  const delegationGrant = grantRes.json.delegationGrant;
+
   const blockedRes = await request({
     port,
     path: `/api/integrations/chatgpt/projects/${projectId}/approve`,
@@ -315,6 +353,7 @@ test('POST /api/integrations/chatgpt/projects/:projectId/approve blocks delegate
       revisionId: revision.id,
       expectedPayloadHash: revision.payloadHash,
       mode: APPROVAL_MODES.DELEGATED_E2E,
+      delegationGrant,
       delegatedContext: {userExplicitIntent: 'Run E2E'},
     },
   });
@@ -422,7 +461,7 @@ test('POST /api/integrations/chatgpt/projects/:projectId/render starts media_ing
   });
   const revision = repos.revisions.get(revisionId);
 
-  // Approve project
+  // Approve project via user_reviewed
   await request({
     port,
     path: `/api/integrations/chatgpt/projects/${projectId}/approve`,
@@ -432,8 +471,7 @@ test('POST /api/integrations/chatgpt/projects/:projectId/render starts media_ing
       projectId,
       revisionId: revision.id,
       expectedPayloadHash: revision.payloadHash,
-      mode: APPROVAL_MODES.DELEGATED_E2E,
-      delegatedContext: {userExplicitIntent: 'Create video'},
+      mode: APPROVAL_MODES.USER_REVIEWED,
     },
   });
 

@@ -19,6 +19,7 @@ const rpc = async (url, body, extraHeaders = {}) => {
     headers: {
       accept: 'application/json, text/event-stream',
       'content-type': 'application/json',
+      authorization: 'Bearer test-mcp-token-123456',
       ...extraHeaders,
     },
     body: JSON.stringify(body),
@@ -26,7 +27,7 @@ const rpc = async (url, body, extraHeaders = {}) => {
   return {response, body: await readRpcBody(response)};
 };
 
-const rawStatus = (url, {host, body = '{}'} = {}) => new Promise((resolve, reject) => {
+const rawStatus = (url, {host, body = '{}', headers = {}} = {}) => new Promise((resolve, reject) => {
   const parsed = new URL(url);
   const req = http.request({
     hostname: parsed.hostname,
@@ -37,6 +38,8 @@ const rawStatus = (url, {host, body = '{}'} = {}) => new Promise((resolve, rejec
       host: host || parsed.host,
       'content-type': 'application/json',
       'content-length': Buffer.byteLength(body),
+      authorization: 'Bearer test-mcp-token-123456',
+      ...headers,
     },
   }, (res) => {
     res.resume();
@@ -46,7 +49,7 @@ const rawStatus = (url, {host, body = '{}'} = {}) => new Promise((resolve, rejec
   req.end(body);
 });
 
-const stalledUploadStatus = (url, guardMs = 1_500) => new Promise((resolve, reject) => {
+const stalledUploadStatus = (url, guardMs = 1_500, headers = {}) => new Promise((resolve, reject) => {
   const parsed = new URL(url);
   let settled = false;
   const req = http.request({
@@ -58,6 +61,8 @@ const stalledUploadStatus = (url, guardMs = 1_500) => new Promise((resolve, reje
       host: parsed.host,
       'content-type': 'application/json',
       'content-length': '1024',
+      authorization: 'Bearer test-mcp-token-123456',
+      ...headers,
     },
   }, (res) => {
     res.resume();
@@ -86,7 +91,14 @@ const stalledUploadStatus = (url, guardMs = 1_500) => new Promise((resolve, reje
 
 const start = async (env = {}) => {
   const logs = [];
-  const server = createBrightHttpServer({env: {MCP_ALLOWED_HOSTS: '127.0.0.1,localhost', ...env}, log: (event) => logs.push(event)});
+  const server = createBrightHttpServer({
+    env: {
+      MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+      MCP_AUTH_TOKEN: 'test-mcp-token-123456',
+      ...env,
+    },
+    log: (event) => logs.push(event),
+  });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const {port} = server.address();
@@ -180,7 +192,10 @@ test('HTTP boundary rejects invalid host and oversized payloads', async (t) => {
 
   const oversized = await fetch(url, {
     method: 'POST',
-    headers: {'content-type': 'application/json'},
+    headers: {
+      'content-type': 'application/json',
+      authorization: 'Bearer test-mcp-token-123456',
+    },
     body: JSON.stringify({padding: 'x'.repeat(1024)}),
   });
   assert.equal(oversized.status, 413);

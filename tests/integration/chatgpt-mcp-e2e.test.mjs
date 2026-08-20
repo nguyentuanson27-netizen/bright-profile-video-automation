@@ -272,7 +272,16 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
   assert.equal(getRes.body.result.structuredContent.status, 'review_required');
   assert.equal(getRes.body.result.structuredContent.currentRevision.id, revisionId);
 
-  // Step 6: Call approve_video_project with mode = delegated_e2e
+  // Step 6: Acquire trusted delegation grant and call approve_video_project with mode = delegated_e2e
+  const grantRes = await fetch(`${sys.appUrl}/api/integrations/chatgpt/projects/${projectId}/delegation-grant`, {
+    method: 'POST',
+    headers: {authorization: `Bearer ${sys.serviceToken}`},
+  });
+  assert.equal(grantRes.status, 200);
+  const grantData = await grantRes.json();
+  const delegationGrant = grantData.delegationGrant;
+  assert.ok(delegationGrant, 'Should receive server-issued delegation grant');
+
   const approveRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
     id: 5,
@@ -284,6 +293,7 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
         revisionId,
         expectedPayloadHash: currentRev.payloadHash,
         mode: APPROVAL_MODES.DELEGATED_E2E,
+        delegationGrant,
         delegatedContext: {userExplicitIntent: 'Create full video end-to-end autonomously'},
       },
     },
@@ -558,8 +568,8 @@ test('Adversarial Security: Conflicting evidence, unverified claims, and stale h
   });
   const currentRev = sys.repos.revisions.get(revisionId);
 
-  // Attempt delegated approval -> must be rejected because conflicts > 0
-  const approveRes = await rpc(sys.mcpUrl, {
+  // 1. Attempt delegated approval WITHOUT trusted grant -> must be rejected
+  const approveNoGrantRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
     id: 4,
     method: 'tools/call',
@@ -570,14 +580,43 @@ test('Adversarial Security: Conflicting evidence, unverified claims, and stale h
         revisionId,
         expectedPayloadHash: currentRev.payloadHash,
         mode: APPROVAL_MODES.DELEGATED_E2E,
-        delegatedContext: {userExplicitIntent: 'Approve automatically'},
+        delegatedContext: {userExplicitIntent: 'Approve automatically without grant'},
       },
     },
   }, mcpHeaders);
 
-  assert.equal(approveRes.response.status, 200);
-  assert.equal(approveRes.body.result.isError, true);
-  assert.match(approveRes.body.result.content[0].text, /unresolved evidence conflict group/i);
+  assert.equal(approveNoGrantRes.response.status, 200);
+  assert.equal(approveNoGrantRes.body.result.isError, true);
+  assert.match(approveNoGrantRes.body.result.content[0].text, /missing trusted delegation grant|delegation grant is required/i);
+
+  // 2. Acquire grant, but project has unresolved conflicts -> must be rejected
+  const grantRes = await fetch(`${sys.appUrl}/api/integrations/chatgpt/projects/${projectId}/delegation-grant`, {
+    method: 'POST',
+    headers: {authorization: `Bearer ${sys.serviceToken}`},
+  });
+  assert.equal(grantRes.status, 200);
+  const {delegationGrant} = await grantRes.json();
+
+  const approveConflictRes = await rpc(sys.mcpUrl, {
+    jsonrpc: '2.0',
+    id: 5,
+    method: 'tools/call',
+    params: {
+      name: 'approve_video_project',
+      arguments: {
+        projectId,
+        revisionId,
+        expectedPayloadHash: currentRev.payloadHash,
+        mode: APPROVAL_MODES.DELEGATED_E2E,
+        delegationGrant,
+        delegatedContext: {userExplicitIntent: 'Approve automatically with grant'},
+      },
+    },
+  }, mcpHeaders);
+
+  assert.equal(approveConflictRes.response.status, 200);
+  assert.equal(approveConflictRes.body.result.isError, true);
+  assert.match(approveConflictRes.body.result.content[0].text, /unresolved evidence conflict group/i);
 
   // Verify project remains in review_required
   const project = sys.repos.projects.get(projectId);
