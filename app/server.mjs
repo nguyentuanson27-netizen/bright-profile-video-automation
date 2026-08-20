@@ -266,6 +266,16 @@ export const createAppServer = ({
 
       if (route.name.startsWith('integrations.')) {
         const authHeader = req.headers.authorization || req.headers['x-bright-service-token'];
+
+        if (route.name === 'integrations.chatgpt.artifacts.download') {
+          const urlObj = new URL(req.url ?? '/', 'http://localhost');
+          const token = urlObj.searchParams.get('token');
+          integrations.assertDownloadAuth(authHeader, token, route.id);
+          const output = await artifacts.getArtifactById(route.id);
+          sendOutput(res, output, requestId);
+          return undefined;
+        }
+
         integrations.assertAuth(authHeader);
 
         if (route.name === 'integrations.chatgpt.projects.import') {
@@ -295,11 +305,6 @@ export const createAppServer = ({
         if (route.name === 'integrations.chatgpt.projects.cancel') {
           const result = integrations.cancel(route.id);
           return json(res, 200, {...result, requestId}, requestId);
-        }
-        if (route.name === 'integrations.chatgpt.artifacts.download') {
-          const output = await artifacts.getOutput(route.id);
-          sendOutput(res, output, requestId);
-          return undefined;
         }
         return json(res, 404, {error: {code: 'NOT_FOUND', message: 'Route not found'}, requestId}, requestId);
       }

@@ -285,6 +285,9 @@ export const createArtifactStore = (db, {idFactory = randomUUID} = {}) => {
     commitTts(record) { return commitTtsTx.immediate(record); },
     markRendering(record) { return markRenderingTx.immediate(record); },
     commitRender(record) { return commitRenderTx.immediate(record); },
+    get(artifactId) {
+      return artifactFromRow(getArtifact.get(artifactId));
+    },
     getAuthoritative(projectId, revisionId, kind) {
       return artifactFromRow(getAuthoritative.get(projectId, revisionId, kind));
     },

@@ -52,5 +52,23 @@ export const createArtifactsApi = ({repos, artifactStore, dataDir} = {}) => {
         throw outputUnavailable();
       }
     },
+
+    async getArtifactById(artifactId) {
+      const artifact = artifactStore.get(artifactId);
+      if (!artifact) throw new AppError('ARTIFACT_NOT_FOUND', 'Artifact not found', {status: 404});
+      if (artifact.mimeType !== 'video/mp4' || !artifact.sha256 || !artifact.byteSize) throw outputUnavailable();
+      try {
+        assertRelativeArtifactPath(artifact.relativePath);
+        const absolutePath = resolve(root, artifact.relativePath);
+        if (absolutePath !== root && !absolutePath.startsWith(`${root}${sep}`)) throw outputUnavailable();
+        const info = await stat(absolutePath);
+        if (!info.isFile() || info.size < 1 || info.size !== artifact.byteSize) throw outputUnavailable();
+        if (await hashFile(absolutePath) !== artifact.sha256) throw outputUnavailable();
+        return {absolutePath, byteSize: info.size, mimeType: 'video/mp4'};
+      } catch (error) {
+        if (error?.code === 'OUTPUT_UNAVAILABLE' || error?.code === 'ARTIFACT_NOT_FOUND') throw error;
+        throw outputUnavailable();
+      }
+    },
   });
 };

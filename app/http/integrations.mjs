@@ -8,6 +8,10 @@ import {
   validateImportProjectInput,
   validateProjectStatusOutput,
 } from '../../domain/schemas.mjs';
+import {
+  generateDownloadToken,
+  verifyDownloadToken,
+} from '../../security/download-token.mjs';
 import {assertValidBearerToken} from '../../security/integration-auth.mjs';
 
 const invalidRequest = (message) => new AppError('INVALID_REQUEST', message, {status: 400});
@@ -61,6 +65,21 @@ export const createIntegrationsApi = ({
     });
   };
 
+  const assertDownloadAuth = (authHeader, queryToken, artifactId) => {
+    if (queryToken && serviceToken && serviceToken.length >= 16) {
+      const verified = verifyDownloadToken({token: queryToken, secret: serviceToken, nowMs: nowMs()});
+      if (verified.artifactId !== artifactId) {
+        throw new AppError(ErrorCodes.DOWNLOAD_TOKEN_INVALID, 'Token is not valid for this artifact', {status: 401});
+      }
+      return verified;
+    }
+    assertValidBearerToken(authHeader, serviceToken, {
+      errorCode: ErrorCodes.UNAUTHORIZED,
+      errorMessage: 'Unauthorized',
+    });
+    return null;
+  };
+
   const requireProject = (projectId) => {
     const project = repos.projects.get(projectId);
     if (!project) throw projectNotFound();
@@ -73,6 +92,23 @@ export const createIntegrationsApi = ({
     let outputArtifact = null;
     if (project.approvedRevisionId && artifactStore?.getAuthoritative) {
       outputArtifact = artifactStore.getAuthoritative(project.id, project.approvedRevisionId, 'output_mp4');
+    }
+
+    let downloadUrl = undefined;
+    if (outputArtifact) {
+      let query = '';
+      if (serviceToken && serviceToken.length >= 16) {
+        const token = generateDownloadToken({
+          projectId: project.id,
+          revisionId: project.approvedRevisionId,
+          artifactId: outputArtifact.id,
+          secret: serviceToken,
+          ttlSeconds: 900,
+          nowMs: nowMs(),
+        });
+        query = `?token=${encodeURIComponent(token)}`;
+      }
+      downloadUrl = `/api/integrations/chatgpt/artifacts/${encodeURIComponent(outputArtifact.id)}/download${query}`;
     }
 
     const output = {
@@ -99,7 +135,7 @@ export const createIntegrationsApi = ({
       } : undefined,
       output: outputArtifact ? {
         artifactId: outputArtifact.id,
-        downloadUrl: `/api/integrations/chatgpt/artifacts/${outputArtifact.id}/download`,
+        downloadUrl,
         sizeBytes: outputArtifact.byteSize,
         sha256: outputArtifact.sha256,
       } : undefined,
@@ -110,6 +146,7 @@ export const createIntegrationsApi = ({
 
   return Object.freeze({
     assertAuth,
+    assertDownloadAuth,
 
     importProject(body) {
       const input = validateImportProjectInput(body);
