@@ -37,6 +37,7 @@ const server = createAppServer({
   jobs,
   dataDir: config.dataDir,
   webDir: resolve(process.env.BRIGHT_WEB_DIR?.trim() || './dist'),
+  integrationToken: config.integration.serviceToken,
   researchMaxAttempts: config.worker.maxRetries + 1,
   generationMaxAttempts: config.worker.maxRetries + 1,
   mediaIngestMaxAttempts: config.worker.maxRetries + 1,
