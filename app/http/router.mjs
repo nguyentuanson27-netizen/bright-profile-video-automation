@@ -2,6 +2,11 @@ const projectActionPattern = /^\/api\/projects\/([^/]+)\/(research|generate|rend
 const projectOutputPattern = /^\/api\/projects\/([^/]+)\/artifacts\/output$/;
 const projectPattern = /^\/api\/projects\/([^/]+)$/;
 
+const integrationImportPattern = /^\/api\/integrations\/chatgpt\/projects\/import$/;
+const integrationActionPattern = /^\/api\/integrations\/chatgpt\/projects\/([^/]+)\/(draft|approve|render|retry|cancel)$/;
+const integrationProjectPattern = /^\/api\/integrations\/chatgpt\/projects\/([^/]+)$/;
+const integrationArtifactPattern = /^\/api\/integrations\/chatgpt\/artifacts\/([^/]+)\/download$/;
+
 const decodeId = (value) => {
   try {
     return decodeURIComponent(value);
@@ -16,6 +21,35 @@ export const matchRoute = (method, pathname) => {
   if (pathname === '/api/projects') {
     if (method === 'POST') return {name: 'projects.create'};
     if (method === 'GET') return {name: 'projects.list'};
+  }
+
+  if (integrationImportPattern.test(pathname)) {
+    if (method === 'POST') return {name: 'integrations.chatgpt.projects.import'};
+    return null;
+  }
+
+  const integrationAction = pathname.match(integrationActionPattern);
+  if (integrationAction) {
+    const id = decodeId(integrationAction[1]);
+    const action = integrationAction[2];
+    if (!id) return null;
+    if (method === 'POST') {
+      if (action === 'draft') return {name: 'integrations.chatgpt.projects.draft.edit', id};
+      return {name: `integrations.chatgpt.projects.${action}`, id};
+    }
+    return null;
+  }
+
+  const integrationProject = pathname.match(integrationProjectPattern);
+  if (integrationProject && method === 'GET') {
+    const id = decodeId(integrationProject[1]);
+    return id ? {name: 'integrations.chatgpt.projects.get', id} : null;
+  }
+
+  const integrationArtifact = pathname.match(integrationArtifactPattern);
+  if (integrationArtifact && method === 'GET') {
+    const id = decodeId(integrationArtifact[1]);
+    return id ? {name: 'integrations.chatgpt.artifacts.download', id} : null;
   }
 
   const output = pathname.match(projectOutputPattern);

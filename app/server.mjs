@@ -7,6 +7,7 @@ import {extname, resolve, sep} from 'node:path';
 import {AppError} from '../domain/errors.mjs';
 import {createArtifactStore} from '../storage/artifacts.mjs';
 import {createArtifactsApi} from './http/artifacts.mjs';
+import {createIntegrationsApi} from './http/integrations.mjs';
 import {createProjectsApi} from './http/projects.mjs';
 import {createRevisionsApi} from './http/revisions.mjs';
 import {matchRoute} from './http/router.mjs';
@@ -189,6 +190,7 @@ export const createAppServer = ({
   generationMaxAttempts = 4,
   mediaIngestMaxAttempts = 4,
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
+  integrationToken,
 } = {}) => {
   if (!db || typeof db.prepare !== 'function') throw new TypeError('database is required');
   if (!dataDir) throw new TypeError('dataDir is required');
@@ -213,6 +215,21 @@ export const createAppServer = ({
   const revisions = createRevisionsApi({repos, now, revisionIdFactory});
   const resolvedArtifactStore = artifactStore ?? createArtifactStore(db);
   const artifacts = createArtifactsApi({repos, artifactStore: resolvedArtifactStore, dataDir: resolvedDataDir});
+  const integrations = createIntegrationsApi({
+    repos,
+    jobs,
+    artifactStore: resolvedArtifactStore,
+    dataDir: resolvedDataDir,
+    serviceToken: integrationToken,
+    now,
+    nowMs,
+    projectIdFactory,
+    stageIdFactory,
+    sourceIdFactory,
+    revisionIdFactory,
+    generationMaxAttempts,
+    mediaIngestMaxAttempts,
+  });
   const readinessQuery = db.prepare('SELECT 1 AS ok');
 
   return http.createServer(async (req, res) => {
@@ -245,6 +262,46 @@ export const createAppServer = ({
             requestId,
           }, requestId);
         }
+      }
+
+      if (route.name.startsWith('integrations.')) {
+        const authHeader = req.headers.authorization || req.headers['x-bright-service-token'];
+        integrations.assertAuth(authHeader);
+
+        if (route.name === 'integrations.chatgpt.projects.import') {
+          const body = await readJsonBody(req, maxBodyBytes);
+          const result = integrations.importProject(body);
+          return json(res, result.isExisting ? 200 : 201, {...result, requestId}, requestId);
+        }
+        if (route.name === 'integrations.chatgpt.projects.get') {
+          return json(res, 200, {...integrations.getProjectStatus(route.id), requestId}, requestId);
+        }
+        if (route.name === 'integrations.chatgpt.projects.draft.edit') {
+          const body = await readJsonBody(req, maxBodyBytes);
+          return json(res, 200, {...integrations.editDraft(route.id, body), requestId}, requestId);
+        }
+        if (route.name === 'integrations.chatgpt.projects.approve') {
+          const body = await readJsonBody(req, maxBodyBytes);
+          return json(res, 200, {...integrations.approveProject(route.id, body), requestId}, requestId);
+        }
+        if (route.name === 'integrations.chatgpt.projects.render') {
+          const result = integrations.startRender(route.id);
+          return json(res, 202, {...result, requestId}, requestId);
+        }
+        if (route.name === 'integrations.chatgpt.projects.retry') {
+          const result = integrations.retry(route.id);
+          return json(res, 202, {...result, requestId}, requestId);
+        }
+        if (route.name === 'integrations.chatgpt.projects.cancel') {
+          const result = integrations.cancel(route.id);
+          return json(res, 200, {...result, requestId}, requestId);
+        }
+        if (route.name === 'integrations.chatgpt.artifacts.download') {
+          const output = await artifacts.getOutput(route.id);
+          sendOutput(res, output, requestId);
+          return undefined;
+        }
+        return json(res, 404, {error: {code: 'NOT_FOUND', message: 'Route not found'}, requestId}, requestId);
       }
 
       if (route.name === 'projects.create') {
