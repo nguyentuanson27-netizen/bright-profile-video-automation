@@ -1,16 +1,24 @@
-# Standalone Internal MVP — Scope Freeze and Traceability Matrix
+# Project Traceability Ledger — Standalone Baseline + ChatGPT MCP Reset
 
-**Status:** Binding planning closure artifact  
-**Scope date:** 2026-08-13  
-**Applies to:** the current internal standalone MVP only
+**Status:** Binding traceability artifact with two explicit ledgers  
+**Standalone scope date:** 2026-08-13  
+**ChatGPT MCP reset scope date:** 2026-08-21  
+**Applies to:** (1) frozen/completed standalone internal MVP T01-T16, and (2) open ChatGPT MCP temporary no-auth reset T17-T28
 
-## Purpose
+## Purpose and Ledger Boundaries
 
-This file closes the planning traceability gap identified during PR #5 review. It freezes the current MVP contract and maps every retained observable operation/state/security invariant to an implementation owner and verification path.
+This file contains **two distinct traceability ledgers**:
 
-A requirement is a **current MVP completion gate only when it is retained in this matrix or explicitly required by `docs/project-status.md` / `docs/specs/standalone-internal-mvp-amendment.md`.** Historical functional details from `docs/specs/standalone-production-app.md` that are not retained here are deferred, not silently inherited.
+1. **Standalone T01-T16 ledger — frozen/complete.** It preserves the scope-freeze and closure evidence for the promoted standalone internal MVP and must not be reopened merely because the ChatGPT MCP milestone changes.
+2. **ChatGPT MCP T17-T28 ledger — open.** It tracks the temporary no-auth reset, including private MCP-to-app service authentication, truthful external-review-acknowledgment semantics, no-auth write guardrails, deterministic E2E, and live ChatGPT acceptance.
 
-The implementation plan remains `tasks/plan.md` + `tasks/todo.md`. This matrix is the closure ledger for detecting orphan requirements across those tasks.
+A requirement is a current completion gate only when it belongs to the relevant ledger or is explicitly required by `docs/project-status.md` / the active spec for that ledger. Historical requirements not retained by the applicable ledger are deferred, not silently inherited.
+
+The implementation plan remains `tasks/plan.md` + `tasks/todo.md`. This file is the closure ledger for detecting orphan requirements across those tasks.
+
+---
+
+# Ledger A — Standalone Internal MVP (T01-T16, Frozen)
 
 ## Scope-freeze rules
 
@@ -19,8 +27,8 @@ The implementation plan remains `tasks/plan.md` + `tasks/todo.md`. This matrix i
    `create -> research -> generate -> review/edit -> approve -> render-start -> media ingest -> TTS -> render -> download`.
 
 2. Required cross-cutting controls are frozen to the rows below: durable SQLite state, lease renewal/fencing/recovery, retry/cancel, approval/downstream race safety, source provenance, SSRF-safe fetch, model/schema validation, artifact/path safety, standalone dependency audit, aggregate lint/build/E2E, internal/private non-root Compose runtime, health endpoints, and retained MCP regressions.
-3. Historical production/commercial/operations requirements remain superseded by the active scope amendment unless explicitly retained here.
-4. After this closure pass, review should be against this frozen contract. New requirements require an explicit scope change; re-review of unchanged historical requirements should not implicitly expand the MVP.
+3. Historical production/commercial/operations requirements remain superseded by the active standalone scope amendment unless explicitly retained here.
+4. New standalone requirements require an explicit scope change; re-review of unchanged historical requirements must not implicitly expand the completed standalone MVP.
 
 ## End-to-end observable flow
 
@@ -62,7 +70,7 @@ The implementation plan remains `tasks/plan.md` + `tasks/todo.md`. This matrix i
 
 ## Binding owner addenda for existing tasks
 
-These statements are part of the current task acceptance even if the older task prose has not yet been rewritten around them:
+These statements remain part of the completed standalone task acceptance.
 
 ### T08 addendum — health endpoints
 
@@ -111,42 +119,49 @@ The historical production spec contains useful ideas that are **not required for
 | Public TLS/auth/OAuth gateway or browser account system | Deferred while app remains private/loopback/trusted-network only; required before intentional broader exposure |
 | Public/commercial launch, multi-tenancy, billing, plugin/Codex/marketplace expansion | Explicit non-goals |
 
-## ChatGPT MCP Temporary No-Auth Handoff Traceability Matrix
+---
+
+# Ledger B — ChatGPT MCP Temporary No-Auth Reset (T17-T28, Open)
 
 **Scope date:** 2026-08-21  
-**Applies to:** ChatGPT MCP Handoff Milestone (Tasks T17-T28) after the temporary no-auth reset  
 **Closure state:** OPEN — implementation and live acceptance must be re-verified against this matrix
 
 | ID | Requirement / invariant | Owner task(s) | Implementation surface | Focused regression / verification | Final gate |
 |---|---|---|---|---|---|
-| M01 | External ChatGPT -> MCP is explicit `noauth`; legal initialize/list/tool calls require no Authorization; Host/body/deadline/rate-limit protections remain | T17, T21 | `mcp/server.mjs`, tool metadata | noauth transport + boundary regressions | T27 noauth E2E + T28 live connection without OAuth linking |
+| M01 | External ChatGPT -> MCP is explicit `noauth`; initialize/list require no Authorization; write/cost-bearing tools are disabled by default with `MCP_NOAUTH_WRITE_ENABLED=false`; Host/body/deadline/rate-limit protections remain | T17, T21, T26 | `mcp/server.mjs`, tool metadata, Compose/env | noauth transport + kill-switch regressions | T27 noauth E2E + T28 bounded live connection without OAuth linking |
 | M02 | MCP -> Bright Profile remains private/service-authenticated with `BRIGHT_INTEGRATION_TOKEN`; missing/wrong service auth causes zero mutation | T17, T20, T26 | `mcp/server.mjs`, `app/http/integrations.mjs`, Compose | integration API negative auth tests | T27 direct-backend negative path + runtime topology check |
-| M03 | Domain schemas and stable errors keep import/edit/status contracts bounded while public approval input exposes only revision/hash data needed for user-reviewed approval | T18, T22 | `domain/schemas.mjs`, `mcp/schemas/tool-schemas.mjs` | schema + stale hash/revision tests | T27 user-reviewed E2E |
-| M04 | Schema v3 migration retains origin/idempotency/approval provenance without adding OAuth/session persistence dependency | T19 | `storage/migrations/003_chatgpt_handoff.sql`, repositories | migration/reopen tests | exact-head CI migration smoke |
-| M05 | Imported EvidenceBundle is revalidated, persisted, idempotent, skips backend research, reaches `research_ready`, queues generation | T20 | integration API + import service/storage | import/idempotency/provider-not-called tests | T27 import -> generation path |
-| M06 | MCP create/get/edit/approve/render/retry/cancel tools call backend over HTTP with no direct DB/artifact access and `noauth` external metadata | T21, T22, T24 | `mcp/server.mjs` | MCP tool unit/integration tests | T27 full tool path |
-| M07 | Active approval path is `user_reviewed` only; caller cannot choose actor/mode/delegation state; flow stops at `review_required` before user action | T18, T22, T23 | MCP schemas/handler + backend approval service | default-stop + approval-contract negative tests | T27 proves zero approval/downstream before user confirmation |
-| M08 | OAuth/DCR/session/static external bearer runtime/config/storage is removed; `delegated_e2e`/delegation grants are deferred and unreachable from active MCP contract | T23, T26 | `mcp/server.mjs`, `security/`, Compose/env/tests | dead-code/config search + route absence tests | exact-head CI + review of active diff |
-| M09 | Signed MP4 capability remains bound to project/revision/artifact with expiry/tamper checks, authoritative file validation, streaming/backpressure/timeout controls | T25 | `security/download-token.mjs`, artifact/integration routes, MCP proxy | token + download integration tests | T27 completed MP4 download |
-| M10 | Runtime topology keeps worker/browser API private, MCP has no Bright storage mount, correlation/logging remains secret-safe | T26 | `compose.yml`, `compose.mcp.yml`, server logging | Compose config/container checks + correlation tests | exact-head CI Compose gates |
-| M11 | Deterministic and live acceptance match the noauth/user-reviewed product truth; docs/PR claims are updated only from observed evidence | T27, T28 | E2E tests, status/todo/traceability/PR body | full suite + live evidence record | T28 live Path A + Path B + project-wide DoD |
+| M03 | Public approval input exposes only project/revision/hash data; approval semantic is external review acknowledgment; any stored `user_reviewed` value is legacy compatibility data, not authenticated human proof | T18, T19, T22 | domain/MCP schemas, approval service/storage | schema + stale hash/revision + audit-semantics tests | T27 acknowledgment flow + T28 tested-client confirmation evidence |
+| M04 | Schema v3 migration retains origin/idempotency/approval provenance without adding OAuth/session persistence dependency or destructive enum cleanup | T19 | `storage/migrations/003_chatgpt_handoff.sql`, repositories | migration/reopen tests | exact-head CI migration smoke |
+| M05 | Imported EvidenceBundle is revalidated, persisted, idempotent, skips backend research, reaches `research_ready`, queues generation, and respects no-auth active-project capacity | T20 | integration API + import service/storage | import/idempotency/provider-not-called/cap tests | T27 import -> generation path |
+| M06 | MCP create/get/edit/approve/render/retry/cancel tools call backend over HTTP with no direct DB/artifact access and `noauth` metadata; mutating tools honor write-enable/in-flight gates | T17, T21, T22, T24 | `mcp/server.mjs` | MCP tool unit/integration + capacity tests | T27 full tool path |
+| M07 | Backend-driven flow stops at `review_required`; no caller can select actor/mode/delegation state; live ChatGPT Path A must demonstrate the tested client waits for user confirmation, while docs explicitly state this is not enforceable against arbitrary anonymous callers | T18, T22, T23, T28 | MCP schemas/handler + backend approval service + live acceptance | default-stop + approval-contract negative tests | T27 proves no backend auto-approval; T28 proves tested-client timing |
+| M08 | OAuth/DCR/session/static external bearer runtime/config/storage is removed; `delegated_e2e`/delegation grants are deferred and unreachable from active MCP contract | T23, T26 | `mcp/server.mjs`, `security/`, Compose/env/tests | dead-code/config search + route absence tests | exact-head CI + active-diff review |
+| M09 | Anonymous write exposure has explicit finite defaults: rate 20/min, max 2 in-flight writes, max 3 non-terminal ChatGPT-origin projects; excess work fails before unintended side effects | T17, T20, T21, T24, T26 | MCP dispatch/capacity controls + backend create boundary | rate/in-flight/active-project regressions | T27 adversarial gate + T28 recorded deployed values |
+| M10 | Signed MP4 capability remains bound to project/revision/artifact with expiry/tamper checks, authoritative file validation, streaming/backpressure/timeout controls | T25 | `security/download-token.mjs`, artifact/integration routes, MCP proxy | token + download integration tests | T27 completed MP4 download |
+| M11 | Runtime topology keeps app/worker private, MCP has no Bright storage mount, remote ChatGPT uses intended HTTPS MCP ingress, and no-auth writes are enabled only for a bounded operator-controlled window with teardown evidence | T26, T28 | Compose/reverse-proxy/runtime config | Compose checks + live setup/teardown record | exact-head CI + T28 enable/disable evidence |
+| M12 | Deterministic and live acceptance match truthful noauth/review-acknowledgment semantics; docs/PR claims are updated only from observed evidence | T27, T28 | E2E tests, status/todo/traceability/PR body | full suite + live evidence record | T28 Path A + Path B + project-wide DoD |
 
 ## ChatGPT MCP Closure Audit Checklist
 
 Before delivery under the reset contract:
 
-- [x] Standalone T01-T16 closure ledger remains unchanged and binding.
+- [x] Standalone T01-T16 closure ledger remains unchanged in substance and binding.
 - [x] Noauth reset requirements have owner tasks.
+- [x] Traceability file explicitly distinguishes frozen standalone and open MCP ledgers.
 - [ ] Active MCP runtime matches `noauth` rather than OAuth/static bearer fallback.
 - [ ] Private MCP -> app service auth remains fail-closed.
-- [ ] Active approval contract is `user_reviewed` only.
+- [ ] No-auth writes are disabled by default with a tested kill switch.
+- [ ] Rate/in-flight/active-project limits are finite and tested.
+- [ ] Approval is represented as external review acknowledgment, not authenticated human proof.
+- [ ] Any legacy stored `user_reviewed` value is documented/tested as compatibility data only.
 - [ ] OAuth/DCR/session runtime/config/storage is removed from the current milestone.
 - [ ] Delegated E2E is deferred and unreachable from active MCP contract.
-- [ ] Deterministic noauth E2E passes on exact implementation HEAD.
+- [ ] Deterministic noauth E2E passes on exact implementation HEAD without claiming human-review proof.
 - [ ] Full exact-head CI passes after the reset implementation.
-- [ ] Live ChatGPT noauth default-review Path A passes.
-- [ ] Live ChatGPT user-reviewed completion Path B passes.
+- [ ] Live ChatGPT noauth Path A shows the tested client waits for user confirmation.
+- [ ] Live review-acknowledged completion Path B passes.
+- [ ] T28 records write-window enable values and disable/ingress-withdraw teardown.
 - [ ] Final docs and PR body match observed current truth.
 - [ ] Project-wide Definition of Done is checked.
 
-Closure audit result: **OPEN — planning/docs reset is recorded, implementation and live verification are still pending.**
+Closure audit result: **OPEN — docs now define truthful approval semantics and concrete no-auth guardrails; implementation and live verification are still pending.**
