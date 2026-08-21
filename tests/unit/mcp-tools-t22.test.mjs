@@ -58,12 +58,19 @@ test('MCP server registers edit_video_draft, approve_video_project, start_video_
   const listed = await rpc(url, {jsonrpc: '2.0', id: 2, method: 'tools/list', params: {}}, headers);
   assert.equal(listed.response.status, 200);
 
-  const toolNames = listed.body.result.tools.map((t) => t.name);
+  const tools = listed.body.result.tools;
+  const toolNames = tools.map((t) => t.name);
   assert.ok(toolNames.includes('edit_video_draft'));
   assert.ok(toolNames.includes('approve_video_project'));
   assert.ok(toolNames.includes('start_video_render'));
   assert.ok(toolNames.includes('retry_video_project'));
   assert.ok(toolNames.includes('cancel_video_project'));
+
+  for (const tool of tools) {
+    assert.ok(tool.securitySchemes, `Tool ${tool.name} must declare root-level securitySchemes`);
+    assert.deepEqual(tool.securitySchemes, [{type: 'noauth'}]);
+    assert.equal(tool.annotations?.securitySchemes, undefined);
+  }
 });
 
 test('edit_video_draft tool sends draft update to backend and returns revised project', async (t) => {

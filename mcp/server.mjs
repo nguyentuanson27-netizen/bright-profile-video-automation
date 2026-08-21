@@ -169,7 +169,6 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch, inFlig
         readOnlyHint: true,
         destructiveHint: false,
         openWorldHint: false,
-        securitySchemes: [{type: 'noauth'}],
       },
     },
     async (input) => {
@@ -222,7 +221,6 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch, inFlig
         readOnlyHint: false,
         destructiveHint: false,
         openWorldHint: false,
-        securitySchemes: [{type: 'noauth'}],
       },
     },
     async (input) => withWriteGate(async () => {
@@ -271,7 +269,6 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch, inFlig
         readOnlyHint: true,
         destructiveHint: false,
         openWorldHint: false,
-        securitySchemes: [{type: 'noauth'}],
       },
     },
     async (input) => {
@@ -318,7 +315,6 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch, inFlig
         readOnlyHint: false,
         destructiveHint: false,
         openWorldHint: false,
-        securitySchemes: [{type: 'noauth'}],
       },
     },
     async (input) => withWriteGate(async () => {
@@ -366,7 +362,6 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch, inFlig
         readOnlyHint: false,
         destructiveHint: false,
         openWorldHint: false,
-        securitySchemes: [{type: 'noauth'}],
       },
     },
     async (input) => withWriteGate(async () => {
@@ -419,7 +414,6 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch, inFlig
         readOnlyHint: false,
         destructiveHint: false,
         openWorldHint: false,
-        securitySchemes: [{type: 'noauth'}],
       },
     },
     async (input) => withWriteGate(async () => {
@@ -466,7 +460,6 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch, inFlig
         readOnlyHint: false,
         destructiveHint: false,
         openWorldHint: false,
-        securitySchemes: [{type: 'noauth'}],
       },
     },
     async (input) => withWriteGate(async () => {
@@ -513,7 +506,6 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch, inFlig
         readOnlyHint: false,
         destructiveHint: true,
         openWorldHint: false,
-        securitySchemes: [{type: 'noauth'}],
       },
     },
     async (input) => withWriteGate(async () => {
@@ -548,6 +540,28 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch, inFlig
       }
     }),
   );
+
+  const originalToolsListHandler = server.server._requestHandlers.get('tools/list');
+  if (originalToolsListHandler) {
+    server.server._requestHandlers.set('tools/list', async (request, extra) => {
+      const result = await originalToolsListHandler(request, extra);
+      if (result && Array.isArray(result.tools)) {
+        return {
+          ...result,
+          tools: result.tools.map((tool) => {
+            const {securitySchemes: _omitted, ...cleanAnnotations} = tool.annotations || {};
+            const hasAnnotations = Object.keys(cleanAnnotations).length > 0;
+            return {
+              ...tool,
+              annotations: hasAnnotations ? cleanAnnotations : undefined,
+              securitySchemes: [{type: 'noauth'}],
+            };
+          }),
+        };
+      }
+      return result;
+    });
+  }
 
   return server;
 }
@@ -741,6 +755,8 @@ export function createBrightHttpServer({
 } = {}) {
   const activeHandler = handler || createBrightMcpHandler({env, fetchFn, inFlightState});
   const allowedHosts = parseAllowedHosts(env);
+  const publicMcpUrl = parsePublicMcpUrl(env.MCP_PUBLIC_URL);
+  const publicUrlPrefix = publicMcpUrl ? publicMcpUrl.pathname.replace(/\/+$/, '') : '';
   const maxBodyBytes = positiveFiniteOrDefault(env.MCP_MAX_BODY_BYTES, DEFAULT_MAX_BODY_BYTES);
   const rateLimit = positiveFiniteOrDefault(env.MCP_RATE_LIMIT_PER_MINUTE, DEFAULT_RATE_LIMIT);
   const requestTimeoutMs = positiveTimerDelayOrDefault(env.MCP_REQUEST_TIMEOUT_MS, DEFAULT_REQUEST_TIMEOUT_MS);
@@ -764,12 +780,20 @@ export function createBrightHttpServer({
       try {
         try {
           requestPath = new URL(req.url || '/', 'http://localhost').pathname;
-        } catch { requestPath = '/'; }
+        } catch {
+          requestPath = req.url || '/';
+        }
 
-        if (!allowedHosts.has(host)) {
+        if (req.headers['sec-fetch-dest'] === 'document') {
+          writeJsonBeforeBodyConsumed(req, res, 403, {error: {code: 'HOST_INVALID', message: 'Interactive browser document navigation is not permitted', requestId}}, requestId);
+          return;
+        }
+
+        if (!host || !allowedHosts.has(host)) {
           writeJsonBeforeBodyConsumed(req, res, 403, {error: {code: 'HOST_NOT_ALLOWED', message: 'Host is not allowed', requestId}}, requestId);
           return;
         }
+
         if (!isAllowedOrigin(req.headers.origin, allowedHosts)) {
           writeJsonBeforeBodyConsumed(req, res, 403, {error: {code: 'ORIGIN_NOT_ALLOWED', message: 'Origin is not allowed', requestId}}, requestId);
           return;
@@ -793,11 +817,24 @@ export function createBrightHttpServer({
           return;
         }
 
-        if (['GET', 'HEAD'].includes(method) &&
-            (url.pathname.startsWith('/artifacts/') || url.pathname.startsWith('/api/integrations/chatgpt/artifacts/')) &&
-            url.pathname.endsWith('/download')) {
-          const segments = url.pathname.split('/');
-          const artifactId = segments[segments.length - 2];
+        const isDownloadRoute = (pathname) => {
+          if (!pathname.endsWith('/download')) return false;
+          if (pathname.startsWith('/artifacts/') || pathname.startsWith('/api/integrations/chatgpt/artifacts/')) return true;
+          if (pathname.startsWith('/mcp/artifacts/') || pathname.startsWith('/mcp/api/integrations/chatgpt/artifacts/')) return true;
+          if (publicUrlPrefix && (pathname.startsWith(`${publicUrlPrefix}/artifacts/`) || pathname.startsWith(`${publicUrlPrefix}/api/integrations/chatgpt/artifacts/`))) return true;
+          return false;
+        };
+
+        const isRpcRoute = (pathname) => {
+          if (pathname === '/mcp') return true;
+          if (publicUrlPrefix && (pathname === publicUrlPrefix || pathname === `${publicUrlPrefix}/mcp`)) return true;
+          return false;
+        };
+
+        if (['GET', 'HEAD'].includes(method) && isDownloadRoute(url.pathname)) {
+          const segments = url.pathname.split('/').filter(Boolean);
+          const downloadIdx = segments.lastIndexOf('download');
+          const artifactId = downloadIdx > 0 ? segments[downloadIdx - 1] : '';
           const token = (url.searchParams.get('token') || '').trim();
           if (!artifactId) {
             writeJsonBeforeBodyConsumed(req, res, 400, {error: {code: 'INVALID_REQUEST', message: 'Missing artifactId', requestId}}, requestId);
@@ -840,7 +877,7 @@ export function createBrightHttpServer({
           return;
         }
 
-        if (url.pathname !== '/mcp') {
+        if (!isRpcRoute(url.pathname)) {
           writeJsonBeforeBodyConsumed(req, res, 404, {error: {code: 'NOT_FOUND', message: 'Route not found', requestId}}, requestId);
           return;
         }

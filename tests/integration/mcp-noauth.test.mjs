@@ -154,10 +154,11 @@ test('MCP No-Auth: Tool Discovery & Security Scheme Metadata', async (t) => {
     'start_video_render',
   ].sort());
 
-  // 2. All tools declare securitySchemes: [{type: 'noauth'}]
+  // 2. All tools declare securitySchemes: [{type: 'noauth'}] at tool root
   for (const tool of tools) {
-    assert.ok(tool.annotations?.securitySchemes, `Tool ${tool.name} missing securitySchemes`);
-    assert.deepEqual(tool.annotations.securitySchemes, [{type: 'noauth'}], `Tool ${tool.name} must declare noauth`);
+    assert.ok(tool.securitySchemes, `Tool ${tool.name} missing root-level securitySchemes`);
+    assert.deepEqual(tool.securitySchemes, [{type: 'noauth'}], `Tool ${tool.name} must declare root-level noauth`);
+    assert.equal(tool.annotations?.securitySchemes, undefined, `Tool ${tool.name} must not hide securitySchemes inside annotations`);
   }
 });
 
@@ -726,4 +727,201 @@ test('Authoritative Bright Profile Configuration: Deployed Env Cap Overrides Def
   const json2 = await res2.json();
   assert.equal(json2.error?.code, 'NOAUTH_CAPACITY_REACHED');
   assert.equal(repos.projects.countActiveChatGptProjects(), 1);
+});
+
+test('Authoritative Bright Profile Configuration: MCP_MAX_ACTIVE_PROJECTS in Compose environment configures backend capacity', async (t) => {
+  const dir = tempDir();
+  const dbPath = join(dir, 'mcp-env-cap-test.sqlite');
+  const db = openDatabase(dbPath);
+  migrateDatabase(db);
+  const repos = createRepositories(db);
+  const jobs = createJobStore(db);
+  const artifactStore = createArtifactStore(db);
+  const serviceToken = 'service-secret-token';
+
+  // In Compose, an operator sets MCP_MAX_ACTIVE_PROJECTS=1 which is forwarded into the backend
+  const config = (await import('../../app/config.mjs')).loadConfig({
+    BRIGHT_DATA_DIR: dir,
+    BRIGHT_DATABASE_PATH: dbPath,
+    BRIGHT_INTEGRATION_TOKEN: serviceToken,
+    MCP_MAX_ACTIVE_PROJECTS: '1',
+  });
+  assert.equal(config.integration.chatgptMaxActiveProjects, 1);
+
+  const appServer = createAppServer({
+    db,
+    repos,
+    jobs,
+    artifactStore,
+    dataDir: dir,
+    integrationToken: serviceToken,
+    maxActiveProjects: config.integration.chatgptMaxActiveProjects,
+  });
+  appServer.listen(0, '127.0.0.1');
+  await once(appServer, 'listening');
+  const appPort = appServer.address().port;
+  const appUrl = `http://127.0.0.1:${appPort}`;
+
+  t.after(() => {
+    appServer.close();
+    db.close();
+  });
+
+  const res1 = await fetch(`${appUrl}/api/integrations/chatgpt/projects/import`, {
+    method: 'POST',
+    headers: {'content-type': 'application/json', authorization: `Bearer ${serviceToken}`},
+    body: JSON.stringify({creator: 'Creator 1', topic: 'Topic', evidenceBundle: makeSampleBundle('1'), idempotencyKey: 'mcp-cap-1'}),
+  });
+  assert.equal(res1.status, 201);
+
+  const res2 = await fetch(`${appUrl}/api/integrations/chatgpt/projects/import`, {
+    method: 'POST',
+    headers: {'content-type': 'application/json', authorization: `Bearer ${serviceToken}`},
+    body: JSON.stringify({creator: 'Creator 2', topic: 'Topic', evidenceBundle: makeSampleBundle('2'), idempotencyKey: 'mcp-cap-2'}),
+  });
+  assert.equal(res2.status, 429);
+  const json2 = await res2.json();
+  assert.equal(json2.error?.code, 'NOAUTH_CAPACITY_REACHED');
+  assert.equal(repos.projects.countActiveChatGptProjects(), 1);
+});
+
+test('Deployment-Shaped MCP_PUBLIC_URL=/mcp: Emitted downloadUrl is served by MCP Download Proxy', async (t) => {
+  const dir = tempDir();
+  const dbPath = join(dir, 'download-mcp-prefix.sqlite');
+  const db = openDatabase(dbPath);
+  migrateDatabase(db);
+  const repos = createRepositories(db);
+  const jobs = createJobStore(db);
+  const artifactStore = createArtifactStore(db);
+  const serviceToken = 'service-secret-token';
+
+  // Seed a completed project with an output artifact
+  const projectId = 'proj-download-prefix-1';
+  const timestamp = new Date().toISOString();
+  repos.projects.createWithSources({
+    id: projectId,
+    creator: 'Creator',
+    topic: 'Topic',
+    instructions: '',
+    status: 'approved',
+    origin: 'chatgpt_mcp',
+    idempotencyKey: 'k-prefix-1',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }, []);
+
+  repos.revisions.create({
+    id: 'rev-prefix-1',
+    projectId,
+    revisionNo: 1,
+    payload: {creatorName: 'Creator', summary: 'Summary'},
+    payloadHash: 'a'.repeat(64),
+  });
+
+  db.prepare(`
+    UPDATE projects
+    SET approved_revision_id = 'rev-prefix-1', current_revision_id = 'rev-prefix-1', status = 'completed'
+    WHERE id = ?
+  `).run(projectId);
+
+  const artifactPayload = Buffer.from('fake-mp4-video-content-stream-bytes');
+  const videoRelPath = `artifacts/${projectId}/rev-prefix-1/authoritative.mp4`;
+  const videoAbsPath = join(dir, videoRelPath);
+  const {mkdirSync, writeFileSync} = await import('node:fs');
+  const {dirname} = await import('node:path');
+  mkdirSync(dirname(videoAbsPath), {recursive: true});
+  writeFileSync(videoAbsPath, artifactPayload);
+
+  const sha256 = (await import('node:crypto')).createHash('sha256').update(artifactPayload).digest('hex');
+  db.prepare(`
+    INSERT INTO artifacts (
+      id, project_id, revision_id, stage_id, attempt_id, kind, relative_path,
+      mime_type, byte_size, sha256, is_authoritative, created_at
+    ) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, 1, ?)
+  `).run(
+    'art-prefix-1',
+    projectId,
+    'rev-prefix-1',
+    'output_mp4',
+    videoRelPath,
+    'video/mp4',
+    artifactPayload.length,
+    sha256,
+    timestamp,
+  );
+
+  const appServer = createAppServer({
+    db,
+    repos,
+    jobs,
+    artifactStore,
+    dataDir: dir,
+    integrationToken: serviceToken,
+  });
+  appServer.listen(0, '127.0.0.1');
+  await once(appServer, 'listening');
+  const appPort = appServer.address().port;
+
+  // Start MCP server on port with MCP_PUBLIC_URL configured to include /mcp prefix (as in compose.mcp.yml)
+  const mcpServer = createBrightHttpServer({
+    env: {
+      MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+      MCP_NOAUTH_WRITE_ENABLED: 'true',
+      BRIGHT_BACKEND_URL: `http://127.0.0.1:${appPort}`,
+      BRIGHT_INTEGRATION_TOKEN: serviceToken,
+      // Will set MCP_PUBLIC_URL after listening
+    },
+  });
+  mcpServer.listen(0, '127.0.0.1');
+  await once(mcpServer, 'listening');
+  const mcpPort = mcpServer.address().port;
+
+  // Reconfigure MCP server instance with exact deployment shape MCP_PUBLIC_URL=http://127.0.0.1:<port>/mcp
+  mcpServer.close();
+  const deploymentMcpServer = createBrightHttpServer({
+    env: {
+      MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+      MCP_NOAUTH_WRITE_ENABLED: 'true',
+      MCP_PUBLIC_URL: `http://127.0.0.1:${mcpPort}/mcp`,
+      BRIGHT_BACKEND_URL: `http://127.0.0.1:${appPort}`,
+      BRIGHT_INTEGRATION_TOKEN: serviceToken,
+    },
+  });
+  deploymentMcpServer.listen(mcpPort, '127.0.0.1');
+  await once(deploymentMcpServer, 'listening');
+
+  t.after(() => {
+    deploymentMcpServer.close();
+    appServer.close();
+    db.close();
+  });
+
+  // Call get_video_project over MCP RPC
+  const listRes = await sendRawRpc({
+    port: mcpPort,
+    body: {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'get_video_project',
+        arguments: {projectId},
+      },
+    },
+  });
+
+  assert.equal(listRes.status, 200);
+  const project = listRes.body?.result?.structuredContent;
+  assert.ok(project?.output?.downloadUrl, 'Must include output downloadUrl');
+  assert.ok(
+    project.output.downloadUrl.startsWith(`http://127.0.0.1:${mcpPort}/mcp/artifacts/`),
+    `downloadUrl must start with deployment prefix: ${project.output.downloadUrl}`,
+  );
+
+  // Now fetch the EXACT emitted downloadUrl directly from the MCP server
+  const downloadRes = await fetch(project.output.downloadUrl);
+  assert.equal(downloadRes.status, 200, 'MCP server must serve the /mcp/artifacts/.../download URL');
+  assert.equal(downloadRes.headers.get('content-type'), 'video/mp4');
+  const downloadedBytes = Buffer.from(await downloadRes.arrayBuffer());
+  assert.deepEqual(downloadedBytes, artifactPayload, 'Downloaded payload must match authoritative MP4 bytes');
 });
