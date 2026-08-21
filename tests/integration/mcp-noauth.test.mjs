@@ -918,10 +918,147 @@ test('Deployment-Shaped MCP_PUBLIC_URL=/mcp: Emitted downloadUrl is served by MC
     `downloadUrl must start with deployment prefix: ${project.output.downloadUrl}`,
   );
 
-  // Now fetch the EXACT emitted downloadUrl directly from the MCP server
-  const downloadRes = await fetch(project.output.downloadUrl);
-  assert.equal(downloadRes.status, 200, 'MCP server must serve the /mcp/artifacts/.../download URL');
+  // Now fetch the EXACT emitted downloadUrl directly from the MCP server with browser navigation headers
+  const downloadRes = await fetch(project.output.downloadUrl, {
+    headers: {
+      'sec-fetch-dest': 'document',
+      'sec-fetch-mode': 'navigate',
+      'sec-fetch-user': '?1',
+      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,video/*,*/*;q=0.8',
+    },
+  });
+  assert.equal(downloadRes.status, 200, 'MCP server must serve the /mcp/artifacts/.../download URL to browser document navigations');
   assert.equal(downloadRes.headers.get('content-type'), 'video/mp4');
   const downloadedBytes = Buffer.from(await downloadRes.arrayBuffer());
   assert.deepEqual(downloadedBytes, artifactPayload, 'Downloaded payload must match authoritative MP4 bytes');
+
+  // Verify that document navigation to /mcp itself remains strictly rejected
+  const mcpDocRes = await sendRawHttp({
+    port: mcpPort,
+    path: '/mcp',
+    method: 'POST',
+    headers: {
+      host: '127.0.0.1',
+      'sec-fetch-dest': 'document',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({jsonrpc: '2.0', id: 2, method: 'tools/list'}),
+  });
+  assert.equal(mcpDocRes.status, 403);
+  assert.equal(mcpDocRes.json?.error?.code, 'HOST_NOT_ALLOWED');
+});
+
+test('Deployment-Shaped Topology & Capacity: Documented single cap setting rejects second project when cap is 1', async (t) => {
+  const dir = tempDir();
+  const dbPath = join(dir, 'mcp-deployment-cap.sqlite');
+  const db = openDatabase(dbPath);
+  migrateDatabase(db);
+  const repos = createRepositories(db);
+  const jobs = createJobStore(db);
+  const artifactStore = createArtifactStore(db);
+  const serviceToken = 'service-secret-token-12345';
+
+  // Load config with documented single BRIGHT_CHATGPT_MAX_ACTIVE_PROJECTS=1
+  const config = (await import('../../app/config.mjs')).loadConfig({
+    BRIGHT_DATA_DIR: dir,
+    BRIGHT_DATABASE_PATH: dbPath,
+    BRIGHT_INTEGRATION_TOKEN: serviceToken,
+    BRIGHT_CHATGPT_MAX_ACTIVE_PROJECTS: '1',
+  });
+  assert.equal(config.integration.chatgptMaxActiveProjects, 1);
+
+  const appServer = createAppServer({
+    db,
+    repos,
+    jobs,
+    artifactStore,
+    dataDir: dir,
+    integrationToken: serviceToken,
+    maxActiveProjects: config.integration.chatgptMaxActiveProjects,
+  });
+  appServer.listen(0, '127.0.0.1');
+  await once(appServer, 'listening');
+  const appPort = appServer.address().port;
+
+  const mcpServer = createBrightHttpServer({
+    env: {
+      MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+      MCP_NOAUTH_WRITE_ENABLED: 'true',
+      BRIGHT_BACKEND_URL: `http://127.0.0.1:${appPort}`,
+      BRIGHT_INTEGRATION_TOKEN: serviceToken,
+    },
+  });
+  mcpServer.listen(0, '127.0.0.1');
+  await once(mcpServer, 'listening');
+  const mcpPort = mcpServer.address().port;
+
+  t.after(() => {
+    mcpServer.close();
+    appServer.close();
+    db.close();
+  });
+
+  // 1. Tool discovery returns root-level securitySchemes: [{type: 'noauth'}]
+  const listRes = await sendRawRpc({
+    port: mcpPort,
+    body: {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/list',
+    },
+  });
+  assert.equal(listRes.status, 200);
+  assert.equal(listRes.body?.result?.tools?.length, 8);
+  for (const tool of listRes.body.result.tools) {
+    assert.deepEqual(tool.securitySchemes, [{type: 'noauth'}]);
+    assert.equal(tool.annotations?.securitySchemes, undefined);
+  }
+
+  // 2. First create_video_project over MCP succeeds
+  const create1Res = await sendRawRpc({
+    port: mcpPort,
+    body: {
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: {
+        name: 'create_video_project',
+        arguments: {
+          creator: 'Creator 1',
+          topic: 'Topic 1',
+          evidenceBundle: makeSampleBundle('Creator 1'),
+          idempotencyKey: 'deploy-cap-1',
+        },
+      },
+    },
+  });
+  assert.equal(create1Res.status, 200);
+  assert.equal(create1Res.body?.result?.isError, undefined);
+  assert.equal(repos.projects.countActiveChatGptProjects(), 1);
+
+  // 3. Second create_video_project over MCP is rejected with NOAUTH_CAPACITY_REACHED
+  const create2Res = await sendRawRpc({
+    port: mcpPort,
+    body: {
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'tools/call',
+      params: {
+        name: 'create_video_project',
+        arguments: {
+          creator: 'Creator 2',
+          topic: 'Topic 2',
+          evidenceBundle: makeSampleBundle('Creator 2'),
+          idempotencyKey: 'deploy-cap-2',
+        },
+      },
+    },
+  });
+  assert.equal(create2Res.status, 200);
+  assert.equal(create2Res.body?.result?.isError, true);
+  assert.ok(
+    create2Res.body?.result?.content?.[0]?.text?.includes('Anonymous active project capacity reached')
+    || create2Res.body?.result?.content?.[0]?.text?.includes('429'),
+  );
+  assert.equal(repos.projects.countActiveChatGptProjects(), 1);
 });

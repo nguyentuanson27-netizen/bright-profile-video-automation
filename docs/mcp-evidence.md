@@ -1,10 +1,11 @@
 # Bright Evidence MCP
 
-This repository exposes one MCP tool for ChatGPT research workflows:
+This repository exposes 8 MCP tools for ChatGPT research and video automation workflows:
 
 - `normalize_evidence` — a read-only, deterministic transform for caller-provided public-source evidence.
+- `create_video_project`, `get_video_project`, `edit_video_draft`, `approve_video_project`, `start_video_render`, `retry_video_project`, `cancel_video_project` — project lifecycle management tools (active when `MCP_NOAUTH_WRITE_ENABLED=true`).
 
-The MCP process does not browse, call an LLM, write to the Bright database, execute source content, or invoke the renderer. The existing render API remains independent.
+The MCP process delegates project and artifact lifecycle operations to the private backend app service over internal service authentication.
 
 ## Run locally
 
@@ -23,8 +24,10 @@ MCP_HOST=127.0.0.1
 MCP_PORT=4190
 MCP_ALLOWED_HOSTS=127.0.0.1,localhost
 MCP_MAX_BODY_BYTES=2097152
-MCP_RATE_LIMIT_PER_MINUTE=60
+MCP_RATE_LIMIT_PER_MINUTE=20
 MCP_REQUEST_TIMEOUT_MS=10000
+MCP_NOAUTH_WRITE_ENABLED=false
+MCP_MAX_INFLIGHT_WRITE_REQUESTS=2
 ```
 
 Invalid numeric safety settings fall back to their documented defaults. Non-finite or non-positive body/rate values fall back, and `MCP_REQUEST_TIMEOUT_MS` also falls back when it exceeds Node's supported timer-delay range (`2_147_483_647` ms). In particular, an invalid `MCP_MAX_BODY_BYTES` value cannot disable the default 2 MB request-body boundary.

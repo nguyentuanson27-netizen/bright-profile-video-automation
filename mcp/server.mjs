@@ -541,27 +541,30 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch, inFlig
     }),
   );
 
-  const originalToolsListHandler = server.server._requestHandlers.get('tools/list');
-  if (originalToolsListHandler) {
-    server.server._requestHandlers.set('tools/list', async (request, extra) => {
-      const result = await originalToolsListHandler(request, extra);
-      if (result && Array.isArray(result.tools)) {
-        return {
-          ...result,
-          tools: result.tools.map((tool) => {
-            const {securitySchemes: _omitted, ...cleanAnnotations} = tool.annotations || {};
-            const hasAnnotations = Object.keys(cleanAnnotations).length > 0;
-            return {
-              ...tool,
-              annotations: hasAnnotations ? cleanAnnotations : undefined,
-              securitySchemes: [{type: 'noauth'}],
-            };
-          }),
-        };
-      }
-      return result;
-    });
+  // Compatibility shim: OpenAI MCP connector protocol requires per-tool root-level securitySchemes: [{type: 'noauth'}]
+  // rather than placing securitySchemes inside tool.annotations. We wrap the tools/list handler to emit root-level securitySchemes.
+  const originalToolsListHandler = server.server?._requestHandlers?.get('tools/list');
+  if (!originalToolsListHandler) {
+    throw new Error('MCP SDK compatibility shim failed: tools/list handler not found in server._requestHandlers');
   }
+  server.server._requestHandlers.set('tools/list', async (request, extra) => {
+    const result = await originalToolsListHandler(request, extra);
+    if (result && Array.isArray(result.tools)) {
+      return {
+        ...result,
+        tools: result.tools.map((tool) => {
+          const {securitySchemes: _omitted, ...cleanAnnotations} = tool.annotations || {};
+          const hasAnnotations = Object.keys(cleanAnnotations).length > 0;
+          return {
+            ...tool,
+            annotations: hasAnnotations ? cleanAnnotations : undefined,
+            securitySchemes: [{type: 'noauth'}],
+          };
+        }),
+      };
+    }
+    return result;
+  });
 
   return server;
 }
@@ -778,44 +781,9 @@ export function createBrightHttpServer({
       let requestPath = '/';
 
       try {
-        try {
-          requestPath = new URL(req.url || '/', 'http://localhost').pathname;
-        } catch {
-          requestPath = req.url || '/';
-        }
-
-        if (req.headers['sec-fetch-dest'] === 'document') {
-          writeJsonBeforeBodyConsumed(req, res, 403, {error: {code: 'HOST_INVALID', message: 'Interactive browser document navigation is not permitted', requestId}}, requestId);
-          return;
-        }
-
-        if (!host || !allowedHosts.has(host)) {
-          writeJsonBeforeBodyConsumed(req, res, 403, {error: {code: 'HOST_NOT_ALLOWED', message: 'Host is not allowed', requestId}}, requestId);
-          return;
-        }
-
-        if (!isAllowedOrigin(req.headers.origin, allowedHosts)) {
-          writeJsonBeforeBodyConsumed(req, res, 403, {error: {code: 'ORIGIN_NOT_ALLOWED', message: 'Origin is not allowed', requestId}}, requestId);
-          return;
-        }
-
         const base = `http://${req.headers.host || 'localhost'}`;
         const url = new URL(req.url || '/', base);
         requestPath = url.pathname;
-
-        if (url.pathname === '/health' && req.method === 'GET') {
-          if (requestDeclaresBody(req)) {
-            writeJsonBeforeBodyConsumed(req, res, 200, {ok: true}, requestId);
-          } else {
-            writeJson(res, 200, {ok: true}, requestId);
-          }
-          return;
-        }
-
-        if (!allowRequest(remote)) {
-          writeJsonBeforeBodyConsumed(req, res, 429, {error: {code: 'RATE_LIMITED', message: 'Too many requests', requestId}}, requestId);
-          return;
-        }
 
         const isDownloadRoute = (pathname) => {
           if (!pathname.endsWith('/download')) return false;
@@ -830,6 +798,35 @@ export function createBrightHttpServer({
           if (publicUrlPrefix && (pathname === publicUrlPrefix || pathname === `${publicUrlPrefix}/mcp`)) return true;
           return false;
         };
+
+        if (!isDownloadRoute(url.pathname) && req.headers['sec-fetch-dest'] === 'document') {
+          writeJsonBeforeBodyConsumed(req, res, 403, {error: {code: 'HOST_NOT_ALLOWED', message: 'Interactive browser document navigation is not permitted', requestId}}, requestId);
+          return;
+        }
+
+        if (!host || !allowedHosts.has(host)) {
+          writeJsonBeforeBodyConsumed(req, res, 403, {error: {code: 'HOST_NOT_ALLOWED', message: 'Host is not allowed', requestId}}, requestId);
+          return;
+        }
+
+        if (!isAllowedOrigin(req.headers.origin, allowedHosts)) {
+          writeJsonBeforeBodyConsumed(req, res, 403, {error: {code: 'ORIGIN_NOT_ALLOWED', message: 'Origin is not allowed', requestId}}, requestId);
+          return;
+        }
+
+        if (url.pathname === '/health' && req.method === 'GET') {
+          if (requestDeclaresBody(req)) {
+            writeJsonBeforeBodyConsumed(req, res, 200, {ok: true}, requestId);
+          } else {
+            writeJson(res, 200, {ok: true}, requestId);
+          }
+          return;
+        }
+
+        if (!allowRequest(remote)) {
+          writeJsonBeforeBodyConsumed(req, res, 429, {error: {code: 'RATE_LIMITED', message: 'Too many requests', requestId}}, requestId);
+          return;
+        }
 
         if (['GET', 'HEAD'].includes(method) && isDownloadRoute(url.pathname)) {
           const segments = url.pathname.split('/').filter(Boolean);

@@ -1,6 +1,6 @@
 # Bright Creator Profile
 
-Internal creator-profile video automation built around a standalone Node/SQLite app, durable worker stages, React/Vite review UI, Remotion, Google Cloud TTS, and the read-only Bright Evidence MCP integration for ChatGPT.
+Internal creator-profile video automation built around a standalone Node/SQLite app, durable worker stages, React/Vite review UI, Remotion, Google Cloud TTS, and the Bright Evidence MCP integration for ChatGPT.
 
 ## Standalone internal MVP
 
