@@ -14,7 +14,9 @@ T01-T16 belong to the completed standalone MVP baseline and remain covered by `t
 - If storage retains `approval_mode='user_reviewed'`, it is a legacy compatibility label only and must not be treated as proof of human identity/review.
 - Anonymous writes are disabled by default and may be enabled only in a bounded acceptance/test window.
 - Existing Host/Origin/body/deadline/rate-limit/SSRF/artifact/fencing controls remain mandatory.
-- New no-auth kill-switch and bounded capacity controls are mandatory.
+- No-auth kill switch and finite edge capacity controls are mandatory.
+- `MCP_MAX_ACTIVE_PROJECTS` is a **durable backend invariant**, not a process-local MCP precheck.
+- T28 teardown requires **both** write disable and external MCP ingress withdrawal.
 - Do not mark live/runtime gates complete from unit/integration tests alone.
 
 ---
@@ -40,12 +42,13 @@ T01-T16 belong to the completed standalone MVP baseline and remain covered by `t
 - [ ] `MCP_MAX_INFLIGHT_WRITE_REQUESTS` is finite; target default `2`.
 - [ ] `MCP_MAX_ACTIVE_PROJECTS` is finite; target default `3`.
 - [ ] `MCP_RATE_LIMIT_PER_MINUTE` is finite; target default `20`.
+- [ ] MCP-local active-project checks, if present, are optimization only and not authoritative.
 
 **Verification:**
 
 - [ ] focused noauth transport tests RED -> GREEN;
 - [ ] kill-switch zero-mutation regressions;
-- [ ] rate/in-flight/active-project capacity regressions;
+- [ ] rate/in-flight capacity regressions;
 - [ ] direct backend service-auth negative tests;
 - [ ] existing body/deadline/rate-limit/Host/Origin regressions green.
 
@@ -86,11 +89,12 @@ T01-T16 belong to the completed standalone MVP baseline and remain covered by `t
 - [ ] no new destructive migration is introduced merely to remove deferred OAuth/delegation behavior or rename the compatibility approval enum.
 - [ ] active runtime no longer depends on persisted OAuth client/session/token state.
 - [ ] legacy `user_reviewed` compatibility semantics are documented if retained.
+- [ ] storage/repository API can enforce active-project admission in one SQLite transaction with create/reactivation.
 - [ ] exact-head migration/reopen checks pass after reset.
 
 ---
 
-## T20 — Retain service-authenticated EvidenceBundle import
+## T20 — Retain service-authenticated EvidenceBundle import + transactional capacity admission
 
 **Status:** IMPLEMENTED BASELINE; RESET RE-VERIFY REQUIRED
 
@@ -101,7 +105,11 @@ T01-T16 belong to the completed standalone MVP baseline and remain covered by `t
 - [x] imported project skips backend research provider.
 - [x] imported project reaches `research_ready` and queues generation.
 - [ ] direct calls without valid `BRIGHT_INTEGRATION_TOKEN` fail closed with zero mutation after noauth reset.
-- [ ] new create is rejected with `NOAUTH_CAPACITY_REACHED` when the configured non-terminal ChatGPT-origin project cap is reached.
+- [ ] idempotent replay returns the existing project without consuming another active slot.
+- [ ] for a genuinely new project, active-project count check + project creation + first active work enqueue happen in the same SQLite transaction.
+- [ ] new create is rejected with `NOAUTH_CAPACITY_REACHED` when the configured non-terminal ChatGPT-origin cap is full.
+- [ ] capacity rejection commits no new project/job.
+- [ ] two concurrent creates competing for the final slot cannot both commit.
 - [ ] exact-head import/reopen/idempotency regressions remain green.
 
 ---
@@ -123,6 +131,7 @@ T01-T16 belong to the completed standalone MVP baseline and remain covered by `t
 - [ ] MCP -> backend correlation IDs remain propagated.
 - [ ] backend client remains private/service-authenticated.
 - [ ] all mutating tools pass through write-enable + in-flight capacity gate before backend dispatch.
+- [ ] authoritative active-project admission is delegated to Bright Profile durable storage boundary.
 
 ### Checkpoint A
 
@@ -131,7 +140,7 @@ T01-T16 belong to the completed standalone MVP baseline and remain covered by `t
 - [ ] writes disabled -> write tool fails with zero mutation;
 - [ ] writes enabled -> legal write tool reaches backend;
 - [ ] direct backend no token/wrong token -> reject;
-- [ ] Host/body/deadline/rate-limit/capacity controls remain green.
+- [ ] Host/body/deadline/rate-limit controls remain green.
 
 ---
 
@@ -176,7 +185,7 @@ T01-T16 belong to the completed standalone MVP baseline and remain covered by `t
 
 ---
 
-## T24 — Render/retry/cancel controls
+## T24 — Render/retry/cancel controls + capacity-aware retry
 
 **Status:** IMPLEMENTED BASELINE; RESET RE-VERIFY REQUIRED
 
@@ -187,6 +196,10 @@ T01-T16 belong to the completed standalone MVP baseline and remain covered by `t
 - [ ] no external-auth assumption remains in these MCP wrappers.
 - [ ] write kill-switch applies before render/retry/cancel backend mutation.
 - [ ] in-flight write cap applies to mutating wrappers.
+- [ ] retry/requeue that changes a failed/inactive ChatGPT-origin project back to active uses the same durable active-project admission transaction as create.
+- [ ] retry at full capacity returns `NOAUTH_CAPACITY_REACHED` with zero replacement attempt/job/state mutation.
+- [ ] repeated retry for already queued/running replacement work remains idempotent and consumes no second slot.
+- [ ] cancel/stale-owner fencing remains authoritative.
 - [ ] exact-head render/retry/cancel regressions remain green.
 
 ---
@@ -206,7 +219,7 @@ T01-T16 belong to the completed standalone MVP baseline and remain covered by `t
 
 ---
 
-## T26 — Remove OAuth/DCR deployment/config/runtime state and add bounded noauth guardrails
+## T26 — Remove OAuth/DCR deployment/config/runtime state and define bounded noauth ingress
 
 **Status:** REOPENED
 
@@ -240,6 +253,8 @@ Keep/add/verify:
 - [ ] private MCP -> app network path works.
 - [ ] request correlation remains secret-safe.
 - [ ] no noauth limit defaults to unlimited.
+- [ ] no process-local counter is treated as authoritative for `MCP_MAX_ACTIVE_PROJECTS`.
+- [ ] T28 closure requires external MCP ingress withdrawal even after writes are disabled.
 
 ---
 
@@ -273,8 +288,11 @@ Required adversarial/recovery coverage:
 - [ ] write kill-switch returns `NOAUTH_WRITE_DISABLED` with zero mutation;
 - [ ] configured rate limit is enforced;
 - [ ] configured in-flight write cap is enforced;
-- [ ] configured active-project cap returns `NOAUTH_CAPACITY_REACHED` with no extra project;
-- [ ] duplicate create/render/retry calls do not duplicate durable work;
+- [ ] new create at active cap returns `NOAUTH_CAPACITY_REACHED` with no project/job mutation;
+- [ ] retry/reactivation at active cap returns `NOAUTH_CAPACITY_REACHED` with no replacement attempt/job/state mutation;
+- [ ] concurrent create + retry (or equivalent two independent admissions) at the final slot proves at most one commits and active count never exceeds the cap;
+- [ ] idempotent create/retry replay does not consume duplicate slots;
+- [ ] duplicate render/retry calls do not duplicate durable work;
 - [ ] DB reopen/restart retains representative state;
 - [ ] stale edit/approval rejected;
 - [ ] direct backend no/wrong service token rejected with zero mutation;
@@ -307,6 +325,7 @@ Verification:
 - [ ] remote MCP ingress is intentionally enabled for the bounded acceptance window.
 - [ ] `MCP_NOAUTH_WRITE_ENABLED=true` is set explicitly for the window.
 - [ ] configured rate/in-flight/active-project limits are recorded.
+- [ ] ingress enable timestamp is recorded.
 - [ ] standalone app itself remains private.
 
 ### Live Path A — stop at review
@@ -331,18 +350,21 @@ Verification:
 - [ ] final authoritative MP4 is retrievable.
 - [ ] final MP4 is playable.
 
-### Acceptance-window teardown
+### Acceptance-window teardown — both required
 
-- [ ] `MCP_NOAUTH_WRITE_ENABLED=false` is restored and/or remote ingress is withdrawn.
-- [ ] disable/withdraw timestamp is recorded.
-- [ ] noauth write surface is not left always-on by default after acceptance.
+- [ ] `MCP_NOAUTH_WRITE_ENABLED=false` is restored.
+- [ ] external HTTPS MCP ingress/reverse-proxy route is withdrawn/disabled.
+- [ ] remote MCP endpoint is verified no longer externally reachable.
+- [ ] write-disable timestamp is recorded.
+- [ ] ingress-withdraw timestamp is recorded.
+- [ ] if later temporary testing is needed, a new explicitly approved bounded window is opened rather than leaving T28 ingress running.
 
 ### Evidence/closure
 
 - [ ] record exact HEAD/image/environment.
 - [ ] record project IDs/status transitions/tool calls without secrets.
 - [ ] record bounded approval provenance without claiming authenticated human identity.
-- [ ] record configured noauth limits and write-window enable/disable times.
+- [ ] record configured noauth limits and ingress/write-window enable/disable times.
 - [ ] record completed download/playback evidence.
 - [ ] full exact-head `Bright Profile Verification` workflow green.
 - [ ] project-wide Definition of Done checked.
@@ -356,15 +378,17 @@ Verification:
 
 Do not mark the milestone complete until all are true:
 
-- [ ] external ChatGPT -> MCP is one coherent `noauth` contract;
+- [ ] external ChatGPT -> MCP is one coherent `noauth` contract used only during a bounded ingress window;
 - [ ] OAuth/DCR/session/static external bearer code/config is absent from the active milestone;
 - [ ] private MCP -> Bright Profile service authentication remains fail-closed;
 - [ ] anonymous writes are disabled by default;
-- [ ] rate/in-flight/active-project caps are finite and enforced;
+- [ ] rate/in-flight caps are finite and enforced;
+- [ ] active-project capacity is enforced transactionally for create and retry/reactivation;
+- [ ] concurrent admissions cannot exceed the configured active-project cap;
 - [ ] `delegated_e2e` is deferred and unreachable from the active MCP contract;
 - [ ] approval is represented as external review acknowledgment, not authenticated human proof;
 - [ ] deterministic noauth E2E passes without claiming human-review proof;
 - [ ] exact-head CI passes;
 - [ ] live ChatGPT noauth Path A and Path B pass;
-- [ ] write window is disabled/withdrawn after live acceptance;
+- [ ] after live acceptance, writes are disabled **and** external MCP ingress is withdrawn;
 - [ ] docs and PR body describe only observed current truth.
