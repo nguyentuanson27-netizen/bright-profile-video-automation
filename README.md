@@ -103,8 +103,8 @@ Supported scene types are `hero`, `claim`, `vertical`, `source`, `social`, and `
 
 ## Bright Evidence MCP for ChatGPT
 
-The repository also contains the read-only Bright Evidence MCP tool `normalize_evidence`. The MCP Docker service remains independently published on host loopback and is expected to sit behind an HTTPS reverse proxy when used remotely. See `docs/mcp-remote.md` and `docs/mcp-evidence.md` for that boundary.
+The repository exposes the Bright Evidence MCP integration for ChatGPT research and video automation with 8 tools (`normalize_evidence`, `create_video_project`, `get_video_project`, `edit_video_draft`, `approve_video_project`, `start_video_render`, `retry_video_project`, `cancel_video_project`). The MCP Docker service remains independently published on host loopback and sits behind an HTTPS reverse proxy when used remotely with temporary noauth access. See `docs/mcp-remote.md` and `docs/mcp-evidence.md` for that boundary and lifecycle contract.
 
 The current project scope is direct internal ChatGPT use. Public plugin distribution, Codex packaging, commercial launch readiness, and public Plugins Directory submission are not current goals.
 
-See `docs/project-status.md`, `docs/specs/standalone-internal-mvp-amendment.md`, and `tasks/traceability.md` for the authoritative internal-MVP scope and closure ledger.
+See `docs/project-status.md`, `docs/specs/chatgpt-mcp-e2e-video-handoff.md`, and `tasks/traceability.md` for the authoritative milestone scope and closure ledger.

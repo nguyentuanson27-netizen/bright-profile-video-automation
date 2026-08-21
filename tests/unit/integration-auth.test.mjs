@@ -1,4 +1,4 @@
-﻿import test from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   assertValidBearerToken,
@@ -27,31 +27,35 @@ test('compareTokensConstantTime safely verifies matching and non-matching tokens
 });
 
 test('assertValidBearerToken validates token against expected secret and throws on mismatch', () => {
-  assert.doesNotThrow(() => assertValidBearerToken('Bearer valid-secret', 'valid-secret'));
+  assert.doesNotThrow(() => assertValidBearerToken('Bearer valid-secret-123456', 'valid-secret-123456'));
 
   assert.throws(
-    () => assertValidBearerToken('Bearer wrong-secret', 'valid-secret'),
+    () => assertValidBearerToken('Bearer wrong-secret-123456', 'valid-secret-123456'),
     (error) => error.code === 'UNAUTHORIZED' && error.status === 401,
   );
 
   assert.throws(
-    () => assertValidBearerToken('', 'valid-secret'),
+    () => assertValidBearerToken('', 'valid-secret-123456'),
     (error) => error.code === 'UNAUTHORIZED' && error.status === 401,
   );
 
   assert.throws(
-    () => assertValidBearerToken(undefined, 'valid-secret'),
+    () => assertValidBearerToken(undefined, 'valid-secret-123456'),
     (error) => error.code === 'UNAUTHORIZED' && error.status === 401,
   );
 });
 
-test('assertValidBearerToken fails closed when expected secret is empty or not configured', () => {
+test('assertValidBearerToken fails closed when expected secret is empty, undefined, or shorter than 16 chars', () => {
   assert.throws(
-    () => assertValidBearerToken('Bearer valid-secret', ''),
+    () => assertValidBearerToken('Bearer valid-secret-123456', ''),
     (error) => error.code === 'AUTH_NOT_CONFIGURED' && error.status === 500,
   );
   assert.throws(
-    () => assertValidBearerToken('Bearer valid-secret', undefined),
+    () => assertValidBearerToken('Bearer valid-secret-123456', undefined),
+    (error) => error.code === 'AUTH_NOT_CONFIGURED' && error.status === 500,
+  );
+  assert.throws(
+    () => assertValidBearerToken('Bearer valid-secret-123456', 'short-secret'),
     (error) => error.code === 'AUTH_NOT_CONFIGURED' && error.status === 500,
   );
 });

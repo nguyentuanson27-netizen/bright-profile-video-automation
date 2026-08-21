@@ -34,14 +34,16 @@ export function compareTokensConstantTime(provided, expected) {
   return timingSafeEqual(providedBuffer, expectedBuffer);
 }
 
+export const MIN_SECRET_LENGTH = 16;
+
 export function assertValidBearerToken(authHeader, expectedToken, {
   errorCode = 'UNAUTHORIZED',
   errorMessage = 'Unauthorized',
 } = {}) {
-  if (typeof expectedToken !== 'string' || expectedToken.trim().length === 0) {
+  if (typeof expectedToken !== 'string' || expectedToken.trim().length < MIN_SECRET_LENGTH) {
     throw new AppError(
       'AUTH_NOT_CONFIGURED',
-      'Authentication secret is not configured',
+      `Authentication secret is not configured or shorter than ${MIN_SECRET_LENGTH} characters`,
       {status: 500},
     );
   }

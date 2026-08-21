@@ -33,8 +33,8 @@ test('MCP server registers edit_video_draft, approve_video_project, start_video_
       MCP_NOAUTH_WRITE_ENABLED: 'true',
       MCP_AUTH_TOKEN: 'test-mcp-token-123456',
       MCP_NOAUTH_WRITE_ENABLED: 'true',
-        BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
-      BRIGHT_INTEGRATION_TOKEN: 'service-token',
+      BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
+      BRIGHT_INTEGRATION_TOKEN: 'service-token-123456',
     },
   });
   server.listen(0, '127.0.0.1');

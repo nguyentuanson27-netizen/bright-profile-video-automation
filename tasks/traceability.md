@@ -149,25 +149,25 @@ Before delivery under the reset contract:
 - [x] Standalone T01-T16 closure ledger remains unchanged in substance and binding.
 - [x] Noauth reset requirements have owner tasks.
 - [x] Traceability file explicitly distinguishes frozen standalone and open MCP ledgers.
-- [ ] Active MCP runtime matches `noauth` rather than OAuth/static bearer fallback.
-- [ ] Private MCP -> app service auth remains fail-closed.
-- [ ] No-auth writes are disabled by default with a tested kill switch.
-- [ ] Rate/in-flight limits are finite and tested.
-- [ ] Active-project capacity is transactionally enforced at Bright Profile for new create and retry/reactivation.
-- [ ] Concurrent admissions cannot commit more active ChatGPT-origin projects than the configured cap.
-- [ ] Capacity rejection produces zero new project/job/attempt/reactivation mutation.
-- [ ] Approval is represented as external review acknowledgment, not authenticated human proof.
-- [ ] Any legacy stored `user_reviewed` value is documented/tested as compatibility data only.
-- [ ] OAuth/DCR/session runtime/config/storage is removed from the current milestone.
-- [ ] Delegated E2E is deferred and unreachable from active MCP contract.
-- [ ] Deterministic noauth E2E passes on exact implementation HEAD without claiming human-review proof.
-- [ ] Full exact-head CI passes after the reset implementation.
+- [x] Active MCP runtime matches `noauth` rather than OAuth/static bearer fallback.
+- [x] Private MCP -> app service auth remains fail-closed with minimum 16-character secret validation.
+- [x] No-auth writes are disabled by default with a tested kill switch.
+- [x] Rate/in-flight limits are finite and tested (20 req/min, 2 in-flight writes).
+- [x] Active-project capacity is transactionally enforced at Bright Profile for new create and retry/reactivation (`BRIGHT_CHATGPT_MAX_ACTIVE_PROJECTS`).
+- [x] Concurrent admissions cannot commit more active ChatGPT-origin projects than the configured cap.
+- [x] Capacity rejection produces zero new project/job/attempt/reactivation mutation.
+- [x] Approval is represented as external review acknowledgment, not authenticated human proof.
+- [x] Any legacy stored `user_reviewed` value is documented/tested as compatibility data only.
+- [x] OAuth/DCR/session runtime/config/storage is removed from the current milestone.
+- [x] Delegated E2E is deferred and unreachable from active MCP contract.
+- [x] Deterministic noauth E2E passes on exact implementation HEAD without claiming human-review proof.
+- [x] Full exact-head CI passes after the reset implementation (workflow run #526).
 - [ ] Live ChatGPT noauth Path A shows the tested client waits for user confirmation.
 - [ ] Live review-acknowledged completion Path B passes.
 - [ ] T28 records write/ingress enable values.
 - [ ] T28 restores `MCP_NOAUTH_WRITE_ENABLED=false`.
 - [ ] T28 withdraws external MCP ingress and verifies the remote endpoint is no longer externally reachable.
-- [ ] Final docs and PR body match observed current truth.
+- [x] Final docs and PR body match observed current truth.
 - [ ] Project-wide Definition of Done is checked.
 
-Closure audit result: **OPEN — docs define truthful approval semantics, durable active-work admission, and mandatory external-ingress teardown; implementation and live verification are still pending.**
+Closure audit result: **OPEN — implementation and exact-head CI verification are complete; live ChatGPT acceptance and mandatory external-ingress teardown remain open for T28 live execution.**

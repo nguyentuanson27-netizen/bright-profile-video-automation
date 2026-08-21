@@ -192,6 +192,7 @@ export const createAppServer = ({
   mediaIngestMaxAttempts = 4,
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
   integrationToken,
+  downloadSigningSecret,
   allowedIntegrationHosts = ['127.0.0.1', 'localhost', 'app', '::1', '[::1]'],
   maxActiveProjects,
 } = {}) => {
@@ -228,6 +229,7 @@ export const createAppServer = ({
     artifactStore: resolvedArtifactStore,
     dataDir: resolvedDataDir,
     serviceToken: integrationToken,
+    downloadSigningSecret,
     mcpPublicUrl: process.env.MCP_PUBLIC_URL || process.env.BRIGHT_PUBLIC_URL || 'http://127.0.0.1:4190',
     maxActiveProjects,
     now,

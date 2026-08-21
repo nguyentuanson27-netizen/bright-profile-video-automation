@@ -1062,3 +1062,108 @@ test('Deployment-Shaped Topology & Capacity: Documented single cap setting rejec
   );
   assert.equal(repos.projects.countActiveChatGptProjects(), 1);
 });
+
+test('Credential contract: loadConfig rejects BRIGHT_INTEGRATION_TOKEN shorter than 16 chars', async () => {
+  const {loadConfig} = await import('../../app/config.mjs');
+  assert.throws(
+    () => loadConfig({
+      BRIGHT_DATA_DIR: './data',
+      BRIGHT_INTEGRATION_TOKEN: 'short-token',
+    }),
+    (error) => error.message.includes('BRIGHT_INTEGRATION_TOKEN must be at least 16 characters'),
+  );
+
+  assert.throws(
+    () => loadConfig({
+      BRIGHT_DATA_DIR: './data',
+      BRIGHT_DOWNLOAD_SIGNING_SECRET: 'short-secret',
+    }),
+    (error) => error.message.includes('BRIGHT_DOWNLOAD_SIGNING_SECRET must be at least 16 characters'),
+  );
+
+  // Valid tokens >= 16 chars load successfully
+  const valid = loadConfig({
+    BRIGHT_DATA_DIR: './data',
+    BRIGHT_INTEGRATION_TOKEN: 'valid-secret-token-12345',
+    BRIGHT_DOWNLOAD_SIGNING_SECRET: 'valid-signing-secret-12345',
+  });
+  assert.equal(valid.integration.serviceToken, 'valid-secret-token-12345');
+  assert.equal(valid.integration.downloadSigningSecret, 'valid-signing-secret-12345');
+});
+
+test('Credential contract: project status fails closed with 500 when authoritative output exists without valid signing secret', async () => {
+  const dir = tempDir();
+  const dbPath = join(dir, 'mcp-secret-check.sqlite');
+  const db = openDatabase(dbPath);
+  migrateDatabase(db);
+  const repos = createRepositories(db);
+  const jobs = createJobStore(db);
+  const artifactStore = createArtifactStore(db);
+
+  // Setup project with completed output MP4
+  const projectId = 'proj-secret-test';
+  const revisionId = 'rev-secret-test';
+  repos.projects.create({
+    id: projectId,
+    creator: 'Test Creator',
+    topic: 'Secret Test',
+    instructions: 'Test instructions',
+    origin: 'chatgpt_mcp',
+    status: 'completed',
+    currentRevisionId: revisionId,
+    approvedRevisionId: revisionId,
+  });
+  repos.revisions.create({
+    id: revisionId,
+    projectId,
+    revisionNo: 1,
+    payloadHash: 'a'.repeat(64),
+    payload: {
+      creatorName: 'Test Creator',
+      summary: 'Summary',
+      claims: [],
+      script: [],
+      voiceover: {chunks: []},
+      scenes: [],
+      render: {duration: 5},
+    },
+  });
+  db.prepare('UPDATE projects SET current_revision_id = ?, approved_revision_id = ? WHERE id = ?').run(
+    revisionId,
+    revisionId,
+    projectId,
+  );
+  db.prepare(`
+    INSERT INTO artifacts (
+      id, project_id, revision_id, stage_id, attempt_id, kind, relative_path,
+      mime_type, byte_size, sha256, is_authoritative, created_at
+    ) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, 1, ?)
+  `).run(
+    'art-secret-1',
+    projectId,
+    revisionId,
+    'output_mp4',
+    'artifacts/test.mp4',
+    'video/mp4',
+    100,
+    'c'.repeat(64),
+    new Date().toISOString(),
+  );
+
+  // Create integrations API without signing secret or with invalid short secret
+  const {createIntegrationsApi} = await import('../../app/http/integrations.mjs');
+  const badIntegrations = createIntegrationsApi({
+    repos,
+    jobs,
+    artifactStore,
+    dataDir: dir,
+    serviceToken: undefined,
+    downloadSigningSecret: undefined,
+  });
+
+  assert.throws(
+    () => badIntegrations.getProjectStatus(projectId),
+    (error) => error.code === 'AUTH_NOT_CONFIGURED' && error.status === 500,
+  );
+  db.close();
+});

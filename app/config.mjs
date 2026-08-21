@@ -43,6 +43,19 @@ const readRequiredText = (env, name, fallback) => {
   return value.trim();
 };
 
+const readSecret = (env, name, fallback, {minLength = 16} = {}) => {
+  const value = env[name];
+  if (value === undefined || value === '') return fallback;
+  if (typeof value !== 'string') {
+    throw new Error(`${name} must be a string`);
+  }
+  const trimmed = value.trim();
+  if (trimmed.length < minLength) {
+    throw new Error(`${name} must be at least ${minLength} characters`);
+  }
+  return trimmed;
+};
+
 export const loadConfig = (env = process.env, {cwd = process.cwd()} = {}) => {
   const dataDir = resolve(cwd, readRequiredText(env, 'BRIGHT_DATA_DIR', DEFAULTS.dataDir));
   const databasePath = resolve(
@@ -70,7 +83,8 @@ export const loadConfig = (env = process.env, {cwd = process.cwd()} = {}) => {
       maxRetries: readInteger(env, 'OPENAI_API_MAX_RETRIES', DEFAULTS.openaiMaxRetries, {min: 0, max: MAXIMUMS.openaiMaxRetries}),
     }),
     integration: Object.freeze({
-      serviceToken: env.BRIGHT_INTEGRATION_TOKEN?.trim() || undefined,
+      serviceToken: readSecret(env, 'BRIGHT_INTEGRATION_TOKEN', undefined, {minLength: 16}),
+      downloadSigningSecret: readSecret(env, 'BRIGHT_DOWNLOAD_SIGNING_SECRET', undefined, {minLength: 16}),
       backendUrl: env.BRIGHT_BACKEND_URL?.trim() || 'http://127.0.0.1:4180',
       allowedHosts: env.BRIGHT_ALLOWED_INTEGRATION_HOSTS?.split(',').map((h) => h.trim().toLowerCase()).filter(Boolean) || ['127.0.0.1', 'localhost', 'app', '::1', '[::1]'],
       chatgptMaxActiveProjects: readInteger(

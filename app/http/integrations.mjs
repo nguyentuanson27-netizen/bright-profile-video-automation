@@ -42,6 +42,7 @@ export const createIntegrationsApi = ({
   artifactStore,
   dataDir: _dataDir,
   serviceToken,
+  downloadSigningSecret,
   mcpPublicUrl,
   maxActiveProjects = 3,
   now = Date.now,
@@ -60,6 +61,8 @@ export const createIntegrationsApi = ({
     throw new TypeError('jobs store is required');
   }
 
+  const signingSecret = (downloadSigningSecret || serviceToken || '').trim();
+
   const assertAuth = (authHeader) => {
     assertValidBearerToken(authHeader, serviceToken, {
       errorCode: ErrorCodes.UNAUTHORIZED,
@@ -68,8 +71,11 @@ export const createIntegrationsApi = ({
   };
 
   const assertDownloadAuth = (authHeader, queryToken, artifactId) => {
-    if (queryToken && serviceToken && serviceToken.length >= 16) {
-      const verified = verifyDownloadToken({token: queryToken, secret: serviceToken, nowMs: nowMs()});
+    if (queryToken) {
+      if (!signingSecret || signingSecret.length < 16) {
+        throw new AppError('AUTH_NOT_CONFIGURED', 'Download signing secret is not configured with minimum 16 characters', {status: 500});
+      }
+      const verified = verifyDownloadToken({token: queryToken, secret: signingSecret, nowMs: nowMs()});
       if (verified.artifactId !== artifactId) {
         throw new AppError(ErrorCodes.DOWNLOAD_TOKEN_INVALID, 'Token is not valid for this artifact', {status: 401});
       }
@@ -98,18 +104,22 @@ export const createIntegrationsApi = ({
 
     let downloadUrl = undefined;
     if (outputArtifact) {
-      let query = '';
-      if (serviceToken && serviceToken.length >= 16) {
-        const token = generateDownloadToken({
-          projectId: project.id,
-          revisionId: project.approvedRevisionId,
-          artifactId: outputArtifact.id,
-          secret: serviceToken,
-          ttlSeconds: 900,
-          nowMs: nowMs(),
-        });
-        query = `?token=${encodeURIComponent(token)}`;
+      if (!signingSecret || signingSecret.length < 16) {
+        throw new AppError(
+          'AUTH_NOT_CONFIGURED',
+          'Download signing secret must be configured with at least 16 characters to generate signed artifact URLs',
+          {status: 500},
+        );
       }
+      const token = generateDownloadToken({
+        projectId: project.id,
+        revisionId: project.approvedRevisionId,
+        artifactId: outputArtifact.id,
+        secret: signingSecret,
+        ttlSeconds: 900,
+        nowMs: nowMs(),
+      });
+      const query = `?token=${encodeURIComponent(token)}`;
       const baseUrl = (mcpPublicUrl || '').trim().replace(/\/+$/, '');
       const path = `/artifacts/${encodeURIComponent(outputArtifact.id)}/download${query}`;
       downloadUrl = baseUrl ? `${baseUrl}${path}` : path;

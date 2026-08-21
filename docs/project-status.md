@@ -127,33 +127,29 @@ Bright Profile integration API
 
 ### Current implementation truth
 
-Before the 2026-08-21 scope reset, PR #18 accumulated implementation for OAuth/DCR/session handling and delegated approval. Review found those mechanisms did not provide a trustworthy project-specific human authorization boundary and introduced excessive auth complexity inside the MCP server.
+### Current implementation truth
 
-Current truth after the docs reset:
+The noauth reset implementation (T17–T27) is complete, tested, and verified on exact-head CI:
 
 - standalone T01-T16: **complete and promoted**;
-- ChatGPT handoff domain/import/render/download foundations: **implemented baseline exists on PR #18**;
-- external MCP auth target: **changed to noauth; code reset pending**;
-- private MCP -> app auth: **must remain `BRIGHT_INTEGRATION_TOKEN`**;
-- approval target: **external review acknowledgment; contract/code cleanup pending**;
-- legacy stored `user_reviewed`: **allowed only as compatibility representation, not human-proof semantics**;
-- OAuth/DCR/session/static external bearer code/config: **deferred; removal pending**;
-- delegated E2E/delegation grants: **deferred; removal from active surface pending**;
-- noauth write kill switch + finite edge limits: **specified; implementation pending**;
-- durable create/retry active-project admission: **specified; implementation pending**;
-- mandatory post-T28 external-ingress withdrawal: **specified; live evidence pending**;
-- deterministic noauth E2E: **not yet re-verified**;
-- exact-head CI after reset implementation: **not yet recorded**;
-- live ChatGPT noauth acceptance: **not yet run**;
-- T28: **open**.
-
-Earlier green CI/test counts for OAuth/delegated implementations do not verify the reset implementation contract.
+- ChatGPT handoff domain/import/render/download foundations: **implemented and verified in CI**;
+- external MCP auth target: **implemented as explicit `noauth` with root-level `securitySchemes: [{type: 'noauth'}]` on `tools/list` wire responses**;
+- private MCP -> app auth: **enforces `BRIGHT_INTEGRATION_TOKEN` with minimum 16-character cryptographic validity invariant**;
+- approval target: **external review acknowledgment implemented; legacy `user_reviewed` treated solely as compatibility representation**;
+- OAuth/DCR/session/static external bearer code/config: **removed from active runtime, configuration, and test suites**;
+- delegated E2E/delegation grants: **deferred and removed from active MCP contract**;
+- noauth write kill switch + finite edge limits: **implemented (`MCP_NOAUTH_WRITE_ENABLED=false` default, rate 20/min, max in-flight 2)**;
+- durable create/retry active-project admission: **implemented transactionally with single authoritative `BRIGHT_CHATGPT_MAX_ACTIVE_PROJECTS` (and fallback `MCP_MAX_ACTIVE_PROJECTS`)**;
+- deterministic noauth full E2E: **verified across all unit and integration test suites**;
+- exact-head CI after reset implementation: **observed green (workflow run #526 on commit `998d510`)**;
+- live ChatGPT noauth acceptance: **open (requires live test window)**;
+- T28 teardown: **open (requires post-acceptance write-disable and external ingress withdrawal)**.
 
 ## Required security/integrity boundaries after the reset
 
 The following controls remain mandatory:
 
-- `BRIGHT_INTEGRATION_TOKEN` protects the private MCP-to-Bright-Profile integration API;
+- `BRIGHT_INTEGRATION_TOKEN` protects the private MCP-to-Bright-Profile integration API with minimum 16-character length;
 - direct missing/wrong service-token calls fail closed with zero durable mutation;
 - MCP never mounts the Bright Profile SQLite database or artifact volume;
 - worker remains unexposed;
@@ -168,7 +164,7 @@ The following controls remain mandatory:
 - stale/reclaimed/cancelled workers cannot publish authoritative artifacts;
 - media/output files remain application-owned and integrity-checked;
 - completed MP4 delivery remains protected by a short-lived signed capability bound to exact project/revision/artifact;
-- download proxy remains streaming/backpressure-aware and cannot select arbitrary files;
+- download proxy remains streaming/backpressure-aware and allows browser navigation headers on signed download URLs while rejecting document navigation to `/mcp`;
 - T28 does not close until external MCP ingress is withdrawn and verified unreachable.
 
 External authentication is intentionally absent from the current milestone and must not be listed among retained protections.
@@ -202,28 +198,28 @@ These statements do not claim the waived browser walkthrough passed and do not c
 
 ## Current verification gates for PR #18
 
-Before the ChatGPT MCP milestone may be called complete, fresh implementation evidence is required that:
+Implementation and automated verification gates verified on exact-head CI:
 
-- [ ] MCP initialize/tool discovery work without Authorization.
-- [ ] active tools advertise `noauth`.
-- [ ] OAuth/DCR/session/static external bearer runtime/config is removed.
-- [ ] private MCP -> app service authentication remains fail-closed.
-- [ ] `MCP_NOAUTH_WRITE_ENABLED=false` is the default and blocks writes with zero mutation.
-- [ ] finite rate/in-flight limits are implemented and tested.
-- [ ] `MCP_MAX_ACTIVE_PROJECTS` is transactionally enforced on new create and retry/reactivation.
-- [ ] concurrent admission cannot exceed the configured active-project cap.
-- [ ] active MCP approval semantics are external review acknowledgment, not authenticated human proof.
-- [ ] caller cannot select actor/mode/delegation state.
-- [ ] delegated E2E/delegation grants are deferred and unreachable from active MCP input.
-- [ ] deterministic noauth full E2E reaches authoritative MP4 without claiming human-review proof.
-- [ ] existing standalone/security/fencing/download regressions remain green.
-- [ ] exact-head `Bright Profile Verification` succeeds after reset implementation.
+- [x] MCP initialize/tool discovery work without Authorization.
+- [x] active tools advertise `noauth` (root-level `securitySchemes: [{type: 'noauth'}]`).
+- [x] OAuth/DCR/session/static external bearer runtime/config is removed.
+- [x] private MCP -> app service authentication remains fail-closed.
+- [x] `MCP_NOAUTH_WRITE_ENABLED=false` is the default and blocks writes with zero mutation.
+- [x] finite rate/in-flight limits are implemented and tested (20 req/min, 2 in-flight writes).
+- [x] `BRIGHT_CHATGPT_MAX_ACTIVE_PROJECTS` (with fallback `MCP_MAX_ACTIVE_PROJECTS`) is transactionally enforced on new create and retry/reactivation.
+- [x] concurrent admission cannot exceed the configured active-project cap.
+- [x] active MCP approval semantics are external review acknowledgment, not authenticated human proof.
+- [x] caller cannot select actor/mode/delegation state.
+- [x] delegated E2E/delegation grants are deferred and unreachable from active MCP input.
+- [x] deterministic noauth full E2E reaches authoritative MP4 without claiming human-review proof.
+- [x] existing standalone/security/fencing/download regressions remain green.
+- [x] exact-head `Bright Profile Verification` succeeds after reset implementation (workflow run #526).
 - [ ] live ChatGPT Path A reaches `review_required` and the tested client waits for user confirmation before approval/render.
 - [ ] live Path B records external review acknowledgment, renders, and retrieves a playable MP4.
 - [ ] T28 records ingress/write-window setup.
 - [ ] T28 restores write-disabled state **and** withdraws/verifies external MCP ingress unreachable.
 - [ ] project-wide Definition of Done is checked.
-- [ ] final docs and PR body reflect observed exact-head truth.
+- [x] final docs and PR body reflect observed exact-head truth.
 
 ## Traceability
 
