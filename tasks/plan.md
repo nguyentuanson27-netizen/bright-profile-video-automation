@@ -28,7 +28,7 @@ If the existing database continues to persist `approval_mode='user_reviewed'`, t
 
 The previous implementation combined too many security roles inside `mcp/server.mjs`: external OAuth authorization server, user-login/session system, OAuth resource server, static bearer auth, MCP server, private backend service client, and download proxy. Review repeatedly found variants of the same root problem: the runtime lacked a trustworthy source of project-specific human authorization for delegated execution, while the MCP process was also implementing its own identity system.
 
-The no-auth reset removes those root causes instead of patching individual OAuth/delegation findings. Because anonymous writes are deliberately accepted for a temporary acceptance/test window, the reset also requires explicit operational guardrails rather than vague “narrow exposure” language.
+The no-auth reset removes those root causes instead of patching individual OAuth/delegation findings. Because anonymous access is deliberately accepted only for a temporary acceptance/test window, the reset requires explicit operational guardrails, a **durable** active-work capacity invariant, and mandatory ingress teardown after acceptance.
 
 ## Scope Decisions
 
@@ -43,10 +43,12 @@ The no-auth reset removes those root causes instead of patching individual OAuth
 - render/retry/cancel using existing durable backend semantics;
 - signed authoritative MP4 delivery;
 - Host/Origin, body-size, request-deadline, rate-limit, logging, SSRF, artifact, and worker-fencing controls;
-- a default-off no-auth write kill switch;
+- default-off no-auth write kill switch;
 - bounded anonymous request/concurrency/project capacity;
+- **transactional Bright Profile admission** for any create/retry/reactivation that adds active ChatGPT-origin work;
 - deterministic no-auth end-to-end regression;
-- live ChatGPT no-auth acceptance in a bounded write-enabled window.
+- live ChatGPT no-auth acceptance in a bounded ingress/write-enabled window;
+- mandatory post-acceptance write disable **and** external ingress withdrawal.
 
 ### Deferred
 
@@ -72,7 +74,7 @@ The no-auth reset removes those root causes instead of patching individual OAuth
 ```text
 ChatGPT
    |
-   | noauth MCP
+   | noauth MCP (temporary ingress)
    v
 Bright Evidence MCP
    |-- normalize_evidence
@@ -88,13 +90,11 @@ Bright Evidence MCP
    | private network
    v
 Bright Profile App
-   |
+   |-- transactional active-work admission
    `-> durable worker -> media/TTS/render -> authoritative MP4
 ```
 
 ## Temporary No-Auth Deployment Contract
-
-The following controls are implementation requirements for T17/T26, not optional deployment notes.
 
 ```text
 MCP_NOAUTH_WRITE_ENABLED=false
@@ -106,76 +106,76 @@ MCP_MAX_ACTIVE_PROJECTS=3
 Semantics:
 
 - writes are **off by default**;
-- when `MCP_NOAUTH_WRITE_ENABLED=false`, all write/cost-bearing MCP tools fail before backend side effects with `NOAUTH_WRITE_DISABLED`;
-- `MCP_MAX_INFLIGHT_WRITE_REQUESTS` caps simultaneous anonymous write work;
-- `MCP_MAX_ACTIVE_PROJECTS` caps non-terminal `origin=chatgpt_mcp` projects; excess create attempts fail with `NOAUTH_CAPACITY_REACHED`;
-- no limit may default to unlimited in no-auth mode;
-- T28 may enable writes only for the explicit acceptance/test window;
-- after live acceptance, writes must be disabled and/or remote ingress withdrawn unless continued temporary testing is explicitly approved;
-- the Bright Profile app itself remains private; remote access is through the intended HTTPS MCP ingress only.
+- `NOAUTH_WRITE_DISABLED` is returned before backend side effects when writes are disabled;
+- `MCP_MAX_INFLIGHT_WRITE_REQUESTS` bounds simultaneous anonymous mutating calls at the MCP edge;
+- `MCP_MAX_ACTIVE_PROJECTS` is a **durable global invariant** over non-terminal `origin=chatgpt_mcp` projects that can own/queue active work;
+- Bright Profile, not a process-local MCP counter, is authoritative for active-project admission;
+- admission occurs in the same SQLite transaction that creates or reactivates active work;
+- create, retry/requeue/reactivation, and any future inactive/terminal -> active transition use the same admission invariant;
+- idempotent replay that only returns an existing result does not allocate a new slot;
+- concurrent callers/processes cannot commit state above the configured active-project cap;
+- capacity failure returns `NOAUTH_CAPACITY_REACHED` with zero new project/job/attempt/reactivation mutation;
+- no no-auth limit may default to unlimited;
+- T28 may enable ingress/writes only for the explicit acceptance window;
+- T28 teardown requires **both** `MCP_NOAUTH_WRITE_ENABLED=false` and withdrawal of the external HTTPS MCP ingress;
+- a later test window must be opened explicitly rather than leaving T28 ingress running.
 
 ## Approval Truth Contract
 
-The plan separates product/client behavior from backend security guarantees:
-
 - **Client behavior to verify live:** ChatGPT shows the review state and waits for user confirmation before invoking `approve_video_project`.
 - **Backend guarantee:** the backend itself does not auto-approve at `review_required`; approval is revision/hash/state/schema fenced.
-- **Backend limitation in noauth mode:** an arbitrary anonymous caller can invoke approval when writes are enabled, so the backend cannot prove a real human reviewed the draft.
+- **Backend limitation in noauth mode:** an arbitrary anonymous caller can invoke approval while the temporary ingress/writes are enabled, so the backend cannot prove a real human reviewed the draft.
 - **Audit semantics:** record `external_review_acknowledged` at the integration/docs level and a bounded actor/origin such as `chatgpt_mcp_noauth`; never claim an authenticated human identity.
 - **Storage compatibility:** if schema v3 retains `approval_mode='user_reviewed'`, map/document it as the legacy persistence value for the above external acknowledgment only.
 
 ## Dependency Graph
 
 ```text
-T17  Amend external trust boundary to explicit noauth + bounded write controls
+T17  noauth transport + kill switch + edge request limits
  |
- +--> T18  Simplify MCP/domain contracts to external review acknowledgment
- |       |
- |       +--> T23  Remove/defer delegated authorization surface
+ +--> T21  noauth tool surface
  |
- +--> T21  Convert MCP tool transport/metadata to noauth
+ +--> T26  remove OAuth deployment state + temporary ingress contract
  |
- +--> T26  Remove OAuth/DCR state + add noauth deployment guardrails
+T20  backend import + transactional active-work admission
  |
-T19/T20 existing durable import/storage work remain retained
+ +--> T24  retry/reactivation uses same durable admission
  |
-T18 + T21 + T23
- +--> T22  Review/edit/review-acknowledged approval path
-       |
-       +--> T24 existing render/retry/cancel wrappers
-       +--> T25 existing signed MP4 delivery
-                |
-T21-T26 ------> T27 deterministic noauth E2E/security regression
-                |
-                +--> T28 live ChatGPT bounded noauth acceptance + docs closure
+T18 + T22 + T23  truthful approval + delegated removal
+ |
+T25  signed output
+ |
+T17-T26 --> T27 deterministic/adversarial verification
+              |
+              +--> T28 bounded live acceptance + mandatory teardown
 ```
 
 ## Execution Order
 
-Do the reset in this exact order:
-
 1. contract/spec reset;
 2. external MCP `noauth` transport + default-off write kill switch;
 3. delete OAuth/DCR/session runtime surface;
-4. simplify Compose/env/CI and add bounded no-auth capacity controls;
-5. collapse approval to external review acknowledgment semantics;
-6. remove delegation implementation/routes/tests;
-7. rewrite deterministic E2E around the actual no-auth review-acknowledged flow;
-8. run full verification;
-9. run live ChatGPT acceptance in a bounded write-enabled window;
-10. disable writes/withdraw ingress and update status/PR claims from observed evidence only.
+4. add transactional backend active-work admission before relying on active-project caps;
+5. simplify Compose/env/CI and add finite edge limits;
+6. collapse approval to external review acknowledgment semantics;
+7. remove delegation implementation/routes/tests;
+8. ensure retry/reactivation uses the same durable active-work admission;
+9. rewrite deterministic E2E around the actual no-auth review-acknowledged flow and capacity races;
+10. run full verification;
+11. run live ChatGPT acceptance in a bounded ingress/write-enabled window;
+12. restore write-disabled state **and withdraw external MCP ingress** before docs/PR closure.
 
-Do not start by repairing OAuth or adding more consent/token conditions.
+Do not start by repairing OAuth or by implementing a process-local active-project counter as the source of truth.
 
 ## Task Details
 
-### T17 — Temporary no-auth MCP boundary + private service auth + kill switch
+### T17 — Temporary no-auth MCP boundary + private service auth + edge guards
 
-**Outcome:** external ChatGPT -> MCP does not require OAuth/static bearer; private MCP -> app remains authenticated; anonymous writes are default-off and bounded.
+**Outcome:** external ChatGPT -> MCP does not require OAuth/static bearer; private MCP -> app remains authenticated; anonymous writes are default-off and edge concurrency is bounded.
 
 Implementation requirements:
 
-- `/mcp` initialization/tool discovery/legal calls work without `Authorization`;
+- `/mcp` initialize/tool discovery/legal calls work without `Authorization`;
 - all active tools advertise `securitySchemes: [{type: 'noauth'}]`;
 - remove external auth dispatch/fallback logic from `mcp/server.mjs`;
 - preserve Host/Origin, request size, request deadline, rate limit, protocol validation, and secret-safe logging;
@@ -183,13 +183,14 @@ Implementation requirements:
 - direct integration API calls without the service token remain fail-closed with zero durable mutation;
 - implement `MCP_NOAUTH_WRITE_ENABLED=false` by default;
 - disabled writes fail with `NOAUTH_WRITE_DISABLED` before backend side effects;
-- implement finite in-flight write and active-project caps.
+- implement finite rate and in-flight write limits;
+- do not treat an MCP-local active-project count as authoritative.
 
 Verification:
 
 - noauth initialize/list/call tests;
 - kill-switch negative tests with zero mutation;
-- in-flight/active-project capacity tests;
+- rate/in-flight capacity tests;
 - negative direct-backend service-auth tests;
 - body/deadline/rate-limit/Host/Origin regressions remain green.
 
@@ -200,8 +201,7 @@ Verification:
 Required changes:
 
 - `approve_video_project` input contains only project/revision/hash fields needed for approval;
-- caller cannot choose approval mode;
-- caller cannot choose approval actor;
+- caller cannot choose approval mode or actor;
 - caller cannot provide `delegationGrant` or `delegatedContext`;
 - MCP adapter records external review acknowledgment with bounded actor/origin `chatgpt_mcp_noauth` or equivalent;
 - if backend storage still requires `mode=user_reviewed`, treat it as a compatibility mapping only;
@@ -215,131 +215,78 @@ Keep existing revision/hash/schema/source legality checks authoritative.
 
 Do not add a destructive migration merely to remove deferred OAuth/delegation behavior or rename the compatibility enum.
 
-Verify:
+Verify migration/reopen behavior and ensure no OAuth client/session/token persistence remains required.
 
-- migration from prior schema remains clean;
-- imported origin/idempotency/approval provenance survives reopen;
-- no OAuth client/session/token persistence is required by the new active runtime;
-- compatibility mapping for legacy `user_reviewed` is documented if retained.
+### T20 — Retain private backend EvidenceBundle import + durable capacity admission
 
-### T20 — Retain private backend EvidenceBundle import slice
+**Outcome:** existing import path remains authoritative/service-authenticated and a new ChatGPT-origin project cannot exceed the durable active-work cap.
 
-**Outcome:** existing import path remains authoritative and service-authenticated.
-
-Requirements remain:
+Requirements:
 
 - backend revalidates EvidenceBundle;
-- same idempotency key returns same project;
+- same idempotency key returns the same project before allocating a second capacity slot;
 - imported research does not call backend research provider;
 - project enters `research_ready` and generation is queued;
 - state survives reopen;
-- active-project capacity is checked before creating a new no-auth-origin project when temporary writes are enabled.
+- for a genuinely new project, the backend checks current active ChatGPT-origin count and creates/enqueues the project in the **same SQLite transaction**;
+- if the cap is full, return `NOAUTH_CAPACITY_REACHED` and commit no new project/job;
+- two concurrent new creates at the last available slot cannot both commit.
 
 No external OAuth concern belongs in this task.
 
 ### T21 — Convert MCP tool surface to noauth
 
-**Outcome:** all currently supported tools are callable without external bearer/OAuth linking, subject to the default-off write gate for mutating tools.
+**Outcome:** all supported tools are callable without external bearer/OAuth linking, subject to the write gate for mutating tools.
 
 Required changes:
 
 - tool metadata = `noauth`;
-- remove scope checks tied to OAuth access tokens;
-- remove synthetic authenticated user context;
+- remove OAuth scope checks and synthetic authenticated-user context;
 - retain bounded schemas/output normalization/backend client behavior;
 - retain correlation IDs across MCP -> backend;
-- apply write gate and in-flight capacity before write-side backend dispatch.
+- apply write gate + in-flight capacity before write-side backend dispatch;
+- defer authoritative active-project admission to Bright Profile.
 
-Checkpoint A after T17/T21:
+Checkpoint A:
 
 ```text
 no Authorization -> initialize succeeds
 no Authorization -> tools/list succeeds
-writes disabled -> write tool fails before backend mutation
-writes enabled -> legal write tool reaches private backend
+writes disabled -> mutating tool fails before backend mutation
+writes enabled -> legal mutating tool reaches private backend
 OAuth routes are not needed
-rate/body/deadline/Host/capacity protections still work
+rate/body/deadline/Host protections still work
 ```
 
 ### T22 — Review/edit/external-review-acknowledgment path
 
-**Outcome:** backend stops at review; the live ChatGPT path proceeds only after user confirmation, while server/audit semantics remain truthful about the no-auth limitation.
+**Outcome:** backend stops at review; live ChatGPT proceeds only after user confirmation; audit remains truthful about no-auth limitations.
 
-Required flow:
-
-```text
-generation
- -> review_required
- -> get draft/evidence
- -> optional edit with revision/hash fence
- -> user confirms in ChatGPT (live client behavior)
- -> approve_video_project
- -> external review acknowledgment recorded
-```
-
-Required negative cases:
-
-- backend does not auto-approve at `review_required`;
-- approval before `review_required` fails;
-- stale revision/hash fails;
-- invalid draft/source refs fail;
-- downstream-started edit remains locked by existing invariant;
-- no caller-selectable actor/mode/delegation data;
-- no response/log/test claims authenticated human review.
+Required negative cases include premature backend approval, stale revision/hash, invalid draft/source refs, caller-selected actor/mode/delegation, and any response/log/test claiming authenticated human review.
 
 ### T23 — Remove/defer delegated E2E authorization
 
-**Outcome:** no active runtime path claims delegated authorization while external MCP is noauth.
+Remove/deactivate delegated mode/grants/routes/runtime inputs/positive-path tests. Keep DB approval columns only where removing them would create unnecessary migration churn.
 
-Remove/deactivate:
-
-- `delegated_e2e` from active MCP input contract;
-- delegation grant issuance/verification from active flow;
-- loopback delegation-grant route if it has no other supported caller;
-- `delegationGrant`/`delegatedContext` runtime inputs;
-- delegated positive-path tests;
-- stale docs that claim delegated E2E is implemented/verified.
-
-Keep DB approval columns if removing them would require unnecessary/destructive migration work.
-
-Checkpoint B:
-
-```text
-model/tool input cannot create trusted user identity
-tool input cannot choose delegated mode
-backend stops at review_required
-valid external review acknowledgment works when writes are enabled
-```
-
-### T24 — Retain render/retry/cancel wrappers
-
-Existing MCP wrappers should remain thin adapters over backend durable semantics.
+### T24 — Retain render/retry/cancel wrappers + capacity-aware retry
 
 Verify:
 
-- all write wrappers honor the no-auth write kill switch and in-flight capacity gate;
-- render-start is idempotent;
+- all write wrappers honor write kill switch and in-flight gate;
+- render-start remains idempotent;
 - retry only works for retryable durable failure;
-- repeated retry does not duplicate replacement work;
-- cancel fences stale/current owners;
-- repeated cancel follows existing idempotent/no-op semantics where legal.
+- when retry/requeue changes a failed/inactive ChatGPT-origin project back to active, Bright Profile performs capacity admission in the **same transaction** that creates replacement work;
+- if the cap is full, retry returns `NOAUTH_CAPACITY_REACHED` with zero replacement attempt/job/state mutation;
+- repeated retry for already queued/running replacement work remains idempotent and does not consume another slot;
+- cancel preserves stale/current owner fencing.
 
 ### T25 — Retain signed authoritative MP4 delivery
 
-Keep current signed download capability and proxy hardening.
+Verify exact project/revision/artifact binding, expiry/tamper rejection, authoritative file validation, streaming/backpressure, timeout/rate limit, and no arbitrary path/file selection.
 
-Verify:
+### T26 — Remove OAuth deployment/config/runtime state + define temporary ingress
 
-- valid project/revision/artifact binding;
-- expired/tampered/wrong-binding token fails closed;
-- authoritative file size/hash revalidation;
-- streaming/backpressure rather than full buffering;
-- bounded timeout/rate limit;
-- no arbitrary path/file selection.
-
-### T26 — Remove OAuth deployment/config/runtime state and add explicit noauth guardrails
-
-Required removals from current active deployment:
+Remove:
 
 ```text
 MCP_AUTH_TOKEN
@@ -367,64 +314,56 @@ MCP_MAX_INFLIGHT_WRITE_REQUESTS=2
 MCP_MAX_ACTIVE_PROJECTS=3
 ```
 
-Compose/CI must prove:
+Compose/CI must prove app/worker remain private, MCP has no Bright storage mounts, temporary remote access uses only the intended HTTPS MCP ingress, no OAuth persistence volume remains, and no no-auth limit defaults to unlimited.
 
-- MCP has no Bright SQLite/artifact mount;
-- worker remains unexposed;
-- app remains private;
-- MCP remote access uses intended HTTPS ingress/reverse proxy rather than exposing the app;
-- no-auth writes are disabled by default;
-- rate/concurrency/active-project limits are finite and enforced;
-- private MCP -> app path works;
-- no OAuth persistence volume remains.
+T28 closure additionally requires proving the remote MCP ingress was withdrawn after acceptance; leaving it public with writes disabled is not acceptable because status/draft/output metadata is anonymous while ingress remains open.
 
 ### T27 — Deterministic noauth full E2E + adversarial regression
 
-Replace the prior OAuth/delegated harness with the actual current server/tool flow:
+Positive path:
 
 ```text
 start app + MCP
- -> MCP initialize without Authorization
- -> verify writes disabled by default
+ -> initialize without Authorization
+ -> prove writes disabled by default
  -> enable writes in test config
  -> normalize_evidence
  -> create_video_project
- -> generation completes
- -> get_video_project == review_required
- -> prove no backend auto-approval/render/downstream stage exists
- -> test harness invokes approve_video_project
- -> external review acknowledgment recorded
+ -> generation -> review_required
+ -> prove no backend auto-approval/render
+ -> invoke approve_video_project
+ -> external review acknowledgment
  -> start_video_render
- -> media ingest
- -> TTS
- -> render
+ -> media/TTS/render
  -> completed
  -> signed MP4 download
 ```
 
-The deterministic E2E does **not** prove a real human reviewed the draft; it proves backend lifecycle/tool behavior. Human/client confirmation timing belongs to T28.
+Adversarial/recovery coverage must include:
 
-Also retain representative:
-
-- write kill-switch zero-mutation case;
-- rate-limit/in-flight/active-project cap cases;
-- reopen/restart;
-- duplicate tool calls/idempotency;
+- write kill switch zero-mutation;
+- rate/in-flight enforcement;
+- active-cap rejection on new create;
+- active-cap rejection on retry/reactivation;
+- concurrent admission race at the last available slot (for example one new create + one retry) proving committed active count never exceeds the cap;
+- idempotent create/retry replay does not consume duplicate slots;
+- DB reopen/restart;
 - stale edit/approval;
-- direct backend unauthenticated rejection;
+- direct backend no/wrong service token;
 - retry/cancel/stale-owner fencing;
 - signed-download tamper/expiry;
 - source prompt-injection-looking content as inert data.
 
-### T28 — Live ChatGPT bounded noauth acceptance + docs/ship closure
+The deterministic E2E does **not** prove a real human reviewed the draft; human/client confirmation timing belongs to T28.
 
-Run against the actual deployed exact HEAD/image.
+### T28 — Live ChatGPT bounded noauth acceptance + docs/ship closure
 
 Before the run:
 
-- external MCP ingress is intentionally enabled for the acceptance window;
-- `MCP_NOAUTH_WRITE_ENABLED=true` is set explicitly;
-- configured rate/in-flight/active-project limits are recorded.
+- deploy exact implementation HEAD/image;
+- enable external HTTPS MCP ingress only for the bounded acceptance window;
+- set `MCP_NOAUTH_WRITE_ENABLED=true` explicitly;
+- record rate/in-flight/active-project values and ingress enable time.
 
 Path A:
 
@@ -442,59 +381,39 @@ Path B:
 ```text
 user explicitly confirms/continues
  -> approve_video_project
- -> external review acknowledgment recorded
+ -> external review acknowledgment
  -> start_video_render
  -> completed
  -> MP4 downloadable/playable
 ```
 
-Record:
+Mandatory teardown before T28 can close:
 
-- exact HEAD/image;
-- actual tool calls;
-- project IDs/status transitions;
-- bounded approval provenance without claiming authenticated user identity;
-- configured no-auth capacity values;
-- acceptance-window enable time;
-- completed download/playback;
-- no secrets or sensitive conversation content.
+1. set `MCP_NOAUTH_WRITE_ENABLED=false`;
+2. withdraw/disable the external HTTPS MCP ingress/reverse-proxy route;
+3. verify the remote MCP endpoint is no longer externally reachable;
+4. record both teardown timestamps.
 
-After the run:
-
-- set `MCP_NOAUTH_WRITE_ENABLED=false` and/or withdraw external ingress;
-- record the disable/withdraw time;
-- only then may status docs and PR body claim the noauth acceptance run completed.
+There is no `and/or` shortcut here. If continued temporary testing is needed, open a new explicitly approved bounded window later.
 
 ## Verification Checkpoints
 
 ### Checkpoint A — External transport reset
 
-Require all:
-
-- MCP works without Authorization;
-- tools advertise `noauth`;
-- OAuth/DCR/session routes are absent or unreachable as active product surface;
-- writes are disabled by default;
-- body/deadline/rate-limit/Host/Origin/capacity protections remain green;
-- private backend still rejects missing/wrong service credentials.
+Require noauth initialize/discovery, write-disabled behavior, route cleanup, finite edge controls, and private backend service-auth rejection.
 
 ### Checkpoint B — Approval reset
 
-Require all:
+Require backend stop at `review_required`, no caller-selected auth/delegation semantics, stale-hash rejection, truthful external acknowledgment, and no delegated runtime path.
 
-- backend path stops at `review_required`;
-- MCP caller cannot choose actor/mode/delegation state;
-- stale revision/hash fails;
-- valid external review acknowledgment works when writes are enabled;
-- storage/logging does not claim authenticated human review;
-- no delegated positive runtime path remains.
+### Checkpoint C — Durable capacity/runtime/output
 
-### Checkpoint C — Runtime/output
+Require:
 
-Require all:
-
+- transactional active-project admission at Bright Profile;
+- create and retry/reactivation share the invariant;
+- concurrent admission cannot exceed cap;
 - render/retry/cancel preserve durable semantics;
-- all mutating tools honor kill-switch/capacity controls;
 - signed output cannot select arbitrary files;
 - Compose private boundary remains intact;
 - observability/correlation remains secret-safe.
@@ -519,24 +438,25 @@ Plus:
 
 - exact-head `Bright Profile Verification` success;
 - deterministic noauth E2E success;
-- live ChatGPT noauth Path A and Path B evidence;
-- write-window disable/ingress-withdraw evidence after live acceptance;
+- live ChatGPT Path A and Path B evidence;
+- write-disabled **and ingress-withdrawn** teardown evidence;
 - project-wide Definition of Done;
 - docs/PR body synchronized to observed truth.
 
 ## Security Posture During Temporary Noauth Mode
 
-This milestone knowingly accepts that anyone who can reach the MCP endpoint can invoke exposed tools while temporary writes are enabled.
+This milestone knowingly accepts that anyone who can reach the MCP endpoint can invoke exposed tools while the temporary ingress is open.
 
 Therefore:
 
 - do not describe the external MCP surface as authenticated;
 - do not describe approval as authenticated human review;
 - writes default to disabled;
-- keep bounded global rate, in-flight write, and active-project limits;
-- keep private backend service authentication;
-- keep idempotency/fencing to limit duplicate durable work;
-- use a bounded acceptance/test exposure window rather than an always-on public posture;
+- keep finite global rate/in-flight limits;
+- enforce active-project capacity durably, not as a process-local best effort;
+- keep private backend service authentication and durable idempotency/fencing;
+- use a bounded acceptance/test exposure window;
+- withdraw external MCP ingress after T28 acceptance;
 - reintroduce authenticated external access only as a separately planned trust-boundary milestone.
 
 ## Rollback
@@ -546,20 +466,23 @@ The reset should require no destructive database migration.
 If live noauth exposure is unacceptable:
 
 1. set `MCP_NOAUTH_WRITE_ENABLED=false`;
-2. disable/withdraw public MCP ingress;
-3. leave the private Bright Profile backend unchanged;
-4. do **not** fall back to the partially implemented OAuth subsystem;
-5. plan a separate authenticated resource-server/IdP integration milestone.
+2. withdraw public MCP ingress;
+3. verify the remote endpoint is unreachable;
+4. leave the private Bright Profile backend unchanged;
+5. do **not** fall back to the partially implemented OAuth subsystem;
+6. plan a separate authenticated resource-server/IdP integration milestone.
 
 ## Plan Exit Condition
 
 This plan is complete when implementation, tests, Compose/CI, deterministic E2E, live ChatGPT acceptance, and docs all describe one coherent truth:
 
 ```text
-noauth ChatGPT -> MCP
-anonymous writes disabled by default and bounded when enabled
+noauth ChatGPT -> MCP only during a bounded ingress window
+anonymous writes disabled by default and edge-bounded when enabled
+active ChatGPT-origin work transactionally capped in Bright Profile
 private service-authenticated MCP -> Bright Profile
 external review acknowledgment, not authenticated human proof
 signed authoritative MP4 delivery
 OAuth + delegated_e2e deferred
+T28 teardown = writes disabled + external ingress withdrawn
 ```
