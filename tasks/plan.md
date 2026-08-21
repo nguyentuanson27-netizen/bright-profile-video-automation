@@ -1,479 +1,483 @@
-# Implementation Plan: ChatGPT MCP End-to-End Video Handoff
+# Implementation Plan: ChatGPT MCP Temporary No-Auth Reset
 
 **Primary spec:** `docs/specs/chatgpt-mcp-e2e-video-handoff.md`  
 **Baseline status:** `docs/project-status.md`  
 **Completed predecessor milestone:** standalone T01-T16 on `main`  
-**Plan status:** Ready for implementation review  
-**Implementation status:** Not started  
-**Planned task range:** T17-T28
+**Plan status:** Approved reset direction; implementation pending  
+**Reset date:** 2026-08-21  
+**Task range retained:** T17-T28
 
 ## Goal
 
-Extend the existing Bright Evidence MCP from a read-only evidence-normalization boundary into an authenticated ChatGPT-to-Bright-Profile orchestration surface, while keeping Bright Profile as the sole owner of project state, generation, approval, durable jobs, media/TTS/render, and authoritative MP4 artifacts.
-
-Target default flow:
+Stop iterating on a home-grown OAuth/delegated-authorization implementation and reset the current ChatGPT MCP milestone around the smallest coherent contract that can be verified now:
 
 ```text
-ChatGPT public research
-  -> normalize_evidence
-  -> import normalized EvidenceBundle
-  -> durable generation
-  -> review_required
-  -> user review/edit/approve
-  -> render pipeline
-  -> MP4
+ChatGPT
+  -> no-auth MCP
+  -> Bright MCP tool surface
+  -> private authenticated Bright Profile integration API
+  -> durable generation/review/render pipeline
+  -> authoritative MP4
 ```
 
-Target explicit E2E flow:
+The current milestone supports only `user_reviewed` approval. OAuth and `delegated_e2e` are explicitly deferred to a later trust-boundary milestone.
 
-```text
-ChatGPT public research
-  -> normalize_evidence
-  -> import normalized EvidenceBundle
-  -> durable generation
-  -> delegated approval safety gate
-  -> approval(mode=delegated_e2e)
-  -> media ingest
-  -> TTS
-  -> Remotion render
-  -> authoritative MP4 download
-```
+## Why This Reset Exists
 
-Default behavior stops at review. Only an explicit user end-to-end request may activate delegated approval, and the backend still owns the final legality checks.
+The previous implementation combined too many security roles inside `mcp/server.mjs`: external OAuth authorization server, user-login/session system, OAuth resource server, static bearer auth, MCP server, private backend service client, and download proxy. Review repeatedly found variants of the same root problem: the runtime lacked a trustworthy source of project-specific human authorization for delegated execution, while the MCP process was also implementing its own identity system.
 
-## Baseline to Preserve
-
-T01-T16 are already complete and remain the implementation foundation:
-
-- Node.js ESM app + durable worker;
-- SQLite project/source/revision/stage/attempt/artifact state;
-- lease renewal, retry, cancel, reclaim, and claim-token fencing;
-- OpenAI research/generation providers and deterministic fakes;
-- deterministic evidence normalizer under `lib/evidence`;
-- structured review/edit/approval barrier;
-- SSRF-safe media ingest;
-- Google Cloud TTS;
-- Remotion render and authoritative output checks;
-- same-origin React/Vite operator UI;
-- standalone app+worker Compose stack;
-- read-only Bright Evidence MCP deployment;
-- existing CI, dependency audit, lint, frontend build, health, render-smoke, and Compose/container gates.
-
-This milestone must not recreate any of those systems inside MCP.
+The reset removes those root causes instead of patching individual OAuth/delegation findings.
 
 ## Scope Decisions
 
 ### In scope
 
-- authenticated write/cost-bearing MCP tools for the Bright Profile video workflow;
-- import of caller-normalized `EvidenceBundle` into the durable backend without rerunning research;
-- ChatGPT-visible project status/draft orchestration;
-- ChatGPT draft edit and user-reviewed approval;
-- explicit delegated-E2E approval mode with server-side safety gates;
-- render/retry/cancel controls reusing existing durable semantics;
-- safe short-lived delivery of the authoritative MP4;
-- MCP-to-app private service integration and least-privilege service credential;
-- structured audit/observability for integration request -> project -> revision -> stage -> artifact;
-- deterministic integration/E2E regression plus live ChatGPT acceptance.
+- explicit ChatGPT-facing MCP `noauth` transport;
+- existing video handoff tools;
+- private MCP -> Bright Profile HTTP integration protected by `BRIGHT_INTEGRATION_TOKEN`;
+- imported EvidenceBundle -> durable generation;
+- default stop at `review_required`;
+- draft edit and `user_reviewed` approval;
+- render/retry/cancel using existing durable backend semantics;
+- signed authoritative MP4 delivery;
+- Host/Origin, body-size, request-deadline, rate-limit, logging, SSRF, artifact, and worker-fencing controls;
+- deterministic no-auth end-to-end regression;
+- live ChatGPT no-auth acceptance.
 
-### Explicit non-goals
+### Deferred
 
-- public SaaS, multi-tenant accounts, billing, or public signup;
-- new renderer, TTS provider, database, job queue, or evidence engine;
-- public Plugins Directory/commercial launch work;
-- semantic/LLM conflict resolution;
-- automatic truth selection among conflicting claims;
-- arbitrary source-count/quality-score thresholds for delegated approval;
-- exposing the existing loopback browser API directly to the Internet;
-- MCP mounting SQLite or artifact volumes.
+- OAuth/OIDC external authentication;
+- DCR, OAuth metadata, authorization code, PKCE, login/session, consent, access-token issuance/verification;
+- `MCP_AUTH_TOKEN` static external auth;
+- authenticated user identity propagation;
+- `delegated_e2e` approval;
+- delegation grants or any model/tool-input-based authorization surrogate.
 
-## Source/Version Freshness Gate
+### Unchanged
 
-This milestone changes MCP authentication and side-effect semantics, so current official documentation must be checked during T17 and again before live acceptance:
+- Bright Profile standalone app remains private/loopback by default;
+- worker remains unexposed;
+- MCP never mounts the Bright SQLite/artifact volume;
+- SQLite/job/render architecture remains canonical;
+- `BRIGHT_INTEGRATION_TOKEN` remains required for the private integration boundary;
+- signed MP4 capability remains required for completed output delivery.
 
-- current OpenAI/ChatGPT MCP authentication and plugin/server integration behavior;
-- current MCP tool annotation/confirmation behavior relevant to write/cost-bearing actions;
-- pinned `@modelcontextprotocol/server` APIs used by this repository;
-- any reverse-proxy authentication requirements selected for the deployed path.
-
-Planning confirmed that current OpenAI model guidance emphasizes explicit autonomy/approval boundaries for external or costly actions. Exact ChatGPT MCP auth mechanics remain an implementation-time source-driven decision and must not be guessed.
-
-## Architecture Decisions
-
-### 1. ChatGPT orchestrates; Bright Profile executes
-
-MCP exposes a narrow tool surface. Backend services remain authoritative for lifecycle, validation, approval, retry/cancel, and output authority.
-
-### 2. No direct database sharing
-
-MCP communicates with Bright Profile through a private authenticated service API. It does not mount or open `bright-profile.sqlite` and does not access artifact filesystem paths directly.
-
-### 3. Imported research enters at `research_ready`
-
-`create_video_project` revalidates a normalized `EvidenceBundle`, persists source/evidence provenance with origin `chatgpt_mcp`, records a completed/imported research result, moves the project to `research_ready`, and queues the existing generation stage.
-
-It must not call the backend OpenAI research provider again.
-
-### 4. Idempotency is required at the integration boundary
-
-Each project-creation tool call carries an idempotency key. The same authenticated integration request must return the same project result on retry rather than duplicate work.
-
-### 5. Approval modes are explicit durable data
-
-Keep ordinary approval semantics, but record the origin/mode separately:
+## Target Runtime
 
 ```text
-user_reviewed
-delegated_e2e
+ChatGPT
+   |
+   | noauth MCP
+   v
+Bright Evidence MCP
+   |-- normalize_evidence
+   |-- create_video_project
+   |-- get_video_project
+   |-- edit_video_draft
+   |-- approve_video_project      # user_reviewed only
+   |-- start_video_render
+   |-- retry_video_project
+   `-- cancel_video_project
+   |
+   | BRIGHT_INTEGRATION_TOKEN
+   | private network
+   v
+Bright Profile App
+   |
+   `-> durable worker -> media/TTS/render -> authoritative MP4
 ```
-
-Delegated approval is not equivalent to model-provided `verified`/override flags and cannot bypass existing revision/hash validation.
-
-### 6. Delegated approval is a server-side policy
-
-The backend evaluates evidence/conflict/draft/revision/workflow prerequisites. ChatGPT's prompt or tool call cannot force approval if those conditions fail.
-
-### 7. Write-capable remote MCP is fail-closed without authentication
-
-Do not register/enable durable write/render behavior in a remotely reachable configuration unless the required authenticated boundary and internal service credential are valid.
-
-### 8. Preserve the existing browser boundary
-
-The standalone app remains loopback/private by default. Integration traffic uses a distinct internal route/auth policy rather than weakening the browser Host/Origin boundary.
-
-### 9. Output delivery uses a narrow signed capability
-
-A completed project returns a short-lived signed URL or equivalent bounded capability that can serve only the authoritative MP4 for the bound project/revision/artifact. No arbitrary path/artifact selector is exposed.
-
-### 10. Existing retry/cancel/fencing semantics remain canonical
-
-MCP tools wrap the existing backend controls rather than introducing independent state transitions.
 
 ## Dependency Graph
 
 ```text
-T17 Auth/security/network contract + fail-closed config
-  |
-  +--> T18 Handoff + approval domain/schema contracts
-         |
-         +--> T19 SQLite migration + idempotency/audit persistence
+T17  Amend external trust boundary to explicit noauth
+ |
+ +--> T18  Simplify MCP/domain contracts to user_reviewed only
+ |       |
+ |       +--> T23  Remove/defer delegated authorization surface
+ |
+ +--> T21  Convert MCP tool transport/metadata to noauth
+ |
+ +--> T26  Remove OAuth/DCR deployment/config/runtime state
+ |
+T19/T20 existing durable import/storage work remain retained
+ |
+T18 + T21 + T23
+ +--> T22  User-reviewed review/edit/approve path
+       |
+       +--> T24 existing render/retry/cancel wrappers
+       +--> T25 existing signed MP4 delivery
                 |
-                +--> T20 Backend EvidenceBundle import + research_ready/generate slice
-                       |
-T17 + T20 -----------> T21 MCP backend client + create/get project tools
-                              |
-                              +--> Checkpoint A
-
-T18 + T19 + T21 ----> T22 ChatGPT draft edit + user-reviewed approval tools
-         |
-         +----------> T23 Delegated E2E approval gate + approval provenance
-                              |
-T21 + T22 + T23 ----> T24 Render/retry/cancel MCP controls
-                              |
-T17 + T19 + T24 ----> T25 Secure authoritative MP4 delivery
-                              |
-T17 + T21 + T25 ----> T26 Compose/private-network + observability integration
-                              |
-T20-T26 ------------> T27 Deterministic full E2E/recovery/security regression
-                              |
-T26 + T27 ----------> T28 Live ChatGPT acceptance + docs/ship readiness
+T21-T26 ------> T27 deterministic noauth E2E/security regression
+                |
+                +--> T28 live ChatGPT noauth acceptance + docs closure
 ```
 
-## Vertical Slices
+## Execution Order
 
-### Slice F — Authenticated import foundation (T17-T21)
+Do the reset in this exact order:
 
-Prove the new trust boundary before exposing expensive actions.
+1. contract/spec reset;
+2. external MCP `noauth` transport;
+3. delete OAuth/DCR/session runtime surface;
+4. simplify Compose/env/CI;
+5. collapse approval to `user_reviewed` only;
+6. remove delegation implementation/routes/tests;
+7. rewrite deterministic E2E around the actual no-auth user-reviewed flow;
+8. run full verification;
+9. run live ChatGPT acceptance;
+10. update status/PR claims from observed evidence only.
 
-Deliver:
-
-```text
-authenticated MCP
-  -> create_video_project(EvidenceBundle)
-  -> private authenticated backend request
-  -> durable imported project
-  -> research_ready
-  -> generation queued
-  -> get_video_project
-```
-
-The hard requirements in this slice are authentication fail-closed behavior, EvidenceBundle revalidation, import idempotency, no backend research provider call, durable reopen, and bounded status reads.
-
-**Checkpoint A:** stop if any write tool can operate unauthenticated, an imported project reruns research, repeated create calls duplicate projects, or imported evidence/provenance does not survive reopen.
-
-### Slice G — Review and approval from ChatGPT (T22-T23)
-
-Deliver:
-
-```text
-review_required
-  -> get draft
-  -> edit with expected revision/hash
-  -> user_reviewed approval
-```
-
-and, for explicit E2E requests:
-
-```text
-review_required
-  -> delegated server gate
-  -> delegated_e2e approval
-```
-
-**Checkpoint B:** prove default mode does not auto-approve; stale hashes fail; model-provided verification is not authorization; conflicts/zero evidence/invalid draft block delegated approval.
-
-### Slice H — Production controls and output (T24-T26)
-
-Deliver:
-
-```text
-approved
-  -> start render
-  -> status polling
-  -> legal retry/cancel
-  -> completed
-  -> signed authoritative MP4 URL
-```
-
-**Checkpoint C:** prove repeated render-start is idempotent, retry/cancel retain existing durable behavior, signed URLs cannot escape the authoritative artifact, and the integration path does not broaden the browser/API public boundary.
-
-### Slice I — End-to-end closure (T27-T28)
-
-Deliver deterministic and live acceptance for both product modes.
-
-Default acceptance:
-
-```text
-research -> normalize -> import -> generate -> review_required -> STOP
-```
-
-Explicit E2E acceptance:
-
-```text
-research -> normalize -> import -> generate -> delegated approval -> render -> MP4
-```
-
-**Final checkpoint:** full existing verification + new integration/security tests + live ChatGPT evidence + project-wide Definition of Done.
-
-## Task Summary
-
-| Task | Outcome | Depends on | Scope |
-|---|---|---|---|
-| T17 | Auth/security/network contract and fail-closed integration config | None | M |
-| T18 | Handoff schemas + explicit approval-mode domain contract | T17 | M |
-| T19 | SQLite migration for integration idempotency/origin/approval audit | T18 | M |
-| T20 | Backend EvidenceBundle import -> `research_ready` -> generation | T19 | M |
-| T21 | MCP backend client + `create_video_project` / `get_video_project` | T17,T20 | M |
-| T22 | `edit_video_draft` + `user_reviewed` approval path | T18,T19,T21 | M |
-| T23 | Delegated-E2E approval gate + durable provenance | T18,T19,T21 | M |
-| T24 | `start_video_render` / retry / cancel MCP controls | T21,T22,T23 | M |
-| T25 | Signed authoritative MP4 delivery | T17,T19,T24 | M |
-| T26 | Compose/private network + structured observability | T17,T21,T25 | M |
-| T27 | Deterministic full E2E, recovery, idempotency, security regression | T20-T26 | M |
-| T28 | Live ChatGPT default-review + explicit-E2E acceptance and docs closure | T26,T27 | M |
-
-No planned task should intentionally exceed one focused session. If implementation discovery pushes a task beyond roughly five files or across independent subsystems, split it before coding rather than widening the task silently.
+Do not start by repairing OAuth or adding more consent/token conditions.
 
 ## Task Details
 
-### T17 — Authentication, threat model, and private service-boundary foundation
+### T17 — Temporary no-auth MCP boundary + private service auth
 
-Resolve the highest-risk dependency first. Verify current official OpenAI/ChatGPT MCP authentication guidance and the pinned MCP server APIs. Define the trust boundaries, the external authenticated MCP identity, the internal MCP->app service credential, and fail-closed configuration behavior before any new write tool can operate.
+**Outcome:** external ChatGPT -> MCP does not require OAuth/static bearer; private MCP -> app remains authenticated.
 
-Expected deliverables:
+Implementation requirements:
 
-- documented auth decision/ADR or spec amendment if the chosen mechanism materially changes this plan;
-- bounded config for internal backend URL/service credential and write-tool enablement;
-- authentication/authorization middleware or adapter at the appropriate boundary;
-- negative tests for missing/invalid credentials;
-- secrets excluded from responses/logs.
+- `/mcp` initialization/tool discovery/legal calls work without `Authorization`;
+- all active tools advertise `securitySchemes: [{type: 'noauth'}]`;
+- remove external auth dispatch/fallback logic from `mcp/server.mjs`;
+- preserve Host/Origin, request size, request deadline, rate limit, protocol validation, and secret-safe logging;
+- keep `BRIGHT_INTEGRATION_TOKEN` for MCP -> app;
+- direct integration API calls without the service token remain fail-closed with zero durable mutation.
 
-### T18 — Handoff and approval domain contracts
+Verification:
 
-Define validated schemas/errors for imported EvidenceBundle handoff, idempotency key, project status response, expected revision/hash editing, and explicit `user_reviewed` vs `delegated_e2e` approval modes.
+- noauth initialize/list/call tests;
+- negative direct-backend service-auth tests;
+- body/deadline/rate-limit/Host/Origin regressions remain green.
 
-Keep these contracts independent of HTTP/MCP transport so both the backend and MCP wrappers share the same semantics.
+### T18 — Simplify handoff/approval contracts
 
-### T19 — Durable integration identity and approval provenance
+**Outcome:** active public MCP contract no longer exposes auth/delegation concepts that cannot be trusted in noauth mode.
 
-Add the minimum forward-only migration/repository changes required to survive restart and audit remote actions. Prefer existing JSON columns/records where they can represent imported evidence cleanly; add schema only where durability/idempotency/approval provenance otherwise cannot be guaranteed.
+Required changes:
 
-Do not persist secrets or full conversations.
+- `approve_video_project` input contains only project/revision/hash fields needed for user-reviewed approval;
+- caller cannot choose approval mode;
+- caller cannot choose approval actor;
+- caller cannot provide `delegationGrant` or `delegatedContext`;
+- MCP adapter sends `mode=user_reviewed` with a bounded integration-origin audit actor such as `chatgpt_mcp_noauth`;
+- do not claim authenticated human identity.
 
-### T20 — Backend imported-research vertical slice
+Keep existing revision/hash/schema/source legality checks authoritative.
 
-Add one internal authenticated backend operation that revalidates the EvidenceBundle, creates/reuses the project by idempotency key, persists application-owned sources/evidence/origin, records imported research completion, reaches `research_ready`, and enqueues existing generation.
+### T19 — Retain existing durable ChatGPT handoff migration
 
-The implementation must prove the research provider is not called for imported projects.
+**Outcome:** keep the already-added durable integration/idempotency/origin/approval provenance storage where it remains useful.
 
-### T21 — First MCP orchestration slice
+Do not add a destructive migration just to remove deferred OAuth/delegation behavior.
 
-Add a bounded MCP backend client plus `create_video_project` and `get_video_project` tools. The MCP handler validates input, calls the internal backend, sanitizes failures, and returns bounded structured state. Business rules stay backend-side.
+Verify:
 
-Complete Checkpoint A before continuing.
+- migration from prior schema remains clean;
+- imported origin/idempotency/approval provenance survives reopen;
+- no OAuth client/session/token persistence is required by the new active runtime.
 
-### T22 — Review/edit and user-reviewed approval
+### T20 — Retain private backend EvidenceBundle import slice
 
-Expose current draft/status through the orchestration response, add revision/hash-fenced edit, and add user-reviewed approval. Reuse existing `createApprovalService` validation rather than duplicating approval rules in MCP.
+**Outcome:** existing import path remains authoritative and service-authenticated.
 
-Default ChatGPT workflow must stop at review until the user explicitly approves/continues.
+Requirements remain:
 
-### T23 — Delegated end-to-end approval
+- backend revalidates EvidenceBundle;
+- same idempotency key returns same project;
+- imported research does not call backend research provider;
+- project enters `research_ready` and generation is queued;
+- state survives reopen.
 
-Extend approval services/storage with an explicit delegated approval mode and a server-side gate requiring conflict-free retained evidence, valid draft/source references, exact current revision/hash, valid workflow state, and authenticated delegated authorization context.
+No external OAuth concern belongs in this task.
 
-Keep `delegated_e2e` audit-distinct from ordinary human/user review.
+### T21 — Convert MCP tool surface to noauth
 
-Complete Checkpoint B before production controls.
+**Outcome:** all currently supported tools are callable without external bearer/OAuth linking.
 
-### T24 — Render, retry, and cancel MCP controls
+Required changes:
 
-Add MCP wrappers for existing backend render-start, retry, and cancel operations. Do not add new transition logic to MCP. Tool availability/results must reflect durable backend legality and existing idempotency/fencing.
+- tool metadata = `noauth`;
+- remove scope checks tied to OAuth access tokens;
+- remove synthetic authenticated user context;
+- retain bounded schemas/output normalization/backend client behavior;
+- retain correlation IDs across MCP -> backend.
 
-### T25 — Secure completed-output delivery
+Checkpoint A after T17/T21:
 
-Implement a narrow signed download capability for the current authoritative MP4. Reuse current output validation; do not allow project-controlled path selection. Prefer stateless signed tokens unless a documented correctness/security requirement requires persistence.
+```text
+no Authorization -> initialize succeeds
+no Authorization -> tools/list succeeds
+no Authorization -> legal tool call reaches private backend
+OAuth routes are not needed
+rate/body/deadline/Host protections still work
+```
 
-### T26 — Runtime integration and observability
+### T22 — Review/edit/user-reviewed approval
 
-Connect MCP and Bright Profile over the intended private network without publishing the worker or weakening browser/API Host/Origin boundaries. Add structured request/action tracing across MCP request -> idempotency key -> project -> revision -> stage/artifact and verify credentials are redacted.
+**Outcome:** normal ChatGPT path stops at review and proceeds only after user confirmation.
 
-Complete Checkpoint C before final E2E.
+Required flow:
 
-### T27 — Deterministic full E2E and adversarial regression
+```text
+generation
+ -> review_required
+ -> get draft/evidence
+ -> optional edit with revision/hash fence
+ -> user confirms in ChatGPT
+ -> approve_video_project
+ -> backend records user_reviewed approval
+```
 
-Add a deterministic end-to-end test from candidate evidence through normalization/import/generation/delegated approval/media/TTS/render/output using fakes where remote providers would otherwise be paid/non-deterministic.
+Required negative cases:
 
-Also cover restart/reopen, duplicate tool calls, stale revision approval, unauthorized calls, conflict blocking, retry/cancel, stale-worker fencing, and signed-download tampering/expiry.
+- approval before `review_required` fails;
+- stale revision/hash fails;
+- invalid draft/source refs fail;
+- downstream-started edit remains locked by existing invariant;
+- no caller-selectable actor/mode/delegation data.
 
-### T28 — Live ChatGPT acceptance and documentation closure
+### T23 — Remove/defer delegated E2E authorization
 
-Run two real ChatGPT flows against the authenticated deployed MCP integration:
+**Outcome:** no active runtime path claims delegated authorization while external MCP is noauth.
 
-1. default-review flow reaches `review_required` and does not auto-approve;
-2. explicit end-to-end flow reaches an accessible authoritative MP4.
+Remove/deactivate:
 
-Record actual environment/tool evidence, then update current status/integration docs to implemented truth. Keep the existing standalone browser smoke follow-up separate unless this work discovers/fixes a browser-facing defect.
+- `delegated_e2e` from active MCP input contract;
+- delegation grant issuance/verification from active flow;
+- loopback delegation-grant route if it has no other supported caller;
+- `delegationGrant`/`delegatedContext` runtime inputs;
+- delegated positive-path tests;
+- stale docs that claim delegated E2E is implemented/verified.
 
-## Parallelization
+Keep DB approval columns if removing them would require unnecessary/destructive migration work.
 
-Safe after contracts are frozen:
+Checkpoint B:
 
-- T25 signed-download unit design can be prepared in parallel with T24 once T17/T19 security/storage decisions are stable;
-- documentation/test fixture preparation can run alongside implementation tasks;
-- focused tests for already-frozen schemas can be authored in RED before implementation.
+```text
+model/tool input cannot create trusted user identity
+tool input cannot choose delegated mode
+default flow stops at review_required
+valid user-reviewed approval works
+```
 
-Must remain sequential:
+### T24 — Retain render/retry/cancel wrappers
 
-- T17 before write-capable MCP exposure;
-- T18 before storage/API/tool contract implementation;
-- T19 before durable import/approval provenance;
-- T20 before MCP create/status tools;
-- T23 before delegated render flow;
-- T26/T27 before live acceptance.
+Existing MCP wrappers should remain thin adapters over backend durable semantics.
 
-## Major Risks and Mitigations
+Verify:
 
-### Risk 1: write-capable MCP remains unauthenticated
+- render-start is idempotent;
+- retry only works for retryable durable failure;
+- repeated retry does not duplicate replacement work;
+- cancel fences stale/current owners;
+- repeated cancel follows existing idempotent/no-op semantics where legal.
 
-**Impact:** unauthorized project creation/provider spend/render work.  
-**Mitigation:** T17 is first; fail-closed config; do not ship or enable write tools until auth negative tests and deployed boundary are proven.
+### T25 — Retain signed authoritative MP4 delivery
 
-### Risk 2: imported evidence is trusted because it already passed MCP normalization
+Keep current signed download capability and proxy hardening.
 
-**Impact:** malformed/stale/forged backend state.  
-**Mitigation:** backend revalidates the complete handoff contract and owns all application IDs/source records.
+Verify:
 
-### Risk 3: delegated E2E becomes a prompt-only bypass
+- valid project/revision/artifact binding;
+- expired/tampered/wrong-binding token fails closed;
+- authoritative file size/hash revalidation;
+- streaming/backpressure rather than full buffering;
+- bounded timeout/rate limit;
+- no arbitrary path/file selection.
 
-**Impact:** unsafe auto-approval.  
-**Mitigation:** explicit durable approval mode + server-side gate + revision/hash binding + conflict/zero-evidence/draft validation.
+### T26 — Remove OAuth deployment/config/runtime state
 
-### Risk 4: remote retries duplicate projects/renders
+Required removals from current active deployment:
 
-**Impact:** duplicate provider spend and artifacts.  
-**Mitigation:** integration idempotency key, existing first-descendant transaction, repeated-tool regressions.
+```text
+MCP_AUTH_TOKEN
+MCP_OAUTH_SECRET
+BRIGHT_USER_AUTH_SECRET
+MCP_CLIENT_STORAGE_PATH
+OAuth client storage volume
+OAuth/DCR/session routes/metadata
+security/oauth.mjs
+OAuth-specific tests
+```
 
-### Risk 5: output URL becomes arbitrary file access
+Keep:
 
-**Impact:** filesystem/artifact disclosure.  
-**Mitigation:** capability bound to authoritative project/revision/artifact, short expiry, existing size/hash/path validation, no caller path selector.
+```text
+MCP_PUBLIC_URL
+MCP_ALLOWED_HOSTS
+MCP_MAX_BODY_BYTES
+MCP_RATE_LIMIT_PER_MINUTE
+MCP_REQUEST_TIMEOUT_MS
+BRIGHT_BACKEND_URL
+BRIGHT_INTEGRATION_TOKEN
+```
 
-### Risk 6: integration weakens existing browser/private topology
+Compose/CI must prove:
 
-**Impact:** accidental public standalone API exposure.  
-**Mitigation:** separate private integration route/auth, worker remains unexposed, browser Host/Origin policy remains unchanged.
+- MCP has no Bright SQLite/artifact mount;
+- worker remains unexposed;
+- MCP host publication remains intentionally constrained;
+- private MCP -> app path works;
+- no OAuth persistence volume remains.
 
-### Risk 7: live ChatGPT behavior differs from test harness assumptions
+### T27 — Deterministic noauth full E2E + adversarial regression
 
-**Impact:** tools not discovered/confirmed/called as expected.  
-**Mitigation:** current official docs re-check in T17 and T28 plus two explicit live acceptance runs before closure.
+Replace the prior OAuth/delegated harness with the actual current product flow:
+
+```text
+start app + MCP
+ -> MCP initialize without Authorization
+ -> normalize_evidence
+ -> create_video_project
+ -> generation completes
+ -> get_video_project == review_required
+ -> prove no approval/render/downstream stage exists
+ -> approve_video_project (user_reviewed)
+ -> start_video_render
+ -> media ingest
+ -> TTS
+ -> render
+ -> completed
+ -> signed MP4 download
+```
+
+Also retain representative:
+
+- reopen/restart;
+- duplicate tool calls/idempotency;
+- stale edit/approval;
+- direct backend unauthenticated rejection;
+- retry/cancel/stale-owner fencing;
+- signed-download tamper/expiry;
+- source prompt-injection-looking content as inert data.
+
+### T28 — Live ChatGPT noauth acceptance + docs/ship closure
+
+Run against the actual deployed exact HEAD/image.
+
+Path A:
+
+```text
+ChatGPT connects without OAuth linking
+ -> normalize_evidence
+ -> create_video_project
+ -> review_required
+ -> draft shown
+ -> no approval/render before user action
+```
+
+Path B:
+
+```text
+user reviews/confirms
+ -> approve_video_project
+ -> user_reviewed recorded
+ -> start_video_render
+ -> completed
+ -> MP4 downloadable/playable
+```
+
+Record:
+
+- exact HEAD/image;
+- actual tool calls;
+- project IDs/status transitions;
+- approval provenance;
+- completed download/playback;
+- no secrets or sensitive conversation content.
+
+Only after live evidence may status docs and PR body claim the noauth flow is complete.
 
 ## Verification Checkpoints
 
-### Checkpoint A — Import boundary
+### Checkpoint A — External transport reset
 
-Require all of:
+Require all:
 
-- authenticated write path proven fail-closed;
-- imported EvidenceBundle revalidated;
-- no backend research provider call;
-- durable evidence/source/origin survives reopen;
-- repeated create idempotency returns one project;
-- create/get MCP tools return sanitized bounded results.
+- MCP works without Authorization;
+- tools advertise `noauth`;
+- OAuth/DCR/session routes are absent or unreachable as active product surface;
+- body/deadline/rate-limit/Host/Origin protections remain green;
+- private backend still rejects missing/wrong service credentials.
 
-### Checkpoint B — Approval boundary
+### Checkpoint B — Approval reset
 
-Require all of:
+Require all:
 
-- default mode stops at `review_required`;
-- stale edit/approval hashes fail;
-- `user_reviewed` works only for valid current draft;
-- `delegated_e2e` is audit-distinct;
-- conflicts, zero evidence, invalid draft/source references, invalid state block delegated approval;
-- model verification/override text does not grant approval authority.
+- default path stops at `review_required`;
+- MCP caller cannot choose actor/mode/delegation state;
+- stale revision/hash fails;
+- valid user-reviewed approval works;
+- no delegated positive runtime path remains.
 
-### Checkpoint C — Production/output boundary
+### Checkpoint C — Runtime/output
 
-Require all of:
+Require all:
 
-- render/retry/cancel wrap existing durable state machine;
-- repeated render-start does not duplicate downstream stages;
-- signed output serves only current authoritative MP4;
-- expired/tampered download capability fails closed;
-- Compose/private network works without exposing worker/browser API publicly;
-- integration logs correlate actions without leaking secrets.
+- render/retry/cancel preserve durable semantics;
+- signed output cannot select arbitrary files;
+- Compose private boundary remains intact;
+- observability/correlation remains secret-safe.
 
-### Final Checkpoint — Milestone closure
+### Final Checkpoint
 
-Require:
+Required evidence:
 
-- focused RED->GREEN tests for each changed behavior;
-- full `npm test`;
-- `npm run lint`;
-- `npm run audit:standalone`;
-- frontend build remains green;
-- SQLite migration/reopen checks;
-- MCP process/container verification;
-- standalone app+worker Compose verification;
-- deterministic full E2E;
-- live ChatGPT default-review acceptance;
-- live ChatGPT explicit-E2E acceptance;
+```sh
+npm ci --ignore-scripts --no-audit --no-fund
+npm rebuild better-sqlite3 --no-audit --no-fund
+npm test
+npm run lint
+npm run audit:standalone
+npm run build:web
+npm run render:smoke
+docker compose config
+docker compose -f compose.mcp.yml config
+```
+
+Plus:
+
+- exact-head `Bright Profile Verification` success;
+- deterministic noauth E2E success;
+- live ChatGPT noauth Path A and Path B evidence;
 - project-wide Definition of Done;
-- documentation updated to current implemented truth.
+- docs/PR body synchronized to observed truth.
 
-## Definition of Done Additions for This Milestone
+## Security Posture During Temporary Noauth Mode
 
-In addition to the shared project Definition of Done:
+This milestone knowingly accepts that anyone who can reach the MCP endpoint can invoke its exposed tools.
 
-- no unauthenticated durable write/render MCP path;
-- no MCP direct SQLite/artifact-volume access;
-- default human review behavior demonstrably preserved;
-- delegated approval demonstrably server-gated and audit-distinct;
-- integration idempotency demonstrably prevents duplicate project/render work;
-- completed MP4 delivery demonstrably cannot select arbitrary files;
-- live ChatGPT evidence proves both product modes on the actual deployed integration.
+Therefore:
+
+- do not describe the external MCP surface as authenticated;
+- keep network exposure intentionally narrow;
+- keep rate limits and bounded request controls;
+- keep private backend service authentication;
+- keep idempotency/fencing to limit duplicate durable work;
+- do not introduce trusted user identity/audit claims that the runtime cannot prove;
+- reintroduce authenticated external access only as a separately planned trust-boundary milestone.
+
+## Rollback
+
+The reset should require no destructive database migration.
+
+If live noauth exposure is unacceptable:
+
+1. disable/withdraw public MCP ingress;
+2. leave the private Bright Profile backend unchanged;
+3. do **not** fall back to the partially implemented OAuth subsystem;
+4. plan a separate authenticated resource-server/IdP integration milestone.
 
 ## Plan Exit Condition
 
-Planning is complete when this plan and `tasks/todo.md` are reviewed against the approved spec. `/build` should start at T17 and must not skip directly to adding MCP write tools before the authentication/private-service boundary is resolved and tested.
+This plan is complete when implementation, tests, Compose/CI, deterministic E2E, live ChatGPT acceptance, and docs all describe one coherent truth:
+
+```text
+noauth ChatGPT -> MCP
+private service-authenticated MCP -> Bright Profile
+user_reviewed approval only
+signed authoritative MP4 delivery
+OAuth + delegated_e2e deferred
+```
