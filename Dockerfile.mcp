@@ -11,6 +11,8 @@ COPY --chown=node:node lib/evidence ./lib/evidence
 COPY --chown=node:node security ./security
 COPY --chown=node:node mcp ./mcp
 
+RUN mkdir -p /data/oauth && chown -R node:node /data/oauth
+
 USER node
 ENV NODE_ENV=production \
     MCP_HOST=0.0.0.0 \
@@ -18,7 +20,8 @@ ENV NODE_ENV=production \
     MCP_ALLOWED_HOSTS=127.0.0.1,localhost \
     MCP_MAX_BODY_BYTES=2097152 \
     MCP_RATE_LIMIT_PER_MINUTE=60 \
-    MCP_REQUEST_TIMEOUT_MS=10000
+    MCP_REQUEST_TIMEOUT_MS=10000 \
+    MCP_CLIENT_STORAGE_PATH=/data/oauth/clients.json
 
 EXPOSE 4190
 HEALTHCHECK --interval=5s --timeout=3s --start-period=2s --retries=3 \

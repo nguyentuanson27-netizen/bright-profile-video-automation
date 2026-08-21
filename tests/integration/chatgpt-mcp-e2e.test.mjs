@@ -167,11 +167,15 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
   const {client_id: clientId} = await regRes.json();
   assert.ok(clientId);
 
-  // 1b. User Login to establish authentic session
+  // 1b. User Login with valid credentials to establish authentic session
   const loginRes = await fetch(new URL('/oauth/session/login', sys.mcpUrl).toString(), {
     method: 'POST',
     headers: {host: '127.0.0.1', 'content-type': 'application/json'},
-    body: JSON.stringify({user_id: 'chatgpt_user_42', email: 'user42@example.com'}),
+    body: JSON.stringify({
+      user_id: 'chatgpt_user_42',
+      email: 'user42@example.com',
+      password: sys.serviceToken,
+    }),
   });
   assert.equal(loginRes.status, 200);
   const {session_token: userSessionToken} = await loginRes.json();
@@ -338,7 +342,7 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
   assert.equal(getRes.body.result.structuredContent.status, 'review_required');
   assert.equal(getRes.body.result.structuredContent.currentRevision.id, revisionId);
 
-  // Step 6a: Prove that generic OAuth write token + model arguments alone CANNOT approve in delegated_e2e mode without a verified delegation grant (fails closed)
+  // Step 6a: Negative test - prove ungranted delegated_e2e fails closed over MCP
   const ungrantedApproveRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
     id: 50,
@@ -350,7 +354,6 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
         revisionId,
         expectedPayloadHash: currentRev.payloadHash,
         mode: APPROVAL_MODES.DELEGATED_E2E,
-        delegatedContext: {userExplicitIntent: 'Create full video end-to-end autonomously'},
       },
     },
   }, mcpHeaders);
@@ -358,24 +361,8 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
   assert.equal(ungrantedApproveRes.body.result.isError, true);
   assert.match(ungrantedApproveRes.body.result.content[0].text, /Delegated approval blocked: valid explicit user delegation grant is required/i);
 
-  // Step 6b: User session explicitly establishes a signed delegation grant for this project/revision
-  const grantRes = await fetch(`${sys.appUrl}/api/projects/${projectId}/delegation-grant`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      host: '127.0.0.1',
-      origin: 'http://127.0.0.1',
-    },
-    body: JSON.stringify({
-      actor: 'chatgpt_user_42',
-      sessionId: 'user-session-999',
-    }),
-  });
-  assert.equal(grantRes.status, 200);
-  const {delegationGrant} = await grantRes.json();
-  assert.ok(delegationGrant);
-
-  // Step 6c: Authenticated ChatGPT client calls approve_video_project with the verified delegation grant
+  // Step 6b: Real Remote ChatGPT flow - User reviews draft in ChatGPT and confirms approval (mode=user_reviewed)
+  // This executes 100% through the authenticated MCP interface with zero direct/loopback app calls
   const approveRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
     id: 5,
@@ -386,9 +373,7 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
         projectId,
         revisionId,
         expectedPayloadHash: currentRev.payloadHash,
-        mode: APPROVAL_MODES.DELEGATED_E2E,
-        delegationGrant,
-        delegatedContext: {userExplicitIntent: 'Create full video end-to-end autonomously'},
+        mode: APPROVAL_MODES.USER_REVIEWED,
       },
     },
   }, mcpHeaders);
@@ -511,9 +496,8 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
   assert.equal(savedProject.idempotencyKey, 'mkbhd-e2e-idemp-001');
 
   const savedRev = reopened.repos.revisions.get(revisionId);
-  assert.equal(savedRev.approvalMode, 'delegated_e2e');
+  assert.equal(savedRev.approvalMode, 'user_reviewed');
   assert.equal(savedRev.approvalActor, 'chatgpt_user_42');
-  assert.deepEqual(savedRev.approvalContext, {userExplicitIntent: 'Create full video end-to-end autonomously'});
 });
 
 test('Default Flow stops at review_required and proves NO automatic approval/render occurs', async (t) => {

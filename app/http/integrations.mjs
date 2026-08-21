@@ -310,7 +310,7 @@ export const createIntegrationsApi = ({
         );
       }
 
-      let approvalActor = 'chatgpt_mcp';
+      let approvalActor = input.approvalActor || 'chatgpt_mcp';
       if (input.mode === APPROVAL_MODES.DELEGATED_E2E) {
         if (!input.delegationGrant) {
           throw new AppError(

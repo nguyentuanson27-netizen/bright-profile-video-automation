@@ -13,8 +13,11 @@ services:
       MCP_MAX_BODY_BYTES: 2097152
       MCP_RATE_LIMIT_PER_MINUTE: 60
       MCP_REQUEST_TIMEOUT_MS: 10000
+      MCP_CLIENT_STORAGE_PATH: ${MCP_CLIENT_STORAGE_PATH:-/data/oauth/clients.json}
       BRIGHT_BACKEND_URL: ${BRIGHT_BACKEND_URL:-http://app:4180}
       BRIGHT_INTEGRATION_TOKEN: ${BRIGHT_INTEGRATION_TOKEN:-}
+    volumes:
+      - mcp_oauth_data:/data/oauth
     ports:
       - "127.0.0.1:4190:4190"
     healthcheck:
@@ -25,3 +28,6 @@ services:
       start_period: 2s
     cpus: 0.5
     mem_limit: 256m
+
+volumes:
+  mcp_oauth_data:

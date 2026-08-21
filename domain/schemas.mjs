@@ -247,6 +247,7 @@ export const approveProjectInputSchema = {
     mode: {enum: [APPROVAL_MODES.USER_REVIEWED, APPROVAL_MODES.DELEGATED_E2E]},
     delegationGrant: {type: 'string', minLength: 16, maxLength: 2048},
     delegatedContext: {type: 'object'},
+    approvalActor: {type: 'string', minLength: 1, maxLength: 200},
   },
 };
 

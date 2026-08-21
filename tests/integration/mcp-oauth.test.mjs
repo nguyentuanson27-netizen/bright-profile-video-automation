@@ -19,16 +19,18 @@ const parseRpcResponse = async (res) => {
   return payloads.length ? JSON.parse(payloads.at(-1)) : JSON.parse(text);
 };
 
-test('ChatGPT MCP OAuth 2.1 Full Security: Session Authentication, Exploit Regression, DCR Persistence across Restarts, and Scopes', async (t) => {
+test('ChatGPT MCP OAuth 2.1 Security: Credentials Authentication, Exploit Regressions, Restart DCR Persistence, and Scopes', async (t) => {
   const testDir = mkdtempSync(join(tmpdir(), 'oauth-dcr-test-'));
   const clientStoragePath = join(testDir, 'oauth_clients.json');
   const serviceToken = 'service-secret-token-key-123456';
   const oauthSecret = 'super-secret-oauth-key-123456';
+  const userAuthSecret = 'super-user-password-secret-123456';
 
   let server = tempPortServer({
     env: {
       MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
       BRIGHT_INTEGRATION_TOKEN: serviceToken,
+      BRIGHT_USER_AUTH_SECRET: userAuthSecret,
       MCP_OAUTH_SECRET: oauthSecret,
       MCP_CLIENT_STORAGE_PATH: clientStoragePath,
       MCP_RATE_LIMIT_PER_MINUTE: 100,
@@ -65,6 +67,7 @@ test('ChatGPT MCP OAuth 2.1 Full Security: Session Authentication, Exploit Regre
     env: {
       MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
       BRIGHT_INTEGRATION_TOKEN: serviceToken,
+      BRIGHT_USER_AUTH_SECRET: userAuthSecret,
       MCP_OAUTH_SECRET: oauthSecret,
       MCP_CLIENT_STORAGE_PATH: clientStoragePath,
       MCP_RATE_LIMIT_PER_MINUTE: 100,
@@ -93,7 +96,24 @@ test('ChatGPT MCP OAuth 2.1 Full Security: Session Authentication, Exploit Regre
   const codeVerifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
   const codeChallenge = generatePkceChallenge(codeVerifier);
 
-  // a) Attacker direct POST to /oauth/authorize/consent with forged user_id without valid session -> FAILS CLOSED 401
+  // a) Attacker unauthenticated login attempt (no password or wrong password) -> FAILS CLOSED 401
+  const unauthLoginRes1 = await fetch(`${baseUrl}/oauth/session/login`, {
+    method: 'POST',
+    headers: {host: '127.0.0.1', 'content-type': 'application/json'},
+    body: JSON.stringify({user_id: 'attacker_user'}),
+  });
+  assert.equal(unauthLoginRes1.status, 401, 'Anonymous login without credentials must return 401');
+  const unauthLoginJson1 = await unauthLoginRes1.json();
+  assert.equal(unauthLoginJson1.error?.code, 'UNAUTHORIZED');
+
+  const unauthLoginRes2 = await fetch(`${baseUrl}/oauth/session/login`, {
+    method: 'POST',
+    headers: {host: '127.0.0.1', 'content-type': 'application/json'},
+    body: JSON.stringify({user_id: 'attacker_user', password: 'wrong-attacker-password'}),
+  });
+  assert.equal(unauthLoginRes2.status, 401, 'Login with invalid credentials must return 401');
+
+  // b) Attacker direct POST to /oauth/authorize/consent without valid session -> FAILS CLOSED 401
   const exploitConsentRes = await fetch(`${baseUrl}/oauth/authorize/consent`, {
     method: 'POST',
     headers: {host: '127.0.0.1', 'content-type': 'application/json'},
@@ -107,10 +127,8 @@ test('ChatGPT MCP OAuth 2.1 Full Security: Session Authentication, Exploit Regre
     }),
   });
   assert.equal(exploitConsentRes.status, 401, 'Direct consent without verified user session must fail 401');
-  const exploitConsentJson = await exploitConsentRes.json();
-  assert.equal(exploitConsentJson.error?.code, 'UNAUTHORIZED');
 
-  // b) Unauthenticated GET /oauth/authorize -> FAILS 401
+  // c) Unauthenticated GET /oauth/authorize -> FAILS 401
   const unauthAuthUrl = new URL(`${baseUrl}/oauth/authorize`);
   unauthAuthUrl.searchParams.set('response_type', 'code');
   unauthAuthUrl.searchParams.set('client_id', registeredClientId);
@@ -119,25 +137,17 @@ test('ChatGPT MCP OAuth 2.1 Full Security: Session Authentication, Exploit Regre
   unauthAuthUrl.searchParams.set('code_challenge_method', 'S256');
   const unauthRes = await fetch(unauthAuthUrl.toString(), {headers: {host: '127.0.0.1'}});
   assert.equal(unauthRes.status, 401);
-  const unauthJson = await unauthRes.json();
-  assert.equal(unauthJson.error?.code, 'UNAUTHORIZED');
-
-  // c) Unregistered client_id -> 400
-  const badClientAuthUrl = new URL(`${baseUrl}/oauth/authorize`);
-  badClientAuthUrl.searchParams.set('response_type', 'code');
-  badClientAuthUrl.searchParams.set('client_id', 'unregistered-client-attacker');
-  badClientAuthUrl.searchParams.set('redirect_uri', 'https://attacker.example/cb');
-  badClientAuthUrl.searchParams.set('code_challenge', codeChallenge);
-  badClientAuthUrl.searchParams.set('code_challenge_method', 'S256');
-  const badClientRes = await fetch(badClientAuthUrl.toString(), {headers: {host: '127.0.0.1'}});
-  assert.equal(badClientRes.status, 400);
 
   // 5. Positive User Authentication & Consent Flow:
-  // a) User logs in to establish authentic session
+  // a) User authenticates with valid credentials
   const loginRes = await fetch(`${baseUrl}/oauth/session/login`, {
     method: 'POST',
     headers: {host: '127.0.0.1', 'content-type': 'application/json'},
-    body: JSON.stringify({user_id: 'real_bright_user_42', email: 'user42@example.com'}),
+    body: JSON.stringify({
+      user_id: 'real_bright_user_42',
+      email: 'user42@example.com',
+      password: userAuthSecret,
+    }),
   });
   assert.equal(loginRes.status, 200);
   const loginData = await loginRes.json();

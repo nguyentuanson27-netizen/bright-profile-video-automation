@@ -368,6 +368,9 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
     async (input) => {
       try {
         assertScope('bright:profile:write');
+        const ctx = correlationContext.getStore();
+        const authenticatedUserId = ctx?.auth?.userId || 'chatgpt_user';
+
         if (input.mode === 'delegated_e2e' && !input.delegationGrant) {
           return {
             isError: true,
@@ -377,13 +380,17 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
             }],
           };
         }
+        const approveBody = {
+          ...input,
+          approvalActor: authenticatedUserId,
+        };
         const res = await fetchWithCorrelation(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/approve`, {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
             ...(serviceToken ? {authorization: `Bearer ${serviceToken}`} : {}),
           },
-          body: JSON.stringify(input),
+          body: JSON.stringify(approveBody),
         }, {toolName: 'approve_video_project', projectId: input.projectId});
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -396,7 +403,7 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
         return {
           content: [{
             type: 'text',
-            text: `Project ${project.projectId} approved (mode: ${json.revision?.approvalMode || input.mode}).`,
+            text: `Project ${project.projectId} approved (mode: ${json.revision?.approvalMode || input.mode || 'user_reviewed'}).`,
           }],
           structuredContent: project,
         };
@@ -770,6 +777,7 @@ export function createBrightHttpServer({
   }
 
   const oauthSecret = env.MCP_OAUTH_SECRET?.trim() || serviceToken || expectedAuthToken || 'default-oauth-secret-key-16-chars';
+  const userAuthSecret = (env.BRIGHT_USER_AUTH_SECRET || env.BRIGHT_USER_PASSWORD || env.BRIGHT_INTEGRATION_TOKEN || oauthSecret).trim();
   const clientStoragePath = env.MCP_CLIENT_STORAGE_PATH || (env.BRIGHT_DATA_DIR ? join(env.BRIGHT_DATA_DIR, 'oauth_clients.json') : null);
   const oauthManager = createOauthManager({
     issuer: defaultIssuer,
@@ -865,7 +873,7 @@ export function createBrightHttpServer({
           return;
         }
 
-        // User Login / Session Creation endpoint (both root and /mcp/ prefix)
+        // User Login / Session Creation endpoint (both root and /mcp/ prefix) — requires verified credentials
         if (['/oauth/session/login', '/mcp/oauth/session/login'].includes(url.pathname) && req.method === 'POST') {
           const rawBody = await readBody(req, maxBodyBytes, deadlineAt);
           let parsed = {};
@@ -878,12 +886,26 @@ export function createBrightHttpServer({
             return;
           }
           const userId = (parsed.user_id || parsed.userId || '').trim();
+          const credential = (parsed.password || parsed.credential || parsed.secret || extractBearerToken(req.headers.authorization) || '').trim();
+
           if (!userId) {
             writeJsonBeforeBodyConsumed(req, res, 400, {
-              error: {code: 'INVALID_REQUEST', message: 'user_id is required to create session', requestId},
+              error: {code: 'INVALID_REQUEST', message: 'user_id is required to login', requestId},
             }, requestId);
             return;
           }
+
+          // User authentication credentials MUST be verified:
+          const isValid = userAuthSecret && credential && compareTokensConstantTime(credential, userAuthSecret);
+
+          if (!isValid) {
+            res.setHeader('WWW-Authenticate', `Bearer realm="bright-auth", error="invalid_credentials"`);
+            writeJsonBeforeBodyConsumed(req, res, 401, {
+              error: {code: 'UNAUTHORIZED', message: 'Invalid or missing user login credentials', requestId},
+            }, requestId);
+            return;
+          }
+
           const sessionToken = createUserSessionToken({
             userId,
             email: parsed.email || null,

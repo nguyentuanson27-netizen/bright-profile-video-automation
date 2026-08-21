@@ -207,8 +207,12 @@ jobs:
           from pathlib import Path
           data = json.loads(Path(os.environ['RUNNER_TEMP']).joinpath('mcp-compose.json').read_text())
           service = data['services']['bright-evidence-mcp']
-          assert not service.get('volumes')
+          mounts = service.get('volumes') or []
+          assert len(mounts) == 1
+          assert mounts[0].get('target') == '/data/oauth'
           assert not service.get('secrets')
+          assert service['environment']['MCP_CLIENT_STORAGE_PATH'] == '/data/oauth/clients.json'
+          assert not any(m.get('target') == '/app/data' for m in mounts)
           ports = service.get('ports') or []
           assert len(ports) == 1
           assert ports[0].get('host_ip') == '127.0.0.1'
@@ -237,7 +241,7 @@ jobs:
             exit 1
           fi
           test "$(docker compose -f compose.mcp.yml exec -T bright-evidence-mcp id -u)" != 0
-          docker inspect "$container" | node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const c=JSON.parse(s)[0];const mounts=c.Mounts||[];if(mounts.length)process.exit(1);const b=c.HostConfig.PortBindings||{};const p=b['4190/tcp'];if(!Array.isArray(p)||p.length!==1||p[0].HostIp!=='127.0.0.1'||p[0].HostPort!=='4190')process.exit(1)})"
+          docker inspect "$container" | node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const c=JSON.parse(s)[0];const mounts=c.Mounts||[];if(!mounts.some(m=>m.Destination==='/data/oauth')||mounts.some(m=>m.Destination==='/app/data'))process.exit(1);const b=c.HostConfig.PortBindings||{};const p=b['4190/tcp'];if(!Array.isArray(p)||p.length!==1||p[0].HostIp!=='127.0.0.1'||p[0].HostPort!=='4190')process.exit(1)})"
           curl -fsS http://127.0.0.1:4190/health >/dev/null
       - name: Tear down MCP container
         if: always()
