@@ -78,7 +78,6 @@ jobs:
           node --check security/safe-fetch.mjs
           node --check security/integration-auth.mjs
           node --check security/download-token.mjs
-          node --check security/delegation-grant.mjs
           node --check worker/job-runner.mjs
           node --check worker.mjs
           node --check server.mjs
@@ -208,10 +207,9 @@ jobs:
           data = json.loads(Path(os.environ['RUNNER_TEMP']).joinpath('mcp-compose.json').read_text())
           service = data['services']['bright-evidence-mcp']
           mounts = service.get('volumes') or []
-          assert len(mounts) == 1
-          assert mounts[0].get('target') == '/data/oauth'
+          assert not mounts
           assert not service.get('secrets')
-          assert service['environment']['MCP_CLIENT_STORAGE_PATH'] == '/data/oauth/clients.json'
+          assert service['environment']['MCP_NOAUTH_WRITE_ENABLED'] == 'false'
           assert not any(m.get('target') == '/app/data' for m in mounts)
           ports = service.get('ports') or []
           assert len(ports) == 1
@@ -221,7 +219,7 @@ jobs:
           PY
       - name: Build and verify isolated MCP container
         run: |
-          MCP_AUTH_TOKEN=test-mcp-auth-token-123456 BRIGHT_INTEGRATION_TOKEN=test-integration-token-123456 docker compose -f compose.mcp.yml up -d --build
+          BRIGHT_INTEGRATION_TOKEN=test-integration-token-123456 docker compose -f compose.mcp.yml up -d --build
           container="$(docker compose -f compose.mcp.yml ps -q bright-evidence-mcp)"
           test -n "$container"
           for attempt in $(seq 1 30); do
@@ -241,7 +239,7 @@ jobs:
             exit 1
           fi
           test "$(docker compose -f compose.mcp.yml exec -T bright-evidence-mcp id -u)" != 0
-          docker inspect "$container" | node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const c=JSON.parse(s)[0];const mounts=c.Mounts||[];if(!mounts.some(m=>m.Destination==='/data/oauth')||mounts.some(m=>m.Destination==='/app/data'))process.exit(1);const b=c.HostConfig.PortBindings||{};const p=b['4190/tcp'];if(!Array.isArray(p)||p.length!==1||p[0].HostIp!=='127.0.0.1'||p[0].HostPort!=='4190')process.exit(1)})"
+          docker inspect "$container" | node -e "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const c=JSON.parse(s)[0];const mounts=c.Mounts||[];if(mounts.some(m=>m.Destination==='/app/data'))process.exit(1);const b=c.HostConfig.PortBindings||{};const p=b['4190/tcp'];if(!Array.isArray(p)||p.length!==1||p[0].HostIp!=='127.0.0.1'||p[0].HostPort!=='4190')process.exit(1)})"
           curl -fsS http://127.0.0.1:4190/health >/dev/null
       - name: Tear down MCP container
         if: always()

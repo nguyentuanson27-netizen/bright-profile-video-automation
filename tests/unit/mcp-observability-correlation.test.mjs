@@ -17,10 +17,29 @@ const tempDir = () => mkdtempSync(join(tmpdir(), 'bright-obs-test-'));
 const readRpcBody = async (response) => {
   const type = response.headers.get('content-type') || '';
   if (type.includes('application/json')) return response.json();
-  const text = await response.text();
-  const payloads = text.split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).filter(Boolean);
-  if (!payloads.length) throw new Error(`No JSON-RPC payload in response: ${text}`);
-  return JSON.parse(payloads.at(-1));
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream: true});
+      const lines = buffer.split('\n');
+      for (const line of lines) {
+        if (line.startsWith('data:')) {
+          const jsonStr = line.slice(5).trim();
+          if (jsonStr) {
+            await reader.cancel();
+            return JSON.parse(jsonStr);
+          }
+        }
+      }
+    }
+  } finally {
+    try { await reader.cancel(); } catch {}
+  }
+  throw new Error(`No SSE JSON payload received in: ${buffer}`);
 };
 
 const rpc = async (url, body, extraHeaders = {}) => {
@@ -66,6 +85,7 @@ test('Observability: MCP request ID and correlation ID propagate across hops wit
   const mcpServer = createBrightHttpServer({
     env: {
       MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+      MCP_NOAUTH_WRITE_ENABLED: 'true',
       MCP_AUTH_TOKEN: mcpAuthToken,
       BRIGHT_BACKEND_URL: appUrl,
       BRIGHT_INTEGRATION_TOKEN: serviceToken,

@@ -1,6 +1,5 @@
-﻿import {
+import {
   importProjectInputSchema,
-  approveProjectInputSchema,
   editDraftInputSchema,
   projectStatusOutputSchema,
   APPROVAL_MODES,
@@ -19,7 +18,19 @@ export const getVideoProjectInputSchema = {
 
 export const editVideoDraftInputSchema = editDraftInputSchema;
 
-export const approveVideoProjectInputSchema = approveProjectInputSchema;
+export const approveVideoProjectInputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['projectId', 'revisionId', 'expectedPayloadHash'],
+  properties: {
+    projectId: {type: 'string', minLength: 1, maxLength: 200},
+    revisionId: {type: 'string', minLength: 1, maxLength: 200},
+    expectedPayloadHash: {type: 'string', pattern: '^[a-f0-9]{64}$'},
+    mode: {type: 'string', maxLength: 100},
+    delegationGrant: {type: 'string', maxLength: 2048},
+    delegatedContext: {type: 'object'},
+  },
+};
 
 export const startVideoRenderInputSchema = {
   type: 'object',

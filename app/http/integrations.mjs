@@ -12,9 +12,6 @@ import {
   generateDownloadToken,
   verifyDownloadToken,
 } from '../../security/download-token.mjs';
-import {
-  verifyDelegationGrant,
-} from '../../security/delegation-grant.mjs';
 import {assertValidBearerToken} from '../../security/integration-auth.mjs';
 
 const invalidRequest = (message) => new AppError('INVALID_REQUEST', message, {status: 400});
@@ -46,6 +43,7 @@ export const createIntegrationsApi = ({
   dataDir: _dataDir,
   serviceToken,
   mcpPublicUrl,
+  maxActiveProjects = 3,
   now = Date.now,
   nowMs = Date.now,
   projectIdFactory = randomUUID,
@@ -230,7 +228,7 @@ export const createIntegrationsApi = ({
         updatedAt: timestamp,
       };
 
-      repos.projects.createWithSources(projectRecord, sources);
+      repos.projects.createWithSources(projectRecord, sources, {maxActiveProjects});
 
       // Queue durable generation stage
       const started = jobs.startGeneration({
@@ -310,71 +308,25 @@ export const createIntegrationsApi = ({
         );
       }
 
-      let approvalActor = input.approvalActor || 'chatgpt_mcp';
-      if (input.mode === APPROVAL_MODES.DELEGATED_E2E) {
-        if (!input.delegationGrant) {
-          throw new AppError(
-            ErrorCodes.DELEGATED_APPROVAL_BLOCKED,
-            'Delegated approval blocked: missing trusted delegation grant',
-            {status: 409},
-          );
-        }
-
-        const verifiedGrant = verifyDelegationGrant({
-          grant: input.delegationGrant,
-          projectId,
-          revisionId: currentRevision.id,
-          payloadHash: currentRevision.payloadHash,
-          secret: serviceToken,
-          nowMs: nowMs(),
-        });
-        approvalActor = verifiedGrant.actor || 'user_session';
-
-        // Server-side safety checks
-        if (project.status !== 'review_required') {
-          throw new AppError(
-            ErrorCodes.DELEGATED_APPROVAL_BLOCKED,
-            `Delegated approval blocked: project status is ${project.status}, expected review_required`,
-            {status: 409},
-          );
-        }
-
-        const conflicts = project.research?.conflicts ?? [];
-        const unresolved = conflicts.filter((c) => c.status === 'unresolved');
-        if (unresolved.length > 0) {
-          throw new AppError(
-            ErrorCodes.DELEGATED_APPROVAL_BLOCKED,
-            `Delegated approval blocked: ${unresolved.length} unresolved evidence conflict group(s) exist`,
-            {status: 409, details: {unresolvedConflicts: unresolved.length}},
-          );
-        }
-
-        const retained = project.research?.stats?.retainedEvidence ?? 0;
-        if (retained <= 0) {
-          throw new AppError(
-            ErrorCodes.DELEGATED_APPROVAL_BLOCKED,
-            'Delegated approval blocked: evidence bundle contains no retained evidence',
-            {status: 409},
-          );
-        }
-
-        const unverified = (currentRevision.payload?.claims ?? []).filter((c) => !c.verified && !c.overrideReason);
-        if (unverified.length > 0) {
-          throw new AppError(
-            ErrorCodes.DELEGATED_APPROVAL_BLOCKED,
-            `Delegated approval blocked: ${unverified.length} claim(s) are unverified without explicit override`,
-            {status: 409},
-          );
-        }
+      if (project.status !== 'review_required') {
+        throw new AppError(
+          ErrorCodes.INVALID_TRANSITION,
+          `Project approval cannot be performed from status ${project.status}`,
+          {status: 409},
+        );
       }
+
+      const approvalMode = APPROVAL_MODES.USER_REVIEWED; // legacy storage compatibility
+      const approvalActor = 'chatgpt_mcp_noauth';
+      const approvalContext = input.approvalContext || {semantic: 'external_review_acknowledged'};
 
       const approvedRevision = repos.revisions.approve({
         projectId,
         revisionId: input.revisionId,
         expectedPayloadHash: input.expectedPayloadHash,
-        approvalMode: input.mode,
+        approvalMode,
         approvalActor,
-        approvalContext: input.delegatedContext ?? null,
+        approvalContext,
       });
 
       return {
@@ -417,7 +369,10 @@ export const createIntegrationsApi = ({
     },
 
     retry(projectId) {
-      requireProject(projectId);
+      const project = requireProject(projectId);
+      if (['failed', 'cancelled', 'completed'].includes(project.status) && project.origin === PROJECT_ORIGINS.CHATGPT_MCP) {
+        repos.projects.assertCapacityForReactivation(projectId, maxActiveProjects);
+      }
       const stage = jobs.getCurrentStage(projectId);
       if (!stage) throw new AppError(ErrorCodes.STAGE_NOT_RETRYABLE, 'Stage is not retryable');
       const result = jobs.retry({stageId: stage.id, nowMs: nowMs()});

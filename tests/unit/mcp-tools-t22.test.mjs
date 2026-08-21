@@ -30,8 +30,10 @@ test('MCP server registers edit_video_draft, approve_video_project, start_video_
   const server = createBrightHttpServer({
     env: {
       MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+      MCP_NOAUTH_WRITE_ENABLED: 'true',
       MCP_AUTH_TOKEN: 'test-mcp-token-123456',
-      BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
+      MCP_NOAUTH_WRITE_ENABLED: 'true',
+        BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
       BRIGHT_INTEGRATION_TOKEN: 'service-token',
     },
   });
@@ -91,12 +93,15 @@ test('edit_video_draft tool sends draft update to backend and returns revised pr
   const server = createBrightHttpServer({
     env: {
       MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+      MCP_NOAUTH_WRITE_ENABLED: 'true',
       MCP_AUTH_TOKEN: 'test-mcp-token-123456',
-      BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
+      MCP_NOAUTH_WRITE_ENABLED: 'true',
+        BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
       BRIGHT_INTEGRATION_TOKEN: 'service-token-xyz',
     },
     handler: (await import('../../mcp/server.mjs')).createBrightMcpHandler({
       env: {
+        MCP_NOAUTH_WRITE_ENABLED: 'true',
         BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
         BRIGHT_INTEGRATION_TOKEN: 'service-token-xyz',
       },
@@ -179,12 +184,15 @@ test('approve_video_project tool submits user_reviewed or delegated_e2e approval
   const server = createBrightHttpServer({
     env: {
       MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+      MCP_NOAUTH_WRITE_ENABLED: 'true',
       MCP_AUTH_TOKEN: 'test-mcp-token-123456',
-      BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
+      MCP_NOAUTH_WRITE_ENABLED: 'true',
+        BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
       BRIGHT_INTEGRATION_TOKEN: 'service-token-xyz',
     },
     handler: (await import('../../mcp/server.mjs')).createBrightMcpHandler({
       env: {
+        MCP_NOAUTH_WRITE_ENABLED: 'true',
         BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
         BRIGHT_INTEGRATION_TOKEN: 'service-token-xyz',
       },
@@ -252,12 +260,15 @@ test('start_video_render, retry_video_project, cancel_video_project tool calls d
   const server = createBrightHttpServer({
     env: {
       MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+      MCP_NOAUTH_WRITE_ENABLED: 'true',
       MCP_AUTH_TOKEN: 'test-mcp-token-123456',
-      BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
+      MCP_NOAUTH_WRITE_ENABLED: 'true',
+        BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
       BRIGHT_INTEGRATION_TOKEN: 'service-token-xyz',
     },
     handler: (await import('../../mcp/server.mjs')).createBrightMcpHandler({
       env: {
+        MCP_NOAUTH_WRITE_ENABLED: 'true',
         BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
         BRIGHT_INTEGRATION_TOKEN: 'service-token-xyz',
       },

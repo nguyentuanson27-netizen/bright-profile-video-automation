@@ -1,4 +1,4 @@
-const projectActionPattern = /^\/api\/projects\/([^/]+)\/(research|generate|render|retry|cancel|sources|draft|approve|delegation-grant)$/;
+const projectActionPattern = /^\/api\/projects\/([^/]+)\/(research|generate|render|retry|cancel|sources|draft|approve)$/;
 const projectOutputPattern = /^\/api\/projects\/([^/]+)\/artifacts\/output$/;
 const projectPattern = /^\/api\/projects\/([^/]+)$/;
 
@@ -68,7 +68,6 @@ export const matchRoute = (method, pathname) => {
     if (method === 'PUT' && name === 'draft') return {name: 'projects.draft.edit', id};
     if (method === 'POST') {
       if (name === 'approve') return {name: 'projects.approve', id};
-      if (name === 'delegation-grant') return {name: 'projects.delegationGrant', id};
       return {name: `projects.${name}`, id};
     }
     return null;

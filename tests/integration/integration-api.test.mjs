@@ -207,7 +207,7 @@ test('GET /api/integrations/chatgpt/projects/:projectId returns projected status
   assert.equal(statusRes.json?.evidenceSummary?.retainedEvidence, 2);
 });
 
-test('POST /api/integrations/chatgpt/projects/:projectId/approve enforces delegated_e2e safety gate', async (t) => {
+test('POST /api/integrations/chatgpt/projects/:projectId/approve approves draft with expectedPayloadHash', async (t) => {
   const {port, repos, jobs, close} = await startTestServer({serviceToken: 'secure-token-123'});
   t.after(close);
 
@@ -247,39 +247,22 @@ test('POST /api/integrations/chatgpt/projects/:projectId/approve enforces delega
   });
   const revision = repos.revisions.get(revisionId);
 
-  // Prove integration API does NOT expose delegation-grant endpoint
-  const blockedGrantRes = await request({
+  // 1. Hash mismatch fails with 409
+  const badHashRes = await request({
     port,
-    path: `/api/integrations/chatgpt/projects/${projectId}/delegation-grant`,
+    path: `/api/integrations/chatgpt/projects/${projectId}/approve`,
     method: 'POST',
     headers: {authorization: 'Bearer secure-token-123'},
+    body: {
+      projectId,
+      revisionId: revision.id,
+      expectedPayloadHash: '0'.repeat(64),
+    },
   });
-  assert.equal(blockedGrantRes.status, 404);
+  assert.equal(badHashRes.status, 409);
+  assert.equal(badHashRes.json?.error?.code, 'REVISION_HASH_MISMATCH');
 
-  // Prove loopback delegation-grant endpoint fails closed on missing/empty actor
-  const invalidGrantRes = await request({
-    port,
-    path: `/api/projects/${projectId}/delegation-grant`,
-    method: 'POST',
-    headers: {host: '127.0.0.1', origin: 'http://127.0.0.1'},
-    body: {},
-  });
-  assert.equal(invalidGrantRes.status, 400);
-  assert.equal(invalidGrantRes.json?.error?.code, 'INVALID_REQUEST');
-
-  // User acquires delegation grant via loopback UI endpoint
-  const grantRes = await request({
-    port,
-    path: `/api/projects/${projectId}/delegation-grant`,
-    method: 'POST',
-    headers: {host: '127.0.0.1', origin: 'http://127.0.0.1'},
-    body: {actor: 'user_operator', sessionId: 'sess-123'},
-  });
-  assert.equal(grantRes.status, 200);
-  const delegationGrant = grantRes.json.delegationGrant;
-  assert.equal(grantRes.json.actor, 'user_operator');
-
-  // Approve with delegated_e2e mode
+  // 2. Successful approval
   const approveRes = await request({
     port,
     path: `/api/integrations/chatgpt/projects/${projectId}/approve`,
@@ -289,101 +272,12 @@ test('POST /api/integrations/chatgpt/projects/:projectId/approve enforces delega
       projectId,
       revisionId: revision.id,
       expectedPayloadHash: revision.payloadHash,
-      mode: APPROVAL_MODES.DELEGATED_E2E,
-      delegationGrant,
-      delegatedContext: {userExplicitIntent: 'Create full video end to end'},
     },
   });
 
   assert.equal(approveRes.status, 200);
-  assert.equal(approveRes.json?.revision?.approvalMode, APPROVAL_MODES.DELEGATED_E2E);
-  assert.equal(approveRes.json?.revision?.approvalActor, 'user_operator');
-});
-
-test('POST /api/integrations/chatgpt/projects/:projectId/approve blocks delegated_e2e when claims are unverified', async (t) => {
-  const {port, repos, jobs, close} = await startTestServer({serviceToken: 'secure-token-123'});
-  t.after(close);
-
-  const bundle = sampleEvidenceBundle();
-  const importRes = await request({
-    port,
-    path: '/api/integrations/chatgpt/projects/import',
-    method: 'POST',
-    headers: {authorization: 'Bearer secure-token-123'},
-    body: {
-      creator: 'Marques Brownlee',
-      topic: 'Career overview',
-      evidenceBundle: bundle,
-      idempotencyKey: 'idemp-appr-unverified',
-    },
-  });
-  const projectId = importRes.json.project.projectId;
-
-  const sources = repos.sources.list(projectId);
-  const payloadWithUnverified = {
-    creatorName: 'Marques Brownlee',
-    summary: 'Tech reviewer',
-    claims: [{id: 'c-1', text: 'Top YouTuber', sourceIds: [sources[0].id], verified: false}],
-    script: [{id: 's-1', text: 'Opening', start: 0, duration: 5, sourceIds: [sources[0].id]}],
-    voiceover: {chunks: [{id: 'v-1', text: 'Opening', start: 0, duration: 5, sourceIds: [sources[0].id]}]},
-    scenes: [{id: 'sc-1', type: 'hero', start: 0, duration: 5, sourceIds: [sources[0].id]}],
-    render: {duration: 5},
-  };
-
-  const claim = jobs.claimNext({workerId: 'worker-test-1', allowedTypes: ['generation'], nowMs: Date.now(), leaseMs: 30000});
-  const {revisionId} = jobs.commitGeneration({
-    stageId: claim.stageId,
-    claimToken: claim.claimToken,
-    nowMs: Date.now(),
-    draft: payloadWithUnverified,
-  });
-  const revision = repos.revisions.get(revisionId);
-
-  // 1. Missing grant fails
-  const noGrantRes = await request({
-    port,
-    path: `/api/integrations/chatgpt/projects/${projectId}/approve`,
-    method: 'POST',
-    headers: {authorization: 'Bearer secure-token-123'},
-    body: {
-      projectId,
-      revisionId: revision.id,
-      expectedPayloadHash: revision.payloadHash,
-      mode: APPROVAL_MODES.DELEGATED_E2E,
-      delegatedContext: {userExplicitIntent: 'Run E2E'},
-    },
-  });
-  assert.equal(noGrantRes.status, 409);
-  assert.equal(noGrantRes.json?.error?.code, 'DELEGATED_APPROVAL_BLOCKED');
-
-  // 2. With grant, unverified claims fail
-  const grantRes = await request({
-    port,
-    path: `/api/projects/${projectId}/delegation-grant`,
-    method: 'POST',
-    headers: {host: '127.0.0.1', origin: 'http://127.0.0.1'},
-    body: {actor: 'user_operator'},
-  });
-  assert.equal(grantRes.status, 200);
-  const delegationGrant = grantRes.json.delegationGrant;
-
-  const blockedRes = await request({
-    port,
-    path: `/api/integrations/chatgpt/projects/${projectId}/approve`,
-    method: 'POST',
-    headers: {authorization: 'Bearer secure-token-123'},
-    body: {
-      projectId,
-      revisionId: revision.id,
-      expectedPayloadHash: revision.payloadHash,
-      mode: APPROVAL_MODES.DELEGATED_E2E,
-      delegationGrant,
-      delegatedContext: {userExplicitIntent: 'Run E2E'},
-    },
-  });
-
-  assert.equal(blockedRes.status, 409);
-  assert.equal(blockedRes.json?.error?.code, 'DELEGATED_APPROVAL_BLOCKED');
+  assert.equal(approveRes.json?.revision?.approvalMode, APPROVAL_MODES.USER_REVIEWED);
+  assert.equal(approveRes.json?.project?.status, 'approved');
 });
 
 test('POST /api/integrations/chatgpt/projects/:projectId/draft allows structured draft edits', async (t) => {

@@ -213,8 +213,29 @@ export const createRepositories = (db) => {
     WHERE project_id = ? AND revision_id = ? AND stage_type IN ('media_ingest', 'tts', 'render')
     LIMIT 1
   `);
+  const countActiveChatGptProjects = db.prepare(`
+    SELECT COUNT(*) AS count FROM projects
+    WHERE origin = 'chatgpt_mcp'
+      AND status NOT IN ('completed', 'failed', 'cancelled')
+  `);
+  const countOtherActiveChatGptProjects = db.prepare(`
+    SELECT COUNT(*) AS count FROM projects
+    WHERE origin = 'chatgpt_mcp'
+      AND id != ?
+      AND status NOT IN ('completed', 'failed', 'cancelled')
+  `);
 
-  const createProjectTx = db.transaction(({project, sources = []}) => {
+  const createProjectTx = db.transaction(({project, sources = [], maxActiveProjects = null}) => {
+    if (project.origin === 'chatgpt_mcp' && maxActiveProjects !== null && Number.isInteger(maxActiveProjects)) {
+      const activeCount = countActiveChatGptProjects.get().count;
+      if (activeCount >= maxActiveProjects) {
+        throw new AppError(
+          ErrorCodes.NOAUTH_CAPACITY_REACHED,
+          'Anonymous active project capacity reached',
+          {status: 429},
+        );
+      }
+    }
     const createdAt = project.createdAt ?? nowIso();
     const updatedAt = project.updatedAt ?? createdAt;
     insertProject.run({
@@ -408,11 +429,29 @@ export const createRepositories = (db) => {
 
   return Object.freeze({
     projects: Object.freeze({
-      create(record) {
-        return createProjectTx.immediate({project: record});
+      create(record, options = {}) {
+        return createProjectTx.immediate({project: record, maxActiveProjects: options.maxActiveProjects ?? null});
       },
-      createWithSources(project, sources) {
-        return createProjectTx.immediate({project, sources});
+      createWithSources(project, sources, options = {}) {
+        return createProjectTx.immediate({project, sources, maxActiveProjects: options.maxActiveProjects ?? null});
+      },
+      countActiveChatGptProjects() {
+        return countActiveChatGptProjects.get().count;
+      },
+      countOtherActiveChatGptProjects(projectId) {
+        return countOtherActiveChatGptProjects.get(projectId).count;
+      },
+      assertCapacityForReactivation(projectId, maxActiveProjects) {
+        if (maxActiveProjects !== null && maxActiveProjects !== undefined && Number.isInteger(maxActiveProjects)) {
+          const count = countOtherActiveChatGptProjects.get(projectId).count;
+          if (count >= maxActiveProjects) {
+            throw new AppError(
+              ErrorCodes.NOAUTH_CAPACITY_REACHED,
+              'Anonymous active project capacity reached',
+              {status: 429},
+            );
+          }
+        }
       },
       get(id) {
         return projectFromRow(getProject.get(id));

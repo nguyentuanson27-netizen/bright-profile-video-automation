@@ -12,18 +12,35 @@ import {createJobStore} from '../../storage/jobs.mjs';
 import {createArtifactStore} from '../../storage/artifacts.mjs';
 import {createAppServer} from '../../app/server.mjs';
 import {createBrightHttpServer} from '../../mcp/server.mjs';
-import {APPROVAL_MODES} from '../../domain/schemas.mjs';
-import {generatePkceChallenge} from '../../security/oauth.mjs';
 
 const tempDir = () => mkdtempSync(join(tmpdir(), 'bright-e2e-test-'));
 
 const readRpcBody = async (response) => {
   const type = response.headers.get('content-type') || '';
   if (type.includes('application/json')) return response.json();
-  const text = await response.text();
-  const payloads = text.split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).filter(Boolean);
-  if (!payloads.length) throw new Error(`No JSON-RPC payload in response: ${text}`);
-  return JSON.parse(payloads.at(-1));
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream: true});
+      const lines = buffer.split('\n');
+      for (const line of lines) {
+        if (line.startsWith('data:')) {
+          const jsonStr = line.slice(5).trim();
+          if (jsonStr) {
+            await reader.cancel();
+            return JSON.parse(jsonStr);
+          }
+        }
+      }
+    }
+  } finally {
+    try { await reader.cancel(); } catch {}
+  }
+  throw new Error(`No SSE JSON payload received in: ${buffer}`);
 };
 
 const rpc = async (url, body, extraHeaders = {}) => {
@@ -32,6 +49,7 @@ const rpc = async (url, body, extraHeaders = {}) => {
     headers: {
       accept: 'application/json, text/event-stream',
       'content-type': 'application/json',
+      host: '127.0.0.1',
       ...extraHeaders,
     },
     body: JSON.stringify(body),
@@ -73,10 +91,7 @@ const startTestSystem = async () => {
   let jobs = createJobStore(db);
   let artifactStore = createArtifactStore(db);
 
-  const mcpAuthToken = 'mcp-chatgpt-token-xyz-12345678';
   const serviceToken = 'internal-service-token-abc-87654321';
-  const userAuthSecret = 'dedicated-user-password-e2e-123456';
-  const oauthSecret = 'dedicated-oauth-secret-e2e-87654321';
 
   const appServer = createAppServer({
     db,
@@ -85,6 +100,7 @@ const startTestSystem = async () => {
     artifactStore,
     dataDir: dir,
     integrationToken: serviceToken,
+    maxActiveProjects: 5,
   });
 
   appServer.listen(0, '127.0.0.1');
@@ -103,9 +119,9 @@ const startTestSystem = async () => {
   const mcpServer = createBrightHttpServer({
     env: {
       MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
-      MCP_AUTH_TOKEN: mcpAuthToken,
-      MCP_OAUTH_SECRET: oauthSecret,
-      BRIGHT_USER_AUTH_SECRET: userAuthSecret,
+      MCP_NOAUTH_WRITE_ENABLED: 'true',
+      MCP_MAX_ACTIVE_PROJECTS: '5',
+      MCP_MAX_INFLIGHT_WRITE_REQUESTS: '4',
       MCP_PORT: String(mcpPort),
       MCP_PUBLIC_URL: mcpPublicUrl,
       BRIGHT_BACKEND_URL: appUrl,
@@ -139,10 +155,7 @@ const startTestSystem = async () => {
     mcpServer,
     appUrl,
     mcpUrl,
-    mcpAuthToken,
     serviceToken,
-    userAuthSecret,
-    oauthSecret,
     repos,
     jobs,
     artifactStore,
@@ -151,126 +164,14 @@ const startTestSystem = async () => {
   };
 };
 
-test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import -> Generation -> User Review Approval -> Render -> Authoritative MP4', async (t) => {
+test('Deterministic No-Auth E2E Flow: Normalize -> Import -> Worker Generation -> User Review Approval -> Render -> Authoritative MP4', async (t) => {
   const sys = await startTestSystem();
   t.after(sys.close);
 
-  // Step 1: Perform OAuth 2.1 Dynamic Client Registration, User Login, Consent, and PKCE Token Exchange
-  const codeVerifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
-  const codeChallenge = generatePkceChallenge(codeVerifier);
-  const redirectUri = 'https://chatgpt.com/connector/oauth/cb_bright_e2e';
-
-  // 1a. Dynamic Client Registration (RFC 7591)
-  const regRes = await fetch(new URL('/oauth/register', sys.mcpUrl).toString(), {
-    method: 'POST',
-    headers: {host: '127.0.0.1', 'content-type': 'application/json'},
-    body: JSON.stringify({
-      client_name: 'ChatGPT MCP E2E Client',
-      redirect_uris: [redirectUri],
-    }),
-  });
-  assert.equal(regRes.status, 201);
-  const {client_id: clientId} = await regRes.json();
-  assert.ok(clientId);
-
-  // 1b. Prove that service token cannot be used for user login (least-privilege separation)
-  const badLoginRes = await fetch(new URL('/oauth/session/login', sys.mcpUrl).toString(), {
-    method: 'POST',
-    headers: {host: '127.0.0.1', 'content-type': 'application/json'},
-    body: JSON.stringify({
-      user_id: 'chatgpt_user_42',
-      email: 'user42@example.com',
-      password: sys.serviceToken,
-    }),
-  });
-  assert.equal(badLoginRes.status, 401, 'Service token must be rejected for user login');
-
-  // User Login with valid user credentials to establish authentic session
-  const loginRes = await fetch(new URL('/oauth/session/login', sys.mcpUrl).toString(), {
-    method: 'POST',
-    headers: {host: '127.0.0.1', 'content-type': 'application/json'},
-    body: JSON.stringify({
-      user_id: 'chatgpt_user_42',
-      email: 'user42@example.com',
-      password: sys.userAuthSecret,
-    }),
-  });
-  assert.equal(loginRes.status, 200);
-  const {session_token: userSessionToken} = await loginRes.json();
-  assert.ok(userSessionToken);
-
-  // 1c. Authorize GET prompts for consent without silently minting authorization code (CSRF protection)
-  const authGetUrl = new URL('/oauth/authorize', sys.mcpUrl);
-  authGetUrl.searchParams.set('response_type', 'code');
-  authGetUrl.searchParams.set('client_id', clientId);
-  authGetUrl.searchParams.set('redirect_uri', redirectUri);
-  authGetUrl.searchParams.set('scope', 'bright:profile:write bright:profile:read');
-  authGetUrl.searchParams.set('code_challenge', codeChallenge);
-  authGetUrl.searchParams.set('code_challenge_method', 'S256');
-  authGetUrl.searchParams.set('state', 'e2e-state-1');
-
-  const authGetRes = await fetch(authGetUrl.toString(), {
-    headers: {
-      host: '127.0.0.1',
-      cookie: `session_token=${encodeURIComponent(userSessionToken)}`,
-    },
-  });
-  assert.equal(authGetRes.status, 200);
-  const authGetData = await authGetRes.json();
-  assert.equal(authGetData.consent_required, true);
-  assert.ok(authGetData.consent_challenge);
-
-  // 1d. Authenticated User Consent confirmation with consent challenge
-  const consentRes = await fetch(new URL('/oauth/authorize/consent', sys.mcpUrl).toString(), {
-    method: 'POST',
-    headers: {
-      host: '127.0.0.1',
-      'content-type': 'application/json',
-      'x-session-token': userSessionToken,
-    },
-    body: JSON.stringify({
-      consent_challenge: authGetData.consent_challenge,
-      client_id: clientId,
-      redirect_uri: redirectUri,
-      scope: 'bright:profile:write bright:profile:read',
-      code_challenge: codeChallenge,
-      code_challenge_method: 'S256',
-      state: 'e2e-state-1',
-    }),
-  });
-  assert.equal(consentRes.status, 200);
-  const {code: authCode} = await consentRes.json();
-  assert.ok(authCode);
-
-  // 1d. PKCE Token Exchange
-  const tokenUrl = new URL('/oauth/token', sys.mcpUrl);
-  const tokenRes = await fetch(tokenUrl.toString(), {
-    method: 'POST',
-    headers: {
-      host: '127.0.0.1',
-      'content-type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams({
-      grant_type: 'authorization_code',
-      code: authCode,
-      client_id: clientId,
-      redirect_uri: redirectUri,
-      code_verifier: codeVerifier,
-    }).toString(),
-  });
-  assert.equal(tokenRes.status, 200);
-  const {access_token: oauthAccessToken} = await tokenRes.json();
-  assert.ok(oauthAccessToken);
-
-  const mcpHeaders = {
-    authorization: `Bearer ${oauthAccessToken}`,
-    'mcp-protocol-version': '2025-06-18',
-  };
-
-  // Step 2: Call normalize_evidence via MCP
+  // Step 1: Call normalize_evidence via MCP (no auth header needed)
   const normRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
-    id: 2,
+    id: 1,
     method: 'tools/call',
     params: {
       name: 'normalize_evidence',
@@ -294,7 +195,7 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
         ],
       },
     },
-  }, mcpHeaders);
+  });
 
   assert.equal(normRes.response.status, 200);
   assert.equal(normRes.body.result.isError, undefined);
@@ -302,10 +203,10 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
   assert.equal(evidenceBundle.stats.retainedEvidence, 2);
   assert.equal(evidenceBundle.stats.conflictGroups, 0);
 
-  // Step 3: Call create_video_project
+  // Step 2: Call create_video_project via MCP
   const createRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
-    id: 3,
+    id: 2,
     method: 'tools/call',
     params: {
       name: 'create_video_project',
@@ -317,7 +218,7 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
         idempotencyKey: 'mkbhd-e2e-idemp-001',
       },
     },
-  }, mcpHeaders);
+  });
 
   assert.equal(createRes.response.status, 200);
   assert.equal(createRes.body.result.isError, undefined);
@@ -326,7 +227,7 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
   assert.equal(createRes.body.result.structuredContent.origin, 'chatgpt_mcp');
   assert.equal(createRes.body.result.structuredContent.status, 'generating');
 
-  // Step 4: Simulate Worker completing generation stage
+  // Step 3: Worker simulates completing generation stage
   const sources = sys.repos.sources.list(projectId);
   assert.equal(sources.length, 2);
 
@@ -364,48 +265,25 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
 
   const currentRev = sys.repos.revisions.get(revisionId);
 
-  // Step 5: Query status via get_video_project -> should be in review_required
+  // Step 4: Query status via get_video_project -> review_required
   const getRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
-    id: 4,
+    id: 3,
     method: 'tools/call',
     params: {
       name: 'get_video_project',
       arguments: {projectId},
     },
-  }, mcpHeaders);
+  });
 
-  if (getRes.body?.result?.isError || !getRes.body?.result) {
-    console.error('DEBUG getRes.body:', JSON.stringify(getRes.body, null, 2));
-  }
   assert.equal(getRes.response.status, 200);
   assert.equal(getRes.body.result.structuredContent.status, 'review_required');
   assert.equal(getRes.body.result.structuredContent.currentRevision.id, revisionId);
 
-  // Step 6a: Negative test - prove ungranted delegated_e2e fails closed over MCP
-  const ungrantedApproveRes = await rpc(sys.mcpUrl, {
-    jsonrpc: '2.0',
-    id: 50,
-    method: 'tools/call',
-    params: {
-      name: 'approve_video_project',
-      arguments: {
-        projectId,
-        revisionId,
-        expectedPayloadHash: currentRev.payloadHash,
-        mode: APPROVAL_MODES.DELEGATED_E2E,
-      },
-    },
-  }, mcpHeaders);
-  assert.equal(ungrantedApproveRes.response.status, 200);
-  assert.equal(ungrantedApproveRes.body.result.isError, true);
-  assert.match(ungrantedApproveRes.body.result.content[0].text, /Delegated approval blocked: valid explicit user delegation grant is required/i);
-
-  // Step 6b: Real Remote ChatGPT flow - User reviews draft in ChatGPT and confirms approval (mode=user_reviewed)
-  // This executes 100% through the authenticated MCP interface with zero direct/loopback app calls
+  // Step 5: Approve project via approve_video_project tool
   const approveRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
-    id: 5,
+    id: 4,
     method: 'tools/call',
     params: {
       name: 'approve_video_project',
@@ -413,29 +291,28 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
         projectId,
         revisionId,
         expectedPayloadHash: currentRev.payloadHash,
-        mode: APPROVAL_MODES.USER_REVIEWED,
       },
     },
-  }, mcpHeaders);
+  });
 
   assert.equal(approveRes.response.status, 200);
   assert.equal(approveRes.body.result.isError, undefined);
   assert.equal(approveRes.body.result.structuredContent.status, 'approved');
 
-  // Step 7: Call start_video_render via MCP
+  // Step 6: Start video render via start_video_render tool
   const renderStartRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
-    id: 6,
+    id: 5,
     method: 'tools/call',
     params: {
       name: 'start_video_render',
       arguments: {projectId},
     },
-  }, mcpHeaders);
+  });
 
   assert.equal(renderStartRes.response.status, 200);
 
-  // Step 8: Worker executes media_ingest -> tts -> render
+  // Step 7: Worker executes media_ingest -> tts -> render
   // Media Ingest
   const mediaClaim = sys.jobs.claimNext({workerId: 'worker-e2e', allowedTypes: ['media_ingest'], nowMs: Date.now(), leaseMs: 30000});
   const manifestPath = `artifacts/${projectId}/${revisionId}/manifest.json`;
@@ -502,16 +379,16 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
     },
   });
 
-  // Step 9: Get project status via MCP -> should be completed with output download URL
+  // Step 8: Get project status via MCP -> completed with output download URL
   const completedRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
-    id: 7,
+    id: 6,
     method: 'tools/call',
     params: {
       name: 'get_video_project',
       arguments: {projectId},
     },
-  }, mcpHeaders);
+  });
 
   assert.equal(completedRes.response.status, 200);
   const completedStatus = completedRes.body.result.structuredContent;
@@ -521,14 +398,14 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
   assert.equal(completedStatus.output.sha256, mp4Sha);
   assert.ok(completedStatus.output.downloadUrl);
 
-  // Step 10: Download the completed MP4 using the absolute public download URL via MCP gateway
+  // Step 9: Download the completed MP4 using the absolute download URL
   assert.ok(completedStatus.output.downloadUrl.startsWith('http://'), 'downloadUrl must be an absolute URL');
   const downloadRes = await httpGet(completedStatus.output.downloadUrl);
   assert.equal(downloadRes.status, 200);
   assert.equal(downloadRes.headers['content-type'], 'video/mp4');
   assert.equal(downloadRes.buffer.toString('utf8'), 'Authoritative 1080p MP4 Video Content Stream');
 
-  // Step 11: Reopen database and prove all provenance and state survive
+  // Step 10: Reopen database and verify persisted state
   const reopened = sys.reopenDatabase();
   const savedProject = reopened.repos.projects.get(projectId);
   assert.equal(savedProject.status, 'completed');
@@ -537,28 +414,16 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
 
   const savedRev = reopened.repos.revisions.get(revisionId);
   assert.equal(savedRev.approvalMode, 'user_reviewed');
-  assert.equal(savedRev.approvalActor, 'chatgpt_user_42');
+  assert.equal(savedRev.approvalActor, 'chatgpt_mcp_noauth');
 });
 
 test('Default Flow stops at review_required and proves NO automatic approval/render occurs', async (t) => {
   const sys = await startTestSystem();
   t.after(sys.close);
 
-  const mcpHeaders = {
-    authorization: `Bearer ${sys.mcpAuthToken}`,
-    'mcp-protocol-version': '2025-06-18',
-  };
-
-  await rpc(sys.mcpUrl, {
-    jsonrpc: '2.0',
-    id: 1,
-    method: 'initialize',
-    params: {protocolVersion: '2025-06-18', capabilities: {}, clientInfo: {name: 'chatgpt-client', version: '1.0.0'}},
-  }, {authorization: `Bearer ${sys.mcpAuthToken}`});
-
   const normRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
-    id: 2,
+    id: 1,
     method: 'tools/call',
     params: {
       name: 'normalize_evidence',
@@ -568,11 +433,11 @@ test('Default Flow stops at review_required and proves NO automatic approval/ren
         items: [{url: 'https://example.com/c1', claim: 'Claim 1', category: 'identity', value: 'Val 1'}],
       },
     },
-  }, mcpHeaders);
+  });
 
   const createRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
-    id: 3,
+    id: 2,
     method: 'tools/call',
     params: {
       name: 'create_video_project',
@@ -583,7 +448,7 @@ test('Default Flow stops at review_required and proves NO automatic approval/ren
         idempotencyKey: 'default-flow-001',
       },
     },
-  }, mcpHeaders);
+  });
 
   const projectId = createRes.body.result.structuredContent.projectId;
   const sources = sys.repos.sources.list(projectId);
@@ -614,114 +479,110 @@ test('Default Flow stops at review_required and proves NO automatic approval/ren
   assert.equal(nextClaim, null, 'No downstream stage should be runnable before human review approval');
 });
 
-test('Adversarial Security: Conflicting evidence, unverified claims, and stale hashes block delegated approval', async (t) => {
+test('Draft Modification and Rejection Flow via MCP Tools', async (t) => {
   const sys = await startTestSystem();
   t.after(sys.close);
 
-  const mcpHeaders = {
-    authorization: `Bearer ${sys.mcpAuthToken}`,
-    'mcp-protocol-version': '2025-06-18',
-  };
-
-  await rpc(sys.mcpUrl, {
-    jsonrpc: '2.0',
-    id: 1,
-    method: 'initialize',
-    params: {protocolVersion: '2025-06-18', capabilities: {}, clientInfo: {name: 'chatgpt-client', version: '1.0.0'}},
-  }, {authorization: `Bearer ${sys.mcpAuthToken}`});
-
-  // Evidence with conflicting values
   const normRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
-    id: 2,
+    id: 1,
     method: 'tools/call',
     params: {
       name: 'normalize_evidence',
       arguments: {
-        subject: {name: 'Controversial Creator'},
+        subject: {name: 'Edit Test Creator'},
         researchedAt: '2026-08-20T00:00:00Z',
-        items: [
-          {url: 'https://src-a.com', claim: 'Founded company in 2010', category: 'career', value: 2010},
-          {url: 'https://src-b.com', claim: 'Founded company in 2015', category: 'career', value: 2015},
-        ],
+        items: [{url: 'https://example.com/edit1', claim: 'Edit claim 1', category: 'identity', value: 'Edit Creator'}],
       },
     },
-  }, mcpHeaders);
+  });
 
-  const bundle = normRes.body.result.structuredContent;
-  assert.ok(bundle.stats.conflictGroups > 0, 'Should detect conflict group');
-
-  // Import conflicting project
   const createRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
-    id: 3,
+    id: 2,
     method: 'tools/call',
     params: {
       name: 'create_video_project',
       arguments: {
-        creator: 'Controversial Creator',
-        topic: 'Company History',
-        evidenceBundle: bundle,
-        idempotencyKey: 'conflict-proj-001',
+        creator: 'Edit Test Creator',
+        topic: 'Editing Drafts',
+        evidenceBundle: normRes.body.result.structuredContent,
+        idempotencyKey: 'edit-draft-proj-001',
       },
     },
-  }, mcpHeaders);
+  });
 
   const projectId = createRes.body.result.structuredContent.projectId;
   const sources = sys.repos.sources.list(projectId);
 
   // Worker commits generation
-  const genClaim = sys.jobs.claimNext({workerId: 'worker-conflict', allowedTypes: ['generation'], nowMs: Date.now(), leaseMs: 30000});
-  const {revisionId} = sys.jobs.commitGeneration({
+  const genClaim = sys.jobs.claimNext({workerId: 'worker-edit', allowedTypes: ['generation'], nowMs: Date.now(), leaseMs: 30000});
+  const {revisionId: r1Id} = sys.jobs.commitGeneration({
     stageId: genClaim.stageId,
     claimToken: genClaim.claimToken,
     nowMs: Date.now(),
     draft: {
-      creatorName: 'Controversial Creator',
-      summary: 'Summary',
-      claims: [{id: 'c-1', text: 'claim', sourceIds: [sources[0].id], verified: true}],
-      script: [{id: 's-1', text: 'script', start: 0, duration: 5, sourceIds: [sources[0].id]}],
-      voiceover: {chunks: [{id: 'v-1', text: 'vo', start: 0, duration: 5, sourceIds: [sources[0].id]}]},
+      creatorName: 'Edit Test Creator',
+      summary: 'Summary 1',
+      claims: [{id: 'c-1', text: 'claim 1', sourceIds: [sources[0].id], verified: true}],
+      script: [{id: 's-1', text: 'script 1', start: 0, duration: 5, sourceIds: [sources[0].id]}],
+      voiceover: {chunks: [{id: 'v-1', text: 'vo 1', start: 0, duration: 5, sourceIds: [sources[0].id]}]},
       scenes: [{id: 'sc-1', type: 'hero', start: 0, duration: 5, sourceIds: [sources[0].id]}],
       render: {duration: 5},
     },
   });
-  const currentRev = sys.repos.revisions.get(revisionId);
+  const r1 = sys.repos.revisions.get(r1Id);
 
-  // 1. Attempt delegated approval WITHOUT explicit user intent -> must be rejected
-  const approveNoIntentRes = await rpc(sys.mcpUrl, {
+  // 1. Stale payload hash rejection
+  const staleApproveRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
-    id: 4,
+    id: 3,
     method: 'tools/call',
     params: {
       name: 'approve_video_project',
       arguments: {
         projectId,
-        revisionId,
-        expectedPayloadHash: currentRev.payloadHash,
-        mode: APPROVAL_MODES.DELEGATED_E2E,
+        revisionId: r1Id,
+        expectedPayloadHash: '0'.repeat(64),
       },
     },
-  }, mcpHeaders);
-
-  assert.equal(approveNoIntentRes.response.status, 200);
-  assert.equal(approveNoIntentRes.body.result.isError, true);
-  assert.match(approveNoIntentRes.body.result.content[0].text, /delegated approval blocked/i);
-
-  // 2. Acquire grant via loopback user UI route, but project has unresolved conflicts -> must be rejected by backend safety gate
-  const grantRes = await fetch(`${sys.appUrl}/api/projects/${projectId}/delegation-grant`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      host: '127.0.0.1',
-      origin: 'http://127.0.0.1',
-    },
-    body: JSON.stringify({actor: 'operator_ui_user'}),
   });
-  assert.equal(grantRes.status, 200);
-  const {delegationGrant} = await grantRes.json();
+  assert.equal(staleApproveRes.response.status, 200);
+  assert.equal(staleApproveRes.body.result.isError, true);
+  assert.match(staleApproveRes.body.result.content[0].text, /does not match/i);
 
-  const approveConflictRes = await rpc(sys.mcpUrl, {
+  // 2. Edit draft via MCP
+  const editedDraft = {
+    creatorName: 'Edit Test Creator (Revised)',
+    summary: 'Revised summary',
+    claims: [{id: 'c-1', text: 'revised claim', sourceIds: [sources[0].id], verified: true}],
+    script: [{id: 's-1', text: 'revised script', start: 0, duration: 5, sourceIds: [sources[0].id]}],
+    voiceover: {chunks: [{id: 'v-1', text: 'revised voice', start: 0, duration: 5, sourceIds: [sources[0].id]}]},
+    scenes: [{id: 'sc-1', type: 'hero', start: 0, duration: 5, sourceIds: [sources[0].id]}],
+    render: {duration: 5},
+  };
+
+  const editRes = await rpc(sys.mcpUrl, {
+    jsonrpc: '2.0',
+    id: 4,
+    method: 'tools/call',
+    params: {
+      name: 'edit_video_draft',
+      arguments: {
+        projectId,
+        revisionId: r1Id,
+        expectedPayloadHash: r1.payloadHash,
+        draft: editedDraft,
+      },
+    },
+  });
+  assert.equal(editRes.response.status, 200);
+  assert.equal(editRes.body.result.isError, undefined);
+  const updatedRev = editRes.body.result.structuredContent.currentRevision;
+  assert.notEqual(updatedRev.payloadHash, r1.payloadHash);
+
+  // 3. Approve revised draft
+  const approveR2Res = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
     id: 5,
     method: 'tools/call',
@@ -729,32 +590,11 @@ test('Adversarial Security: Conflicting evidence, unverified claims, and stale h
       name: 'approve_video_project',
       arguments: {
         projectId,
-        revisionId,
-        expectedPayloadHash: currentRev.payloadHash,
-        mode: APPROVAL_MODES.DELEGATED_E2E,
-        delegationGrant,
-        delegatedContext: {userExplicitIntent: 'Approve automatically with conflicts'},
+        revisionId: updatedRev.id,
+        expectedPayloadHash: updatedRev.payloadHash,
       },
     },
-  }, mcpHeaders);
-
-  assert.equal(approveConflictRes.response.status, 200);
-  assert.equal(approveConflictRes.body.result.isError, true);
-  assert.match(approveConflictRes.body.result.content[0].text, /unresolved evidence conflict group/i);
-
-  // 3. Loopback UI endpoint rejects missing/malformed actor body
-  const malformedGrantRes = await fetch(`${sys.appUrl}/api/projects/${projectId}/delegation-grant`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      host: '127.0.0.1',
-      origin: 'http://127.0.0.1',
-    },
-    body: JSON.stringify({}),
   });
-  assert.equal(malformedGrantRes.status, 400);
-
-  // Verify project remains in review_required
-  const project = sys.repos.projects.get(projectId);
-  assert.equal(project.status, 'review_required');
+  assert.equal(approveR2Res.response.status, 200);
+  assert.equal(approveR2Res.body.result.structuredContent.status, 'approved');
 });

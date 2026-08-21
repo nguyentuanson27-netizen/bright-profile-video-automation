@@ -239,15 +239,16 @@ export const importProjectInputSchema = {
 export const approveProjectInputSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['projectId', 'revisionId', 'expectedPayloadHash', 'mode'],
+  required: ['projectId', 'revisionId', 'expectedPayloadHash'],
   properties: {
     projectId: {type: 'string', minLength: 1, maxLength: 200},
     revisionId: {type: 'string', minLength: 1, maxLength: 200},
     expectedPayloadHash: {type: 'string', pattern: '^[a-f0-9]{64}$'},
-    mode: {enum: [APPROVAL_MODES.USER_REVIEWED, APPROVAL_MODES.DELEGATED_E2E]},
-    delegationGrant: {type: 'string', minLength: 16, maxLength: 2048},
-    delegatedContext: {type: 'object'},
+    mode: {enum: ['user_reviewed', 'delegated_e2e']},
     approvalActor: {type: 'string', minLength: 1, maxLength: 200},
+    approvalContext: {type: 'object'},
+    delegatedContext: {type: 'object'},
+    delegationGrant: {type: 'string'},
   },
 };
 

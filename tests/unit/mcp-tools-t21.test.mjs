@@ -44,8 +44,10 @@ test('MCP server registers create_video_project and get_video_project in tools/l
   const server = createBrightHttpServer({
     env: {
       MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+      MCP_NOAUTH_WRITE_ENABLED: 'true',
       MCP_AUTH_TOKEN: 'test-mcp-token-123456',
-      BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
+      MCP_NOAUTH_WRITE_ENABLED: 'true',
+        BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
       BRIGHT_INTEGRATION_TOKEN: 'service-token',
     },
   });
@@ -101,12 +103,15 @@ test('create_video_project tool calls private backend and returns structured pro
   const customServer = createBrightHttpServer({
     env: {
       MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+      MCP_NOAUTH_WRITE_ENABLED: 'true',
       MCP_AUTH_TOKEN: 'test-mcp-token-123456',
-      BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
+      MCP_NOAUTH_WRITE_ENABLED: 'true',
+        BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
       BRIGHT_INTEGRATION_TOKEN: 'service-token-xyz',
     },
     handler: (await import('../../mcp/server.mjs')).createBrightMcpHandler({
       env: {
+        MCP_NOAUTH_WRITE_ENABLED: 'true',
         BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
         BRIGHT_INTEGRATION_TOKEN: 'service-token-xyz',
       },
@@ -180,12 +185,15 @@ test('get_video_project tool calls private backend and returns structured projec
   const customServer = createBrightHttpServer({
     env: {
       MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+      MCP_NOAUTH_WRITE_ENABLED: 'true',
       MCP_AUTH_TOKEN: 'test-mcp-token-123456',
-      BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
+      MCP_NOAUTH_WRITE_ENABLED: 'true',
+        BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
       BRIGHT_INTEGRATION_TOKEN: 'service-token-xyz',
     },
     handler: (await import('../../mcp/server.mjs')).createBrightMcpHandler({
       env: {
+        MCP_NOAUTH_WRITE_ENABLED: 'true',
         BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
         BRIGHT_INTEGRATION_TOKEN: 'service-token-xyz',
       },

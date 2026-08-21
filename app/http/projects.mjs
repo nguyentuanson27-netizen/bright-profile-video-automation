@@ -1,6 +1,5 @@
 import {AppError, ErrorCodes} from '../../domain/errors.mjs';
 import {assertSafePublicUrl} from '../../security/url-policy.mjs';
-import {issueDelegationGrant} from '../../security/delegation-grant.mjs';
 
 const MAX_CREATOR_LENGTH = 200;
 const MAX_TOPIC_LENGTH = 2000;
@@ -59,7 +58,6 @@ const generatedId = (factory, name) => {
 export const createProjectsApi = ({
   repos,
   jobs,
-  serviceToken,
   now = Date.now,
   nowMs = Date.now,
   projectIdFactory,
@@ -192,49 +190,6 @@ export const createProjectsApi = ({
       if (!stage) throw new AppError(ErrorCodes.STAGE_NOT_ACTIVE, 'Stage is not active');
       const result = jobs.cancel({stageId: stage.id, nowMs: nowMs()});
       return {changed: result.changed, project: requireProject(id), stage: result.stage};
-    },
-
-    createDelegationGrant(id, body) {
-      if (!body || typeof body !== 'object' || Array.isArray(body)) {
-        throw invalidRequest('JSON object body is required');
-      }
-      const project = requireProject(id);
-      if (project.status !== 'review_required' || !project.currentRevisionId) {
-        throw new AppError(
-          ErrorCodes.DELEGATED_APPROVAL_BLOCKED,
-          'Delegation grant can only be issued for projects in review_required status',
-          {status: 409},
-        );
-      }
-      const revision = repos.revisions.get(project.currentRevisionId);
-      if (!revision) throw new AppError(ErrorCodes.REVISION_NOT_FOUND, 'Revision not found', {status: 404});
-
-      const actor = typeof body.actor === 'string' && body.actor.trim() ? body.actor.trim() : null;
-      if (!actor) {
-        throw invalidRequest('actor is required and must be a non-empty string');
-      }
-      const sessionId = typeof body.sessionId === 'string' && body.sessionId.trim() ? body.sessionId.trim() : undefined;
-
-      const grant = issueDelegationGrant({
-        projectId: project.id,
-        revisionId: revision.id,
-        payloadHash: revision.payloadHash,
-        actor,
-        sessionId,
-        secret: serviceToken || 'fallback-secret-at-least-16-chars',
-        ttlSeconds: 900,
-        nowMs: nowMs(),
-      });
-
-      return {
-        projectId: project.id,
-        revisionId: revision.id,
-        payloadHash: revision.payloadHash,
-        actor,
-        sessionId,
-        delegationGrant: grant,
-        expiresInSeconds: 900,
-      };
     },
   });
 };

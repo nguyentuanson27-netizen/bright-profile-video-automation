@@ -1,0 +1,578 @@
+import assert from 'node:assert/strict';
+import {once} from 'node:events';
+import http from 'node:http';
+import {mkdtempSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import test from 'node:test';
+
+import {createBrightHttpServer} from '../../mcp/server.mjs';
+import {createAppServer} from '../../app/server.mjs';
+import {openDatabase, migrateDatabase, createRepositories} from '../../storage/db.mjs';
+import {createJobStore} from '../../storage/jobs.mjs';
+import {createArtifactStore} from '../../storage/artifacts.mjs';
+import {normalizeEvidence} from '../../lib/evidence/normalize-evidence.mjs';
+
+const tempDir = () => mkdtempSync(join(tmpdir(), 'mcp-noauth-test-'));
+
+const httpAgent = new http.Agent({keepAlive: true, maxSockets: 50});
+
+const sendRawRpc = ({port, path = '/mcp', body = {}, headers = {}}) => new Promise((resolve, reject) => {
+  const payload = JSON.stringify(body);
+  const req = http.request({
+    hostname: '127.0.0.1',
+    port,
+    path,
+    method: 'POST',
+    agent: httpAgent,
+    headers: {
+      host: '127.0.0.1',
+      accept: 'application/json, text/event-stream',
+      'content-type': 'application/json',
+      'content-length': Buffer.byteLength(payload),
+      ...headers,
+    },
+  }, (res) => {
+    let data = '';
+    res.setEncoding('utf8');
+    res.on('data', (chunk) => {
+      data += chunk;
+      if (data.includes('data:')) {
+        const line = data.split('\n').find((l) => l.startsWith('data:'));
+        if (line) {
+          const jsonStr = line.slice(5).trim();
+          if (jsonStr) {
+            try {
+              const parsed = JSON.parse(jsonStr);
+              req.destroy();
+              resolve({status: res.statusCode, body: parsed});
+              return;
+            } catch {}
+          }
+        }
+      }
+    });
+    res.on('end', () => {
+      try {
+        const parsed = JSON.parse(data);
+        resolve({status: res.statusCode, body: parsed});
+      } catch {
+        const line = data.split('\n').find((l) => l.startsWith('data:'));
+        if (line) {
+          resolve({status: res.statusCode, body: JSON.parse(line.slice(5).trim())});
+        } else {
+          resolve({status: res.statusCode, body: null, raw: data});
+        }
+      }
+    });
+  });
+  req.on('error', (err) => {
+    // If we destroyed the request after receiving data, ignore aborted error
+    if (err.code === 'ECONNRESET' || req.destroyed) return;
+    reject(err);
+  });
+  req.write(payload);
+  req.end();
+});
+
+const sendRawHttp = ({port, path = '/mcp', method = 'POST', headers = {}, body = ''}) => new Promise((resolve, reject) => {
+  const req = http.request({
+    hostname: '127.0.0.1',
+    port,
+    path,
+    method,
+    headers: {
+      accept: 'application/json, text/event-stream',
+      ...headers,
+    },
+  }, (res) => {
+    let data = '';
+    res.setEncoding('utf8');
+    res.on('data', (chunk) => { data += chunk; });
+    res.on('end', () => {
+      let json = null;
+      try { json = JSON.parse(data); } catch {}
+      resolve({status: res.statusCode, headers: res.headers, body: data, json});
+    });
+  });
+  req.on('error', reject);
+  if (body) req.write(body);
+  req.end();
+});
+
+const makeSampleBundle = (name = 'Test Subject') => {
+  return normalizeEvidence({
+    subject: {name},
+    researchedAt: '2026-08-21T00:00:00.000Z',
+    items: [
+      {
+        url: 'https://example.com/item1',
+        claim: `${name} is a renowned creator.`,
+        category: 'identity',
+        value: name,
+      },
+    ],
+  });
+};
+
+test('MCP No-Auth: Tool Discovery & Security Scheme Metadata', async (t) => {
+  const server = createBrightHttpServer({
+    env: {
+      MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+      MCP_NOAUTH_WRITE_ENABLED: 'false',
+    },
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const port = server.address().port;
+  t.after(() => new Promise((res) => server.close(res)));
+
+  // 1. Initializing and listing tools requires NO Authorization header
+  const listRes = await sendRawRpc({
+    port,
+    body: {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/list',
+    },
+  });
+
+  assert.equal(listRes.status, 200);
+  assert.ok(listRes.body?.result?.tools);
+  const tools = listRes.body.result.tools;
+
+  // Expected 8 tools
+  const toolNames = tools.map((tool) => tool.name).sort();
+  assert.deepEqual(toolNames, [
+    'approve_video_project',
+    'cancel_video_project',
+    'create_video_project',
+    'edit_video_draft',
+    'get_video_project',
+    'normalize_evidence',
+    'retry_video_project',
+    'start_video_render',
+  ].sort());
+
+  // 2. All tools declare securitySchemes: [{type: 'noauth'}]
+  for (const tool of tools) {
+    assert.ok(tool.annotations?.securitySchemes, `Tool ${tool.name} missing securitySchemes`);
+    assert.deepEqual(tool.annotations.securitySchemes, [{type: 'noauth'}], `Tool ${tool.name} must declare noauth`);
+  }
+});
+
+test('MCP No-Auth: Deferred OAuth/DCR/Session Routes Return 404', async (t) => {
+  const server = createBrightHttpServer({
+    env: {
+      MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+    },
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const port = server.address().port;
+  const baseUrl = `http://127.0.0.1:${port}`;
+  t.after(() => new Promise((res) => server.close(res)));
+
+  const deferredPaths = [
+    '/oauth/register',
+    '/oauth/authorize',
+    '/oauth/authorize/consent',
+    '/oauth/token',
+    '/oauth/session/login',
+    '/.well-known/oauth-protected-resource',
+    '/.well-known/oauth-authorization-server',
+    '/.well-known/openid-configuration',
+  ];
+
+  for (const path of deferredPaths) {
+    const res = await fetch(`${baseUrl}${path}`, {headers: {host: '127.0.0.1'}});
+    assert.equal(res.status, 404, `Path ${path} must return 404`);
+    await res.text();
+  }
+});
+
+test('MCP No-Auth: Kill-Switch (MCP_NOAUTH_WRITE_ENABLED=false)', async (t) => {
+  const server = createBrightHttpServer({
+    env: {
+      MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+      MCP_NOAUTH_WRITE_ENABLED: 'false',
+    },
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const port = server.address().port;
+  t.after(() => new Promise((res) => server.close(res)));
+
+  // Read-only normalize_evidence works when writes disabled
+  const normRes = await sendRawRpc({
+    port,
+    body: {
+      jsonrpc: '2.0',
+      id: 10,
+      method: 'tools/call',
+      params: {
+        name: 'normalize_evidence',
+        arguments: {
+          subject: {name: 'Test Subject'},
+          researchedAt: '2026-08-21T00:00:00Z',
+          items: [{url: 'https://example.com/1', claim: 'Claim 1'}],
+        },
+      },
+    },
+  });
+  assert.equal(normRes.status, 200);
+  assert.equal(normRes.body?.result?.isError, undefined);
+
+  const sampleHash = 'a'.repeat(64);
+  const sampleDraft = {
+    creatorName: 'Test',
+    summary: 'Summary',
+    claims: [{id: 'c-1', text: 'claim', sourceIds: ['src-1'], verified: true}],
+    script: [{id: 's-1', text: 'script', start: 0, duration: 5, sourceIds: ['src-1']}],
+    voiceover: {chunks: [{id: 'v-1', text: 'vo', start: 0, duration: 5, sourceIds: ['src-1']}]},
+    scenes: [{id: 'sc-1', type: 'hero', start: 0, duration: 5, sourceIds: ['src-1']}],
+    render: {duration: 5, renderScale: 1, crf: 22},
+  };
+
+  // All mutating tools are blocked with NOAUTH_WRITE_DISABLED
+  const mutatingCalls = [
+    {name: 'create_video_project', arguments: {creator: 'Test', topic: 'Topic', evidenceBundle: makeSampleBundle(), idempotencyKey: 'idemp-1'}},
+    {name: 'edit_video_draft', arguments: {projectId: 'p-1', revisionId: 'r-1', expectedPayloadHash: sampleHash, draft: sampleDraft}},
+    {name: 'approve_video_project', arguments: {projectId: 'p-1', revisionId: 'r-1', expectedPayloadHash: sampleHash}},
+    {name: 'start_video_render', arguments: {projectId: 'p-1'}},
+    {name: 'retry_video_project', arguments: {projectId: 'p-1'}},
+    {name: 'cancel_video_project', arguments: {projectId: 'p-1'}},
+  ];
+
+  for (const call of mutatingCalls) {
+    const res = await sendRawRpc({
+      port,
+      body: {
+        jsonrpc: '2.0',
+        id: 20,
+        method: 'tools/call',
+        params: call,
+      },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body?.result?.isError, true, `Mutating tool ${call.name} must return isError: true when writes disabled`);
+    assert.match(res.body?.result?.content?.[0]?.text, /NOAUTH_WRITE_DISABLED/, `Tool ${call.name} must return NOAUTH_WRITE_DISABLED`);
+  }
+});
+
+test('MCP No-Auth: In-Flight Write Cap & Rate Limiting', async (t) => {
+  const serviceToken = 'service-token-123';
+  let activeFetches = 0;
+  let maxConcurrentFetches = 0;
+  const mockFetch = async () => {
+    activeFetches += 1;
+    maxConcurrentFetches = Math.max(maxConcurrentFetches, activeFetches);
+    await new Promise((r) => setTimeout(r, 200));
+    activeFetches -= 1;
+    return new Response(JSON.stringify({project: {projectId: 'p-mock', status: 'generating'}}), {
+      status: 200,
+      headers: {'content-type': 'application/json'},
+    });
+  };
+
+  const server = createBrightHttpServer({
+    env: {
+      MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+      MCP_NOAUTH_WRITE_ENABLED: 'true',
+      MCP_MAX_INFLIGHT_WRITE_REQUESTS: '2',
+      MCP_RATE_LIMIT_PER_MINUTE: '5',
+      BRIGHT_INTEGRATION_TOKEN: serviceToken,
+    },
+    fetchFn: mockFetch,
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const port = server.address().port;
+  t.after(() => new Promise((res) => server.close(res)));
+
+  // Test in-flight gate: launch 4 concurrent writes when max is 2
+  const bundle = makeSampleBundle();
+  const writePromises = [1, 2, 3, 4].map((i) => sendRawRpc({
+    port,
+    body: {
+      jsonrpc: '2.0',
+      id: i,
+      method: 'tools/call',
+      params: {
+        name: 'create_video_project',
+        arguments: {creator: 'Test', topic: 'Topic', evidenceBundle: bundle, idempotencyKey: `idemp-inflight-${i}`},
+      },
+    },
+  }));
+
+  const writeResults = await Promise.all(writePromises);
+  const inFlightRejected = writeResults.filter((r) => r.body?.result?.isError && /NOAUTH_INFLIGHT_CAP_REACHED/.test(r.body?.result?.content?.[0]?.text || ''));
+  assert.ok(inFlightRejected.length >= 1, 'At least 1 write must be rejected by in-flight gate');
+  assert.ok(maxConcurrentFetches <= 2, 'Never more than 2 in-flight writes reach backend');
+
+  // Test rate limiting: exceed 5 requests in a minute
+  let rateLimitHit = false;
+  for (let i = 0; i < 10; i++) {
+    const res = await sendRawHttp({
+      port,
+      path: '/mcp',
+      method: 'POST',
+      headers: {
+        host: '127.0.0.1',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({jsonrpc: '2.0', id: 100 + i, method: 'tools/list'}),
+    });
+    if (res.status === 429) {
+      rateLimitHit = true;
+      break;
+    }
+  }
+  assert.equal(rateLimitHit, true, 'Rate limiter must return 429 when rate limit exceeded');
+});
+
+test('MCP No-Auth: Host and Origin Protection', async (t) => {
+  const server = createBrightHttpServer({
+    env: {
+      MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+    },
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const port = server.address().port;
+  t.after(() => new Promise((res) => server.close(res)));
+
+  // Disallowed Host via raw HTTP
+  const badHostRes = await sendRawHttp({
+    port,
+    path: '/mcp',
+    method: 'POST',
+    headers: {
+      host: 'evil.attacker.com',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({jsonrpc: '2.0', id: 1, method: 'tools/list'}),
+  });
+  assert.equal(badHostRes.status, 403);
+  assert.equal(badHostRes.json?.error?.code, 'HOST_NOT_ALLOWED');
+
+  // Disallowed Origin via raw HTTP
+  const badOriginRes = await sendRawHttp({
+    port,
+    path: '/mcp',
+    method: 'POST',
+    headers: {
+      host: '127.0.0.1',
+      origin: 'http://malicious-site.com',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({jsonrpc: '2.0', id: 1, method: 'tools/list'}),
+  });
+  assert.equal(badOriginRes.status, 403);
+  assert.equal(badOriginRes.json?.error?.code, 'ORIGIN_NOT_ALLOWED');
+});
+
+test('Backend Private Service Authentication Boundary', async (t) => {
+  const dir = tempDir();
+  const dbPath = join(dir, 'backend-auth-test.sqlite');
+  const db = openDatabase(dbPath);
+  migrateDatabase(db);
+  const repos = createRepositories(db);
+  const jobs = createJobStore(db);
+  const artifactStore = createArtifactStore(db);
+  const serviceToken = 'real-private-token-12345';
+
+  const appServer = createAppServer({
+    db,
+    repos,
+    jobs,
+    artifactStore,
+    dataDir: dir,
+    integrationToken: serviceToken,
+  });
+  appServer.listen(0, '127.0.0.1');
+  await once(appServer, 'listening');
+  const appPort = appServer.address().port;
+  const appUrl = `http://127.0.0.1:${appPort}`;
+
+  t.after(() => {
+    appServer.close();
+    db.close();
+  });
+
+  // Direct unauthenticated call to integrations API -> 401 UNAUTHORIZED
+  const unauthRes = await fetch(`${appUrl}/api/integrations/chatgpt/projects/import`, {
+    method: 'POST',
+    headers: {'content-type': 'application/json'},
+    body: JSON.stringify({creator: 'Test', topic: 'Topic', evidenceBundle: makeSampleBundle(), idempotencyKey: 'k-1'}),
+  });
+  assert.equal(unauthRes.status, 401);
+  const unauthJson = await unauthRes.json();
+  assert.equal(unauthJson.error?.code, 'UNAUTHORIZED');
+
+  // Direct call with wrong token -> 401 UNAUTHORIZED
+  const badTokenRes = await fetch(`${appUrl}/api/integrations/chatgpt/projects/import`, {
+    method: 'POST',
+    headers: {'content-type': 'application/json', authorization: 'Bearer wrong-service-token'},
+    body: JSON.stringify({creator: 'Test', topic: 'Topic', evidenceBundle: makeSampleBundle(), idempotencyKey: 'k-1'}),
+  });
+  assert.equal(badTokenRes.status, 401);
+  await badTokenRes.text();
+
+  // Call with valid service token -> 201 Created
+  const validRes = await fetch(`${appUrl}/api/integrations/chatgpt/projects/import`, {
+    method: 'POST',
+    headers: {'content-type': 'application/json', authorization: `Bearer ${serviceToken}`},
+    body: JSON.stringify({creator: 'Test', topic: 'Topic', evidenceBundle: makeSampleBundle(), idempotencyKey: 'k-1'}),
+  });
+  assert.equal(validRes.status, 201);
+  const validJson = await validRes.json();
+  assert.ok(validJson.project?.projectId);
+});
+
+test('Durable Transactional Capacity Cap on Create and Retry/Reactivation', async (t) => {
+  const dir = tempDir();
+  const dbPath = join(dir, 'capacity-test.sqlite');
+  const db = openDatabase(dbPath);
+  migrateDatabase(db);
+  const repos = createRepositories(db);
+  const jobs = createJobStore(db);
+  const artifactStore = createArtifactStore(db);
+  const serviceToken = 'service-secret-token';
+  const maxActiveProjects = 2;
+
+  const appServer = createAppServer({
+    db,
+    repos,
+    jobs,
+    artifactStore,
+    dataDir: dir,
+    integrationToken: serviceToken,
+    maxActiveProjects,
+  });
+  appServer.listen(0, '127.0.0.1');
+  await once(appServer, 'listening');
+  const appPort = appServer.address().port;
+  const appUrl = `http://127.0.0.1:${appPort}`;
+
+  t.after(() => {
+    appServer.close();
+    db.close();
+  });
+
+  const importProject = async (idemp) => {
+    const res = await fetch(`${appUrl}/api/integrations/chatgpt/projects/import`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json', authorization: `Bearer ${serviceToken}`},
+      body: JSON.stringify({creator: 'Creator', topic: 'Topic', evidenceBundle: makeSampleBundle(idemp), idempotencyKey: idemp}),
+    });
+    return {status: res.status, json: await res.json()};
+  };
+
+  // 1. Create project 1 (active count = 1) -> 201
+  const p1 = await importProject('idemp-cap-1');
+  assert.equal(p1.status, 201);
+  assert.ok(p1.json.project.projectId);
+
+  // 2. Create project 2 (active count = 2) -> 201
+  const p2 = await importProject('idemp-cap-2');
+  assert.equal(p2.status, 201);
+  assert.ok(p2.json.project.projectId);
+
+  // 3. Create project 3 (active count would be 3 > max 2) -> 429 NOAUTH_CAPACITY_REACHED
+  const p3 = await importProject('idemp-cap-3');
+  assert.equal(p3.status, 429);
+  assert.equal(p3.json.error?.code, 'NOAUTH_CAPACITY_REACHED');
+
+  // Verify DB state: exactly 2 projects exist
+  const count = repos.projects.countActiveChatGptProjects();
+  assert.equal(count, 2);
+
+  // 4. Idempotent replay of p1 -> returns 200 with existing project, does not fail capacity
+  const replayP1 = await importProject('idemp-cap-1');
+  assert.equal(replayP1.status, 200);
+  assert.equal(replayP1.json.project.projectId, p1.json.project.projectId);
+
+  // 5. Fail project 1 to make it terminal/inactive
+  const claim = jobs.claimNext({workerId: 'worker-1', allowedTypes: ['generation'], nowMs: Date.now(), leaseMs: 30000});
+  assert.ok(claim);
+  jobs.fail({
+    stageId: claim.stageId,
+    claimToken: claim.claimToken,
+    nowMs: Date.now(),
+    errorCode: 'GENERATION_FAILED',
+    errorMessage: 'Test error',
+    retryable: true,
+  });
+
+  // Now active count = 1 (p2 is active, p1 is failed)
+  assert.equal(repos.projects.countActiveChatGptProjects(), 1);
+
+  // 6. Now creating project 3 succeeds because a slot was freed
+  const p3Retry = await importProject('idemp-cap-3');
+  assert.equal(p3Retry.status, 201);
+  assert.equal(repos.projects.countActiveChatGptProjects(), 2);
+
+  // 7. Retrying project 1 while active count = 2 (capacity full) fails with NOAUTH_CAPACITY_REACHED
+  const retryRes = await fetch(`${appUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(p1.json.project.projectId)}/retry`, {
+    method: 'POST',
+    headers: {'content-type': 'application/json', authorization: `Bearer ${serviceToken}`},
+  });
+  assert.equal(retryRes.status, 429);
+  const retryJson = await retryRes.json();
+  assert.equal(retryJson.error?.code, 'NOAUTH_CAPACITY_REACHED');
+});
+
+test('Concurrent Admission Race: Never Exceeds Configured Active Cap', async (t) => {
+  const dir = tempDir();
+  const dbPath = join(dir, 'race-test.sqlite');
+  const db = openDatabase(dbPath);
+  migrateDatabase(db);
+  const repos = createRepositories(db);
+  const jobs = createJobStore(db);
+  const artifactStore = createArtifactStore(db);
+  const serviceToken = 'service-secret-token';
+  const maxActiveProjects = 3;
+
+  const appServer = createAppServer({
+    db,
+    repos,
+    jobs,
+    artifactStore,
+    dataDir: dir,
+    integrationToken: serviceToken,
+    maxActiveProjects,
+  });
+  appServer.listen(0, '127.0.0.1');
+  await once(appServer, 'listening');
+  const appPort = appServer.address().port;
+  const appUrl = `http://127.0.0.1:${appPort}`;
+
+  t.after(() => {
+    appServer.close();
+    db.close();
+  });
+
+  // Launch 10 concurrent creates against cap=3
+  const results = await Promise.all(
+    Array.from({length: 10}, (_, i) =>
+      fetch(`${appUrl}/api/integrations/chatgpt/projects/import`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json', authorization: `Bearer ${serviceToken}`},
+        body: JSON.stringify({
+          creator: `Creator ${i}`,
+          topic: 'Topic',
+          evidenceBundle: makeSampleBundle(`Subject ${i}`),
+          idempotencyKey: `concurrent-race-${i}`,
+        }),
+      }).then(async (res) => ({status: res.status, json: await res.json()})),
+    ),
+  );
+
+  const created = results.filter((r) => r.status === 201);
+  const rejected = results.filter((r) => r.status === 429 && r.json?.error?.code === 'NOAUTH_CAPACITY_REACHED');
+
+  assert.equal(created.length, 3, 'Exactly 3 projects must be created');
+  assert.equal(rejected.length, 7, 'Exactly 7 projects must be rejected with NOAUTH_CAPACITY_REACHED');
+  assert.equal(repos.projects.countActiveChatGptProjects(), 3, 'Committed active count in SQLite must equal exactly 3');
+});

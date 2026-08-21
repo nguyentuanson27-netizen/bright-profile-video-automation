@@ -193,6 +193,7 @@ export const createAppServer = ({
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
   integrationToken,
   allowedIntegrationHosts = ['127.0.0.1', 'localhost', 'app', '::1', '[::1]'],
+  maxActiveProjects,
 } = {}) => {
   if (!db || typeof db.prepare !== 'function') throw new TypeError('database is required');
   if (!dataDir) throw new TypeError('dataDir is required');
@@ -209,7 +210,6 @@ export const createAppServer = ({
   const projects = createProjectsApi({
     repos,
     jobs,
-    serviceToken: integrationToken,
     now,
     nowMs,
     projectIdFactory,
@@ -229,6 +229,7 @@ export const createAppServer = ({
     dataDir: resolvedDataDir,
     serviceToken: integrationToken,
     mcpPublicUrl: process.env.MCP_PUBLIC_URL || process.env.BRIGHT_PUBLIC_URL || 'http://127.0.0.1:4190',
+    maxActiveProjects,
     now,
     nowMs,
     projectIdFactory,
@@ -374,11 +375,6 @@ export const createAppServer = ({
       }
       if (route.name === 'projects.approve') {
         return json(res, 200, {...revisions.approve(route.id), requestId}, requestId);
-      }
-      if (route.name === 'projects.delegationGrant') {
-        const body = await readJsonBody(req, maxBodyBytes);
-        const result = projects.createDelegationGrant(route.id, body);
-        return json(res, 200, {...result, requestId}, requestId);
       }
       if (route.name === 'projects.artifacts.output') {
         const output = await artifacts.getOutput(route.id);
