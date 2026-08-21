@@ -111,37 +111,42 @@ The historical production spec contains useful ideas that are **not required for
 | Public TLS/auth/OAuth gateway or browser account system | Deferred while app remains private/loopback/trusted-network only; required before intentional broader exposure |
 | Public/commercial launch, multi-tenancy, billing, plugin/Codex/marketplace expansion | Explicit non-goals |
 
-## ChatGPT MCP End-to-End Video Handoff Traceability Matrix
+## ChatGPT MCP Temporary No-Auth Handoff Traceability Matrix
 
-**Scope date:** 2026-08-20  
-**Applies to:** ChatGPT MCP E2E Video Handoff Milestone (Tasks T17-T28)
+**Scope date:** 2026-08-21  
+**Applies to:** ChatGPT MCP Handoff Milestone (Tasks T17-T28) after the temporary no-auth reset  
+**Closure state:** OPEN — implementation and live acceptance must be re-verified against this matrix
 
-| ID | Requirement / Invariant | Owner task(s) | Implementation surface | Focused regression / verification | Final E2E / CI gate |
+| ID | Requirement / invariant | Owner task(s) | Implementation surface | Focused regression / verification | Final gate |
 |---|---|---|---|---|---|
-| M01 | Authenticate remote MCP server & private integration boundary with Bearer tokens; constant-time comparison, secret redaction | T17 | `security/integration-auth.mjs`, `mcp/server.mjs` | `tests/unit/integration-auth.test.mjs`, `tests/integration/mcp-normalize.test.mjs` | All MCP tool endpoints fail closed when unauthenticated |
-| M02 | Domain schemas and stable error codes for integration payloads and MCP tools | T18 | `domain/schemas.mjs`, `domain/errors.mjs`, `mcp/schemas/tool-schemas.mjs` | `tests/unit/integration-schemas.test.mjs`, `tests/unit/error-codes.test.mjs` | Full schema validation on import, draft edit, approval, status |
-| M03 | Schema v3 migration: `origin`, unique `idempotency_key`, `approval_mode`, `approval_actor`, `approval_context_json` | T19 | `storage/migrations/003_chatgpt_handoff.sql`, `storage/db.mjs` | `tests/unit/db-v3-migration.test.mjs` | DB schema upgrades cleanly from v2 and persists provenance across reopen |
-| M04 | Private backend integration HTTP API (`/api/integrations/chatgpt/*`) | T20 | `app/http/integrations.mjs`, `app/server.mjs`, `app/http/router.mjs` | `tests/integration/integration-api.test.mjs` | Authenticated HTTP API for import, status, draft, approve, render, retry, cancel |
-| M05 | Register `create_video_project` & `get_video_project` MCP tools calling backend via HTTP | T21 | `mcp/server.mjs` | `tests/unit/mcp-tools-t21.test.mjs` | MCP tools interact with backend without direct DB access |
-| M06 | Register `edit_video_draft`, `approve_video_project`, `start_video_render`, `retry_video_project`, `cancel_video_project` MCP tools | T22, T24 | `mcp/server.mjs` | `tests/unit/mcp-tools-t22.test.mjs` | Durable lifecycle tools exposed through MCP |
-| M07 | Server-gated delegated approval: 0 conflicts, >0 evidence, 0 unverified claims, status `review_required`, hash match | T23 | `app/http/integrations.mjs` | `tests/integration/integration-api.test.mjs`, `tests/integration/chatgpt-mcp-e2e.test.mjs` | 409 DELEGATED_APPROVAL_BLOCKED when safety conditions unmet |
-| M08 | Short-lived signed MP4 artifact download delivery (HMAC-SHA256, 15 min TTL) | T25 | `security/download-token.mjs`, `app/http/artifacts.mjs`, `app/server.mjs` | `tests/unit/download-token.test.mjs`, `tests/integration/mcp-download-integration.test.mjs` | Authoritative MP4 streamable only with valid token; arbitrary file access blocked |
-| M09 | Private runtime networking, compose configuration, and secret-safe structured telemetry | T26 | `compose.yml`, `compose.mcp.yml`, `.env.example`, `server.mjs` | `compose.yml` config validation, test harness | MCP connects to backend via internal network; worker unexposed; data volumes not shared |
-| M10 | Full deterministic E2E integration test suite covering default-review, explicit-E2E, and adversarial security | T27 | `tests/integration/chatgpt-mcp-e2e.test.mjs` | `chatgpt-mcp-e2e.test.mjs` | End-to-end pipeline reaches downloadable MP4 from candidate evidence |
-| M11 | Live acceptance, documentation, Definition of Done gate closure | T28 | `docs/project-status.md`, `tasks/todo.md`, `tasks/traceability.md` | `npm test`, `npm run lint`, `npm run audit:standalone` | All 263 tests green, 0 audit vulnerabilities, 0 lint errors |
+| M01 | External ChatGPT -> MCP is explicit `noauth`; legal initialize/list/tool calls require no Authorization; Host/body/deadline/rate-limit protections remain | T17, T21 | `mcp/server.mjs`, tool metadata | noauth transport + boundary regressions | T27 noauth E2E + T28 live connection without OAuth linking |
+| M02 | MCP -> Bright Profile remains private/service-authenticated with `BRIGHT_INTEGRATION_TOKEN`; missing/wrong service auth causes zero mutation | T17, T20, T26 | `mcp/server.mjs`, `app/http/integrations.mjs`, Compose | integration API negative auth tests | T27 direct-backend negative path + runtime topology check |
+| M03 | Domain schemas and stable errors keep import/edit/status contracts bounded while public approval input exposes only revision/hash data needed for user-reviewed approval | T18, T22 | `domain/schemas.mjs`, `mcp/schemas/tool-schemas.mjs` | schema + stale hash/revision tests | T27 user-reviewed E2E |
+| M04 | Schema v3 migration retains origin/idempotency/approval provenance without adding OAuth/session persistence dependency | T19 | `storage/migrations/003_chatgpt_handoff.sql`, repositories | migration/reopen tests | exact-head CI migration smoke |
+| M05 | Imported EvidenceBundle is revalidated, persisted, idempotent, skips backend research, reaches `research_ready`, queues generation | T20 | integration API + import service/storage | import/idempotency/provider-not-called tests | T27 import -> generation path |
+| M06 | MCP create/get/edit/approve/render/retry/cancel tools call backend over HTTP with no direct DB/artifact access and `noauth` external metadata | T21, T22, T24 | `mcp/server.mjs` | MCP tool unit/integration tests | T27 full tool path |
+| M07 | Active approval path is `user_reviewed` only; caller cannot choose actor/mode/delegation state; flow stops at `review_required` before user action | T18, T22, T23 | MCP schemas/handler + backend approval service | default-stop + approval-contract negative tests | T27 proves zero approval/downstream before user confirmation |
+| M08 | OAuth/DCR/session/static external bearer runtime/config/storage is removed; `delegated_e2e`/delegation grants are deferred and unreachable from active MCP contract | T23, T26 | `mcp/server.mjs`, `security/`, Compose/env/tests | dead-code/config search + route absence tests | exact-head CI + review of active diff |
+| M09 | Signed MP4 capability remains bound to project/revision/artifact with expiry/tamper checks, authoritative file validation, streaming/backpressure/timeout controls | T25 | `security/download-token.mjs`, artifact/integration routes, MCP proxy | token + download integration tests | T27 completed MP4 download |
+| M10 | Runtime topology keeps worker/browser API private, MCP has no Bright storage mount, correlation/logging remains secret-safe | T26 | `compose.yml`, `compose.mcp.yml`, server logging | Compose config/container checks + correlation tests | exact-head CI Compose gates |
+| M11 | Deterministic and live acceptance match the noauth/user-reviewed product truth; docs/PR claims are updated only from observed evidence | T27, T28 | E2E tests, status/todo/traceability/PR body | full suite + live evidence record | T28 live Path A + Path B + project-wide DoD |
 
-## Closure audit checklist
+## ChatGPT MCP Closure Audit Checklist
 
-Before milestone delivery, review this matrix once against the implementation:
+Before delivery under the reset contract:
 
-- [x] Every retained observable API operation has an owner task.
-- [x] Every retained worker stage has a durable owner and focused regression.
-- [x] Every retained security/concurrency invariant has a focused regression owner.
-- [x] Every operator-visible action is exercised through the application boundary in final E2E.
-- [x] Every current MVP row maps to a final E2E/CI/DoD gate.
-- [x] Historical requirements not retained here are explicitly deferred rather than left ambiguous.
-- [x] No public/commercial/plugin/Codex scope has been reintroduced.
-- [x] All ChatGPT MCP E2E milestone tasks (T17-T28) implemented, verified, and mapped.
+- [x] Standalone T01-T16 closure ledger remains unchanged and binding.
+- [x] Noauth reset requirements have owner tasks.
+- [ ] Active MCP runtime matches `noauth` rather than OAuth/static bearer fallback.
+- [ ] Private MCP -> app service auth remains fail-closed.
+- [ ] Active approval contract is `user_reviewed` only.
+- [ ] OAuth/DCR/session runtime/config/storage is removed from the current milestone.
+- [ ] Delegated E2E is deferred and unreachable from active MCP contract.
+- [ ] Deterministic noauth E2E passes on exact implementation HEAD.
+- [ ] Full exact-head CI passes after the reset implementation.
+- [ ] Live ChatGPT noauth default-review Path A passes.
+- [ ] Live ChatGPT user-reviewed completion Path B passes.
+- [ ] Final docs and PR body match observed current truth.
+- [ ] Project-wide Definition of Done is checked.
 
-Closure audit result: **All requirements mapped, verified, and passing 100% green.**
-
+Closure audit result: **OPEN — planning/docs reset is recorded, implementation and live verification are still pending.**
