@@ -1,4 +1,6 @@
 import {createHash, createHmac, randomBytes, randomUUID, timingSafeEqual} from 'node:crypto';
+import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
+import {dirname} from 'node:path';
 import {AppError} from '../domain/errors.mjs';
 
 function base64UrlEncode(buffer) {
@@ -29,10 +31,94 @@ export function verifyPkce(verifier, challenge, method = 'S256') {
   return false;
 }
 
+export function createUserSessionToken({
+  userId,
+  email = null,
+  secret,
+  ttlSeconds = 86400,
+  nowMs = Date.now,
+}) {
+  if (!userId || typeof userId !== 'string') {
+    throw new AppError('INVALID_ARGUMENT', 'userId is required to create a user session', {status: 400});
+  }
+  if (!secret) {
+    throw new AppError('INVALID_ARGUMENT', 'secret is required to sign user session', {status: 500});
+  }
+
+  const exp = Math.floor((nowMs() / 1000) + ttlSeconds);
+  const payload = {
+    sub: userId,
+    email: email || null,
+    iat: Math.floor(nowMs() / 1000),
+    exp,
+    jti: randomUUID(),
+    typ: 'bright_user_session',
+  };
+
+  const header = {alg: 'HS256', typ: 'JWT'};
+  const encodedHeader = base64UrlEncode(Buffer.from(JSON.stringify(header)));
+  const encodedPayload = base64UrlEncode(Buffer.from(JSON.stringify(payload)));
+  const signatureInput = `${encodedHeader}.${encodedPayload}`;
+  const signature = createHmac('sha256', secret).update(signatureInput).digest();
+  const encodedSignature = base64UrlEncode(signature);
+
+  return `${signatureInput}.${encodedSignature}`;
+}
+
+export function verifyUserSessionToken({
+  sessionToken,
+  secret,
+  nowMs = Date.now,
+}) {
+  if (!sessionToken || typeof sessionToken !== 'string') {
+    throw new AppError('UNAUTHORIZED', 'User session token is required', {status: 401});
+  }
+  if (!secret) {
+    throw new AppError('UNAUTHORIZED', 'Session secret is required', {status: 500});
+  }
+
+  const parts = sessionToken.split('.');
+  if (parts.length !== 3) {
+    throw new AppError('UNAUTHORIZED', 'Malformed user session token', {status: 401});
+  }
+
+  const [encodedHeader, encodedPayload, encodedSig] = parts;
+  const signatureInput = `${encodedHeader}.${encodedPayload}`;
+  const expectedSig = base64UrlEncode(createHmac('sha256', secret).update(signatureInput).digest());
+
+  if (encodedSig.length !== expectedSig.length ||
+      !timingSafeEqual(Buffer.from(encodedSig), Buffer.from(expectedSig))) {
+    throw new AppError('UNAUTHORIZED', 'Invalid user session signature', {status: 401});
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(base64UrlDecode(encodedPayload).toString('utf8'));
+  } catch {
+    throw new AppError('UNAUTHORIZED', 'Malformed user session payload', {status: 401});
+  }
+
+  if (payload.typ !== 'bright_user_session') {
+    throw new AppError('UNAUTHORIZED', 'Invalid session token type', {status: 401});
+  }
+
+  const currentSec = Math.floor(nowMs() / 1000);
+  if (payload.exp && currentSec > payload.exp) {
+    throw new AppError('UNAUTHORIZED', 'User session has expired', {status: 401});
+  }
+
+  return {
+    userId: payload.sub,
+    email: payload.email,
+  };
+}
+
 export function createOauthManager({
   issuer,
   secret,
   canonicalResource,
+  clientStoragePath,
+  clientStore,
   authCodeTtlSeconds = 300,
   tokenTtlSeconds = 3600,
   nowMs = Date.now,
@@ -41,6 +127,46 @@ export function createOauthManager({
   const clients = new Map();
   const defaultIssuer = issuer || 'http://127.0.0.1:4190';
   const defaultResource = canonicalResource || `${defaultIssuer}/mcp`;
+
+  const loadClientsFromStorage = () => {
+    if (clientStore?.listClients) {
+      const records = clientStore.listClients();
+      for (const rec of records) {
+        if (rec?.clientId) clients.set(rec.clientId, rec);
+      }
+      return;
+    }
+    if (clientStoragePath && existsSync(clientStoragePath)) {
+      try {
+        const raw = readFileSync(clientStoragePath, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          for (const rec of parsed) {
+            if (rec?.clientId) clients.set(rec.clientId, rec);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load persisted OAuth clients:', err?.message);
+      }
+    }
+  };
+
+  const saveClientsToStorage = () => {
+    if (clientStore?.saveClient) {
+      return;
+    }
+    if (clientStoragePath) {
+      try {
+        mkdirSync(dirname(clientStoragePath), {recursive: true});
+        const clientList = Array.from(clients.values());
+        writeFileSync(clientStoragePath, JSON.stringify(clientList, null, 2), 'utf8');
+      } catch (err) {
+        console.error('Failed to persist OAuth clients:', err?.message);
+      }
+    }
+  };
+
+  loadClientsFromStorage();
 
   return {
     registerClient(options = {}) {
@@ -65,7 +191,7 @@ export function createOauthManager({
         }
       }
 
-      const clientId = `client_${randomUUID()}`;
+      const clientId = options.client_id || options.clientId || `client_${randomUUID()}`;
       const clientRecord = {
         clientId,
         clientName,
@@ -76,7 +202,13 @@ export function createOauthManager({
         scope,
         createdAt: nowMs(),
       };
+
       clients.set(clientId, clientRecord);
+      if (clientStore?.saveClient) {
+        clientStore.saveClient(clientRecord);
+      } else {
+        saveClientsToStorage();
+      }
 
       return {
         client_id: clientId,
@@ -89,6 +221,9 @@ export function createOauthManager({
     },
 
     getClient(clientId) {
+      if (clientStore?.getClient) {
+        return clientStore.getClient(clientId) || clients.get(clientId) || null;
+      }
       return clients.get(clientId) || null;
     },
 
@@ -132,11 +267,12 @@ export function createOauthManager({
       const codeChallenge = options.code_challenge || options.codeChallenge;
       const codeChallengeMethod = options.code_challenge_method || options.codeChallengeMethod || 'S256';
       const resource = options.resource || defaultResource;
+      const issuerUrl = options.issuer || defaultIssuer;
 
       if (!clientId) throw new AppError('INVALID_REQUEST', 'client_id is required', {status: 400});
       if (!redirectUri) throw new AppError('INVALID_REQUEST', 'redirect_uri is required', {status: 400});
 
-      const client = clients.get(clientId);
+      const client = clients.get(clientId) || (clientStore?.getClient ? clientStore.getClient(clientId) : null);
       if (!client) {
         throw new AppError('UNAUTHORIZED_CLIENT', `Client ${clientId} is not registered`, {status: 400});
       }
@@ -164,7 +300,7 @@ export function createOauthManager({
           name: user.name || userId,
           email: user.email || null,
         },
-        issuer: options.issuer || defaultIssuer,
+        issuer: issuerUrl,
         resource,
         expiresAt,
       });

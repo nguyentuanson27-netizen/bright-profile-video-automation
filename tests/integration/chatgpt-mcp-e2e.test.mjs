@@ -149,7 +149,7 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
   const sys = await startTestSystem();
   t.after(sys.close);
 
-  // Step 1: Perform OAuth 2.1 Dynamic Client Registration, User Consent, and PKCE Token Exchange
+  // Step 1: Perform OAuth 2.1 Dynamic Client Registration, User Login, Consent, and PKCE Token Exchange
   const codeVerifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
   const codeChallenge = generatePkceChallenge(codeVerifier);
   const redirectUri = 'https://chatgpt.com/connector/oauth/cb_bright_e2e';
@@ -167,10 +167,24 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
   const {client_id: clientId} = await regRes.json();
   assert.ok(clientId);
 
-  // 1b. User Authentication & Consent session
-  const consentRes = await fetch(new URL('/oauth/authorize/consent', sys.mcpUrl).toString(), {
+  // 1b. User Login to establish authentic session
+  const loginRes = await fetch(new URL('/oauth/session/login', sys.mcpUrl).toString(), {
     method: 'POST',
     headers: {host: '127.0.0.1', 'content-type': 'application/json'},
+    body: JSON.stringify({user_id: 'chatgpt_user_42', email: 'user42@example.com'}),
+  });
+  assert.equal(loginRes.status, 200);
+  const {session_token: userSessionToken} = await loginRes.json();
+  assert.ok(userSessionToken);
+
+  // 1c. Authenticated User Consent session
+  const consentRes = await fetch(new URL('/oauth/authorize/consent', sys.mcpUrl).toString(), {
+    method: 'POST',
+    headers: {
+      host: '127.0.0.1',
+      'content-type': 'application/json',
+      'x-session-token': userSessionToken,
+    },
     body: JSON.stringify({
       client_id: clientId,
       redirect_uri: redirectUri,
@@ -178,15 +192,13 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
       code_challenge: codeChallenge,
       code_challenge_method: 'S256',
       state: 'e2e-state-1',
-      user_id: 'chatgpt_user_42',
-      user_email: 'user42@example.com',
     }),
   });
   assert.equal(consentRes.status, 200);
   const {code: authCode} = await consentRes.json();
   assert.ok(authCode);
 
-  // 1c. PKCE Token Exchange
+  // 1d. PKCE Token Exchange
   const tokenUrl = new URL('/oauth/token', sys.mcpUrl);
   const tokenRes = await fetch(tokenUrl.toString(), {
     method: 'POST',
@@ -326,7 +338,44 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
   assert.equal(getRes.body.result.structuredContent.status, 'review_required');
   assert.equal(getRes.body.result.structuredContent.currentRevision.id, revisionId);
 
-  // Step 6: Direct OAuth-authenticated delegated approval over MCP (zero private app requests)
+  // Step 6a: Prove that generic OAuth write token + model arguments alone CANNOT approve in delegated_e2e mode without a verified delegation grant (fails closed)
+  const ungrantedApproveRes = await rpc(sys.mcpUrl, {
+    jsonrpc: '2.0',
+    id: 50,
+    method: 'tools/call',
+    params: {
+      name: 'approve_video_project',
+      arguments: {
+        projectId,
+        revisionId,
+        expectedPayloadHash: currentRev.payloadHash,
+        mode: APPROVAL_MODES.DELEGATED_E2E,
+        delegatedContext: {userExplicitIntent: 'Create full video end-to-end autonomously'},
+      },
+    },
+  }, mcpHeaders);
+  assert.equal(ungrantedApproveRes.response.status, 200);
+  assert.equal(ungrantedApproveRes.body.result.isError, true);
+  assert.match(ungrantedApproveRes.body.result.content[0].text, /Delegated approval blocked: valid explicit user delegation grant is required/i);
+
+  // Step 6b: User session explicitly establishes a signed delegation grant for this project/revision
+  const grantRes = await fetch(`${sys.appUrl}/api/projects/${projectId}/delegation-grant`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      host: '127.0.0.1',
+      origin: 'http://127.0.0.1',
+    },
+    body: JSON.stringify({
+      actor: 'chatgpt_user_42',
+      sessionId: 'user-session-999',
+    }),
+  });
+  assert.equal(grantRes.status, 200);
+  const {delegationGrant} = await grantRes.json();
+  assert.ok(delegationGrant);
+
+  // Step 6c: Authenticated ChatGPT client calls approve_video_project with the verified delegation grant
   const approveRes = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
     id: 5,
@@ -338,6 +387,7 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
         revisionId,
         expectedPayloadHash: currentRev.payloadHash,
         mode: APPROVAL_MODES.DELEGATED_E2E,
+        delegationGrant,
         delegatedContext: {userExplicitIntent: 'Create full video end-to-end autonomously'},
       },
     },

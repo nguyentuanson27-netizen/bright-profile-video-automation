@@ -3,6 +3,7 @@ import {randomUUID} from 'node:crypto';
 import {createServer} from 'node:http';
 import {Readable} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
+import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createMcpHandler, fromJsonSchema, McpServer} from '@modelcontextprotocol/server';
 import {normalizeEvidence} from '../lib/evidence/normalize-evidence.mjs';
@@ -18,8 +19,11 @@ import {
   extractBearerToken,
   redactSecrets,
 } from '../security/integration-auth.mjs';
-import {createOauthManager} from '../security/oauth.mjs';
-import {issueDelegationGrant} from '../security/delegation-grant.mjs';
+import {
+  createOauthManager,
+  createUserSessionToken,
+  verifyUserSessionToken,
+} from '../security/oauth.mjs';
 
 import {
   createVideoProjectInputSchema,
@@ -364,39 +368,22 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch} = {}) 
     async (input) => {
       try {
         assertScope('bright:profile:write');
-        const ctx = correlationContext.getStore();
-        const currentUserId = ctx?.auth?.userId;
-        let delegationGrant = input.delegationGrant;
-        if (!delegationGrant && input.mode === 'delegated_e2e' && currentUserId && serviceToken && serviceToken.length >= 16) {
-          delegationGrant = issueDelegationGrant({
-            projectId: input.projectId,
-            revisionId: input.revisionId,
-            payloadHash: input.expectedPayloadHash,
-            actor: currentUserId,
-            secret: serviceToken,
-            ttlSeconds: 900,
-          });
-        }
-        if (input.mode === 'delegated_e2e' && !delegationGrant) {
+        if (input.mode === 'delegated_e2e' && !input.delegationGrant) {
           return {
             isError: true,
             content: [{
               type: 'text',
-              text: 'Delegated approval blocked: valid authenticated user session or delegation grant is required for delegated_e2e mode.',
+              text: 'Delegated approval blocked: valid explicit user delegation grant is required for delegated_e2e mode.',
             }],
           };
         }
-        const approveBody = {
-          ...input,
-          ...(delegationGrant ? {delegationGrant} : {}),
-        };
         const res = await fetchWithCorrelation(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/approve`, {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
             ...(serviceToken ? {authorization: `Bearer ${serviceToken}`} : {}),
           },
-          body: JSON.stringify(approveBody),
+          body: JSON.stringify(input),
         }, {toolName: 'approve_video_project', projectId: input.projectId});
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -783,11 +770,41 @@ export function createBrightHttpServer({
   }
 
   const oauthSecret = env.MCP_OAUTH_SECRET?.trim() || serviceToken || expectedAuthToken || 'default-oauth-secret-key-16-chars';
+  const clientStoragePath = env.MCP_CLIENT_STORAGE_PATH || (env.BRIGHT_DATA_DIR ? join(env.BRIGHT_DATA_DIR, 'oauth_clients.json') : null);
   const oauthManager = createOauthManager({
     issuer: defaultIssuer,
     canonicalResource: defaultCanonicalResource,
     secret: oauthSecret,
+    clientStoragePath,
   });
+
+  const authenticateUserSession = (req, bodySessionToken = null) => {
+    let token = bodySessionToken;
+    if (!token) {
+      const cookieHeader = req.headers.cookie || '';
+      if (cookieHeader) {
+        const match = cookieHeader.match(/(?:^|;\s*)session_token=([^;]+)/);
+        if (match) token = decodeURIComponent(match[1]);
+      }
+    }
+    if (!token && req.headers['x-session-token']) {
+      token = req.headers['x-session-token'].trim();
+    }
+    if (!token && req.headers.authorization) {
+      const bearer = extractBearerToken(req.headers.authorization);
+      if (bearer) {
+        try {
+          return verifyUserSessionToken({sessionToken: bearer, secret: oauthSecret});
+        } catch {}
+      }
+    }
+    if (!token) return null;
+    try {
+      return verifyUserSessionToken({sessionToken: token, secret: oauthSecret});
+    } catch {
+      return null;
+    }
+  };
 
   return createServer((req, res) => {
     const requestId = randomUUID();
@@ -845,6 +862,41 @@ export function createBrightHttpServer({
         // RFC 8414 OAuth Authorization Server Metadata & OpenID Configuration (both root and /mcp/ prefix)
         if (['/.well-known/oauth-authorization-server', '/.well-known/openid-configuration', '/mcp/.well-known/oauth-authorization-server', '/mcp/.well-known/openid-configuration'].includes(url.pathname) && req.method === 'GET') {
           writeJsonBeforeBodyConsumed(req, res, 200, oauthManager.getAuthorizationServerMetadata(requestIssuer), requestId);
+          return;
+        }
+
+        // User Login / Session Creation endpoint (both root and /mcp/ prefix)
+        if (['/oauth/session/login', '/mcp/oauth/session/login'].includes(url.pathname) && req.method === 'POST') {
+          const rawBody = await readBody(req, maxBodyBytes, deadlineAt);
+          let parsed = {};
+          try {
+            parsed = JSON.parse(rawBody.toString('utf8'));
+          } catch {
+            writeJsonBeforeBodyConsumed(req, res, 400, {
+              error: {code: 'INVALID_REQUEST', message: 'Invalid JSON body', requestId},
+            }, requestId);
+            return;
+          }
+          const userId = (parsed.user_id || parsed.userId || '').trim();
+          if (!userId) {
+            writeJsonBeforeBodyConsumed(req, res, 400, {
+              error: {code: 'INVALID_REQUEST', message: 'user_id is required to create session', requestId},
+            }, requestId);
+            return;
+          }
+          const sessionToken = createUserSessionToken({
+            userId,
+            email: parsed.email || null,
+            secret: oauthSecret,
+          });
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.setHeader('Set-Cookie', `session_token=${encodeURIComponent(sessionToken)}; Path=/; HttpOnly; SameSite=Lax`);
+          res.setHeader('x-request-id', requestId);
+          res.end(JSON.stringify({
+            session_token: sessionToken,
+            user: {id: userId, email: parsed.email || null},
+          }));
           return;
         }
 
@@ -908,16 +960,17 @@ export function createBrightHttpServer({
             return;
           }
 
-          // User authentication & consent boundary check
-          const authenticatedUserId = req.headers['x-user-id'] || url.searchParams.get('user_id') || (extractBearerToken(req.headers.authorization) ? 'chatgpt_user' : null);
+          // User authentication & session verification
+          const user = authenticateUserSession(req);
 
-          if (!authenticatedUserId) {
+          if (!user) {
             res.setHeader('WWW-Authenticate', `Bearer realm="bright-auth", error="login_required", resource="${requestCanonicalResource}"`);
             writeJsonBeforeBodyConsumed(req, res, 401, {
               error: {
                 code: 'UNAUTHORIZED',
                 message: 'User authentication and consent are required to authorize client',
                 consent_endpoint: `${requestIssuer}/oauth/authorize/consent`,
+                login_endpoint: `${requestIssuer}/oauth/session/login`,
                 requestId,
               },
             }, requestId);
@@ -931,7 +984,7 @@ export function createBrightHttpServer({
               scope,
               codeChallenge,
               codeChallengeMethod,
-              user: {id: String(authenticatedUserId)},
+              user: {id: user.userId, email: user.email},
               issuer: requestIssuer,
               resource,
             });
@@ -976,7 +1029,36 @@ export function createBrightHttpServer({
             }
           }
 
-          const userId = parsed.user_id || req.headers['x-user-id'] || 'chatgpt_user';
+          // Strict user session verification: body/query user_id is NOT trusted
+          const user = authenticateUserSession(req, parsed.session_token);
+          if (!user || !user.userId) {
+            res.setHeader('WWW-Authenticate', `Bearer realm="bright-auth", error="login_required", resource="${requestCanonicalResource}"`);
+            writeJsonBeforeBodyConsumed(req, res, 401, {
+              error: {
+                code: 'UNAUTHORIZED',
+                message: 'User authentication session is required to grant consent',
+                login_endpoint: `${requestIssuer}/oauth/session/login`,
+                requestId,
+              },
+            }, requestId);
+            return;
+          }
+
+          const client = oauthManager.getClient(parsed.client_id);
+          if (!client) {
+            writeJsonBeforeBodyConsumed(req, res, 400, {
+              error: {code: 'UNAUTHORIZED_CLIENT', message: `Client ${parsed.client_id} is not registered`, requestId},
+            }, requestId);
+            return;
+          }
+
+          if (!client.redirectUris.includes(parsed.redirect_uri)) {
+            writeJsonBeforeBodyConsumed(req, res, 400, {
+              error: {code: 'INVALID_REQUEST', message: `redirect_uri is not registered for client ${parsed.client_id}`, requestId},
+            }, requestId);
+            return;
+          }
+
           try {
             const code = oauthManager.createAuthorizationCode({
               clientId: parsed.client_id,
@@ -984,7 +1066,7 @@ export function createBrightHttpServer({
               scope: parsed.scope || 'bright:profile:write bright:profile:read',
               codeChallenge: parsed.code_challenge,
               codeChallengeMethod: parsed.code_challenge_method || 'S256',
-              user: {id: String(userId), email: parsed.user_email || null},
+              user: {id: user.userId, email: user.email},
               issuer: requestIssuer,
               resource: parsed.resource || requestCanonicalResource,
             });
