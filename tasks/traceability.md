@@ -10,7 +10,7 @@
 This file contains **two distinct traceability ledgers**:
 
 1. **Standalone T01-T16 ledger — frozen/complete.** It preserves the scope-freeze and closure evidence for the promoted standalone internal MVP and must not be reopened merely because the ChatGPT MCP milestone changes.
-2. **ChatGPT MCP T17-T28 ledger — open.** It tracks the temporary no-auth reset, including private MCP-to-app service authentication, truthful external-review-acknowledgment semantics, no-auth write guardrails, deterministic E2E, and live ChatGPT acceptance.
+2. **ChatGPT MCP T17-T28 ledger — open.** It tracks the temporary no-auth reset, including private MCP-to-app service authentication, truthful external-review-acknowledgment semantics, durable no-auth capacity guardrails, deterministic E2E, and bounded live ChatGPT acceptance with mandatory ingress teardown.
 
 A requirement is a current completion gate only when it belongs to the relevant ledger or is explicitly required by `docs/project-status.md` / the active spec for that ledger. Historical requirements not retained by the applicable ledger are deferred, not silently inherited.
 
@@ -132,14 +132,15 @@ The historical production spec contains useful ideas that are **not required for
 | M02 | MCP -> Bright Profile remains private/service-authenticated with `BRIGHT_INTEGRATION_TOKEN`; missing/wrong service auth causes zero mutation | T17, T20, T26 | `mcp/server.mjs`, `app/http/integrations.mjs`, Compose | integration API negative auth tests | T27 direct-backend negative path + runtime topology check |
 | M03 | Public approval input exposes only project/revision/hash data; approval semantic is external review acknowledgment; any stored `user_reviewed` value is legacy compatibility data, not authenticated human proof | T18, T19, T22 | domain/MCP schemas, approval service/storage | schema + stale hash/revision + audit-semantics tests | T27 acknowledgment flow + T28 tested-client confirmation evidence |
 | M04 | Schema v3 migration retains origin/idempotency/approval provenance without adding OAuth/session persistence dependency or destructive enum cleanup | T19 | `storage/migrations/003_chatgpt_handoff.sql`, repositories | migration/reopen tests | exact-head CI migration smoke |
-| M05 | Imported EvidenceBundle is revalidated, persisted, idempotent, skips backend research, reaches `research_ready`, queues generation, and respects no-auth active-project capacity | T20 | integration API + import service/storage | import/idempotency/provider-not-called/cap tests | T27 import -> generation path |
-| M06 | MCP create/get/edit/approve/render/retry/cancel tools call backend over HTTP with no direct DB/artifact access and `noauth` metadata; mutating tools honor write-enable/in-flight gates | T17, T21, T22, T24 | `mcp/server.mjs` | MCP tool unit/integration + capacity tests | T27 full tool path |
-| M07 | Backend-driven flow stops at `review_required`; no caller can select actor/mode/delegation state; live ChatGPT Path A must demonstrate the tested client waits for user confirmation, while docs explicitly state this is not enforceable against arbitrary anonymous callers | T18, T22, T23, T28 | MCP schemas/handler + backend approval service + live acceptance | default-stop + approval-contract negative tests | T27 proves no backend auto-approval; T28 proves tested-client timing |
-| M08 | OAuth/DCR/session/static external bearer runtime/config/storage is removed; `delegated_e2e`/delegation grants are deferred and unreachable from active MCP contract | T23, T26 | `mcp/server.mjs`, `security/`, Compose/env/tests | dead-code/config search + route absence tests | exact-head CI + active-diff review |
-| M09 | Anonymous write exposure has explicit finite defaults: rate 20/min, max 2 in-flight writes, max 3 non-terminal ChatGPT-origin projects; excess work fails before unintended side effects | T17, T20, T21, T24, T26 | MCP dispatch/capacity controls + backend create boundary | rate/in-flight/active-project regressions | T27 adversarial gate + T28 recorded deployed values |
-| M10 | Signed MP4 capability remains bound to project/revision/artifact with expiry/tamper checks, authoritative file validation, streaming/backpressure/timeout controls | T25 | `security/download-token.mjs`, artifact/integration routes, MCP proxy | token + download integration tests | T27 completed MP4 download |
-| M11 | Runtime topology keeps app/worker private, MCP has no Bright storage mount, remote ChatGPT uses intended HTTPS MCP ingress, and no-auth writes are enabled only for a bounded operator-controlled window with teardown evidence | T26, T28 | Compose/reverse-proxy/runtime config | Compose checks + live setup/teardown record | exact-head CI + T28 enable/disable evidence |
-| M12 | Deterministic and live acceptance match truthful noauth/review-acknowledgment semantics; docs/PR claims are updated only from observed evidence | T27, T28 | E2E tests, status/todo/traceability/PR body | full suite + live evidence record | T28 Path A + Path B + project-wide DoD |
+| M05 | New ChatGPT-origin create admission is idempotent and transactionally serialized with active-project capacity; cap failure commits no new project/job | T19, T20 | integration API + project/job repositories/SQLite transaction | create/idempotency/cap/concurrent-last-slot tests | T27 durable admission gate |
+| M06 | Retry/requeue/reactivation that changes a failed/inactive ChatGPT-origin project back to active uses the same durable active-project admission transaction; cap failure creates no replacement work | T24 | retry service + jobs/project repositories | retry-cap + idempotent-retry + concurrent create-vs-retry tests | T27 durable admission gate |
+| M07 | MCP create/get/edit/approve/render/retry/cancel tools call backend over HTTP with no direct DB/artifact access and `noauth` metadata; mutating tools honor write-enable/in-flight gates, while Bright Profile remains capacity authority | T17, T21, T22, T24 | `mcp/server.mjs` + private backend | MCP tool unit/integration + edge-capacity tests | T27 full tool path |
+| M08 | Backend-driven flow stops at `review_required`; no caller can select actor/mode/delegation state; live ChatGPT Path A demonstrates tested-client confirmation timing without claiming a universal noauth guarantee | T18, T22, T23, T28 | MCP schemas/handler + backend approval + live acceptance | default-stop + approval-contract tests | T27 backend invariant + T28 client evidence |
+| M09 | OAuth/DCR/session/static external bearer runtime/config/storage is removed; `delegated_e2e`/delegation grants are deferred and unreachable from active MCP contract | T23, T26 | `mcp/server.mjs`, `security/`, Compose/env/tests | dead-code/config search + route absence tests | exact-head CI + active-diff review |
+| M10 | Anonymous edge exposure has finite defaults: rate 20/min and max 2 in-flight writes; active-project cap 3 is a durable global Bright Profile invariant, not a process-local counter | T17, T19, T20, T21, T24, T26 | MCP edge guards + backend transactional admission | rate/in-flight/create/retry/concurrent-admission regressions | T27 adversarial gate + T28 recorded values |
+| M11 | Signed MP4 capability remains bound to project/revision/artifact with expiry/tamper checks, authoritative file validation, streaming/backpressure/timeout controls | T25 | `security/download-token.mjs`, artifact/integration routes, MCP proxy | token + download integration tests | T27 completed MP4 download |
+| M12 | Runtime topology keeps app/worker private and MCP storage-isolated; T28 uses temporary HTTPS MCP ingress and closure requires both writes disabled and external MCP ingress withdrawn/verified unreachable | T26, T28 | Compose/reverse-proxy/runtime config | Compose checks + live setup/teardown record | exact-head CI + T28 mandatory teardown evidence |
+| M13 | Deterministic and live acceptance match truthful noauth/review-acknowledgment semantics; docs/PR claims are updated only from observed evidence | T27, T28 | E2E tests, status/todo/traceability/PR body | full suite + live evidence record | T28 Path A + Path B + project-wide DoD |
 
 ## ChatGPT MCP Closure Audit Checklist
 
@@ -151,7 +152,10 @@ Before delivery under the reset contract:
 - [ ] Active MCP runtime matches `noauth` rather than OAuth/static bearer fallback.
 - [ ] Private MCP -> app service auth remains fail-closed.
 - [ ] No-auth writes are disabled by default with a tested kill switch.
-- [ ] Rate/in-flight/active-project limits are finite and tested.
+- [ ] Rate/in-flight limits are finite and tested.
+- [ ] Active-project capacity is transactionally enforced at Bright Profile for new create and retry/reactivation.
+- [ ] Concurrent admissions cannot commit more active ChatGPT-origin projects than the configured cap.
+- [ ] Capacity rejection produces zero new project/job/attempt/reactivation mutation.
 - [ ] Approval is represented as external review acknowledgment, not authenticated human proof.
 - [ ] Any legacy stored `user_reviewed` value is documented/tested as compatibility data only.
 - [ ] OAuth/DCR/session runtime/config/storage is removed from the current milestone.
@@ -160,8 +164,10 @@ Before delivery under the reset contract:
 - [ ] Full exact-head CI passes after the reset implementation.
 - [ ] Live ChatGPT noauth Path A shows the tested client waits for user confirmation.
 - [ ] Live review-acknowledged completion Path B passes.
-- [ ] T28 records write-window enable values and disable/ingress-withdraw teardown.
+- [ ] T28 records write/ingress enable values.
+- [ ] T28 restores `MCP_NOAUTH_WRITE_ENABLED=false`.
+- [ ] T28 withdraws external MCP ingress and verifies the remote endpoint is no longer externally reachable.
 - [ ] Final docs and PR body match observed current truth.
 - [ ] Project-wide Definition of Done is checked.
 
-Closure audit result: **OPEN — docs now define truthful approval semantics and concrete no-auth guardrails; implementation and live verification are still pending.**
+Closure audit result: **OPEN — docs define truthful approval semantics, durable active-work admission, and mandatory external-ingress teardown; implementation and live verification are still pending.**
