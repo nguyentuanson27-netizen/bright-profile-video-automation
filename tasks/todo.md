@@ -415,7 +415,7 @@ Before final E2E, require:
 **Description:** Prove the complete new feature path using deterministic fakes for paid/non-deterministic provider steps, while exercising the failure/retry/concurrency/security cases most likely to regress.
 
 **Acceptance criteria:**
-- [x] Deterministic flow reaches authoritative downloadable MP4 from candidate evidence -> normalization -> import -> generation -> delegated approval -> media -> TTS -> render.
+- [x] Deterministic flow reaches authoritative downloadable MP4 from candidate evidence -> normalization -> import -> generation -> user review approval -> media -> TTS -> render.
 - [x] A separate default-mode integration flow reaches `review_required` and proves no approval/render occurs automatically.
 - [x] Project/evidence/revision/approval state survives DB reopen at representative checkpoints.
 - [x] Duplicate MCP create/render/retry calls do not duplicate project/stage/artifact work.

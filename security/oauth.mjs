@@ -125,6 +125,7 @@ export function createOauthManager({
 } = {}) {
   const authCodes = new Map();
   const clients = new Map();
+  const pendingConsents = new Map();
   const defaultIssuer = issuer || 'http://127.0.0.1:4190';
   const defaultResource = canonicalResource || `${defaultIssuer}/mcp`;
 
@@ -254,6 +255,80 @@ export function createOauthManager({
       };
     },
 
+    createPendingConsent(options = {}) {
+      const clientId = options.client_id || options.clientId;
+      const redirectUri = options.redirect_uri || options.redirectUri;
+      const scope = options.scope || 'bright:profile:write bright:profile:read';
+      const codeChallenge = options.code_challenge || options.codeChallenge;
+      const codeChallengeMethod = options.code_challenge_method || options.codeChallengeMethod || 'S256';
+      const resource = options.resource || defaultResource;
+      const state = options.state || null;
+      const issuerUrl = options.issuer || defaultIssuer;
+
+      if (!clientId) throw new AppError('INVALID_REQUEST', 'client_id is required', {status: 400});
+      if (!redirectUri) throw new AppError('INVALID_REQUEST', 'redirect_uri is required', {status: 400});
+
+      const client = clients.get(clientId) || (clientStore?.getClient ? clientStore.getClient(clientId) : null);
+      if (!client) {
+        throw new AppError('UNAUTHORIZED_CLIENT', `Client ${clientId} is not registered`, {status: 400});
+      }
+
+      if (!client.redirectUris.includes(redirectUri)) {
+        throw new AppError('INVALID_REQUEST', `redirect_uri ${redirectUri} is not registered for client ${clientId}`, {status: 400});
+      }
+
+      if (!codeChallenge) throw new AppError('INVALID_REQUEST', 'code_challenge is required for PKCE', {status: 400});
+      if (codeChallengeMethod !== 'S256') {
+        throw new AppError('INVALID_REQUEST', 'code_challenge_method must be S256', {status: 400});
+      }
+
+      const consentChallenge = `tx_${randomBytes(24).toString('hex')}`;
+      const expiresAt = nowMs() + 600_000; // 10 minutes
+
+      pendingConsents.set(consentChallenge, {
+        consentChallenge,
+        clientId,
+        clientName: client.clientName,
+        redirectUri,
+        scope,
+        codeChallenge,
+        codeChallengeMethod,
+        resource,
+        state,
+        issuer: issuerUrl,
+        expiresAt,
+      });
+
+      return {
+        consent_challenge: consentChallenge,
+        client_id: clientId,
+        client_name: client.clientName,
+        requested_scope: scope,
+        redirect_uri: redirectUri,
+        state,
+      };
+    },
+
+    getPendingConsent(consentChallenge) {
+      if (!consentChallenge) return null;
+      const entry = pendingConsents.get(consentChallenge);
+      if (!entry) return null;
+      if (nowMs() > entry.expiresAt) {
+        pendingConsents.delete(consentChallenge);
+        return null;
+      }
+      return entry;
+    },
+
+    consumePendingConsent(consentChallenge) {
+      if (!consentChallenge) return null;
+      const entry = pendingConsents.get(consentChallenge);
+      if (!entry) return null;
+      pendingConsents.delete(consentChallenge);
+      if (nowMs() > entry.expiresAt) return null;
+      return entry;
+    },
+
     createAuthorizationCode(options = {}) {
       const user = options.user;
       if (!user || (!user.id && !user.sub)) {
@@ -261,13 +336,28 @@ export function createOauthManager({
       }
       const userId = user.id || user.sub;
 
-      const clientId = options.client_id || options.clientId;
-      const redirectUri = options.redirect_uri || options.redirectUri;
-      const scope = options.scope || 'bright:profile:write bright:profile:read';
-      const codeChallenge = options.code_challenge || options.codeChallenge;
-      const codeChallengeMethod = options.code_challenge_method || options.codeChallengeMethod || 'S256';
-      const resource = options.resource || defaultResource;
-      const issuerUrl = options.issuer || defaultIssuer;
+      let clientId = options.client_id || options.clientId;
+      let redirectUri = options.redirect_uri || options.redirectUri;
+      let scope = options.scope || 'bright:profile:write bright:profile:read';
+      let codeChallenge = options.code_challenge || options.codeChallenge;
+      let codeChallengeMethod = options.code_challenge_method || options.codeChallengeMethod || 'S256';
+      let resource = options.resource || defaultResource;
+      let issuerUrl = options.issuer || defaultIssuer;
+
+      if (options.consent_challenge) {
+        const pending = pendingConsents.get(options.consent_challenge);
+        if (!pending || nowMs() > pending.expiresAt) {
+          throw new AppError('INVALID_REQUEST', 'Invalid or expired consent challenge transaction', {status: 400});
+        }
+        pendingConsents.delete(options.consent_challenge);
+        clientId = pending.clientId;
+        redirectUri = pending.redirectUri;
+        scope = options.scope || pending.scope;
+        codeChallenge = pending.codeChallenge;
+        codeChallengeMethod = pending.codeChallengeMethod;
+        resource = pending.resource;
+        issuerUrl = pending.issuer;
+      }
 
       if (!clientId) throw new AppError('INVALID_REQUEST', 'client_id is required', {status: 400});
       if (!redirectUri) throw new AppError('INVALID_REQUEST', 'redirect_uri is required', {status: 400});

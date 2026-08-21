@@ -75,6 +75,8 @@ const startTestSystem = async () => {
 
   const mcpAuthToken = 'mcp-chatgpt-token-xyz-12345678';
   const serviceToken = 'internal-service-token-abc-87654321';
+  const userAuthSecret = 'dedicated-user-password-e2e-123456';
+  const oauthSecret = 'dedicated-oauth-secret-e2e-87654321';
 
   const appServer = createAppServer({
     db,
@@ -102,6 +104,8 @@ const startTestSystem = async () => {
     env: {
       MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
       MCP_AUTH_TOKEN: mcpAuthToken,
+      MCP_OAUTH_SECRET: oauthSecret,
+      BRIGHT_USER_AUTH_SECRET: userAuthSecret,
       MCP_PORT: String(mcpPort),
       MCP_PUBLIC_URL: mcpPublicUrl,
       BRIGHT_BACKEND_URL: appUrl,
@@ -137,6 +141,8 @@ const startTestSystem = async () => {
     mcpUrl,
     mcpAuthToken,
     serviceToken,
+    userAuthSecret,
+    oauthSecret,
     repos,
     jobs,
     artifactStore,
@@ -145,7 +151,7 @@ const startTestSystem = async () => {
   };
 };
 
-test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import -> Generation -> Delegated Approval -> Render -> Authoritative MP4', async (t) => {
+test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import -> Generation -> User Review Approval -> Render -> Authoritative MP4', async (t) => {
   const sys = await startTestSystem();
   t.after(sys.close);
 
@@ -167,8 +173,8 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
   const {client_id: clientId} = await regRes.json();
   assert.ok(clientId);
 
-  // 1b. User Login with valid credentials to establish authentic session
-  const loginRes = await fetch(new URL('/oauth/session/login', sys.mcpUrl).toString(), {
+  // 1b. Prove that service token cannot be used for user login (least-privilege separation)
+  const badLoginRes = await fetch(new URL('/oauth/session/login', sys.mcpUrl).toString(), {
     method: 'POST',
     headers: {host: '127.0.0.1', 'content-type': 'application/json'},
     body: JSON.stringify({
@@ -177,11 +183,44 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
       password: sys.serviceToken,
     }),
   });
+  assert.equal(badLoginRes.status, 401, 'Service token must be rejected for user login');
+
+  // User Login with valid user credentials to establish authentic session
+  const loginRes = await fetch(new URL('/oauth/session/login', sys.mcpUrl).toString(), {
+    method: 'POST',
+    headers: {host: '127.0.0.1', 'content-type': 'application/json'},
+    body: JSON.stringify({
+      user_id: 'chatgpt_user_42',
+      email: 'user42@example.com',
+      password: sys.userAuthSecret,
+    }),
+  });
   assert.equal(loginRes.status, 200);
   const {session_token: userSessionToken} = await loginRes.json();
   assert.ok(userSessionToken);
 
-  // 1c. Authenticated User Consent session
+  // 1c. Authorize GET prompts for consent without silently minting authorization code (CSRF protection)
+  const authGetUrl = new URL('/oauth/authorize', sys.mcpUrl);
+  authGetUrl.searchParams.set('response_type', 'code');
+  authGetUrl.searchParams.set('client_id', clientId);
+  authGetUrl.searchParams.set('redirect_uri', redirectUri);
+  authGetUrl.searchParams.set('scope', 'bright:profile:write bright:profile:read');
+  authGetUrl.searchParams.set('code_challenge', codeChallenge);
+  authGetUrl.searchParams.set('code_challenge_method', 'S256');
+  authGetUrl.searchParams.set('state', 'e2e-state-1');
+
+  const authGetRes = await fetch(authGetUrl.toString(), {
+    headers: {
+      host: '127.0.0.1',
+      cookie: `session_token=${encodeURIComponent(userSessionToken)}`,
+    },
+  });
+  assert.equal(authGetRes.status, 200);
+  const authGetData = await authGetRes.json();
+  assert.equal(authGetData.consent_required, true);
+  assert.ok(authGetData.consent_challenge);
+
+  // 1d. Authenticated User Consent confirmation with consent challenge
   const consentRes = await fetch(new URL('/oauth/authorize/consent', sys.mcpUrl).toString(), {
     method: 'POST',
     headers: {
@@ -190,6 +229,7 @@ test('Deterministic Explicit-E2E Flow: Candidate Evidence -> Normalize -> Import
       'x-session-token': userSessionToken,
     },
     body: JSON.stringify({
+      consent_challenge: authGetData.consent_challenge,
       client_id: clientId,
       redirect_uri: redirectUri,
       scope: 'bright:profile:write bright:profile:read',

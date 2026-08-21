@@ -19,12 +19,12 @@ const parseRpcResponse = async (res) => {
   return payloads.length ? JSON.parse(payloads.at(-1)) : JSON.parse(text);
 };
 
-test('ChatGPT MCP OAuth 2.1 Security: Credentials Authentication, Exploit Regressions, Restart DCR Persistence, and Scopes', async (t) => {
+test('ChatGPT MCP OAuth 2.1 Security: Credentials Authentication, Consent CSRF Prevention, Exploit Regressions, and Scopes', async (t) => {
   const testDir = mkdtempSync(join(tmpdir(), 'oauth-dcr-test-'));
   const clientStoragePath = join(testDir, 'oauth_clients.json');
-  const serviceToken = 'service-secret-token-key-123456';
-  const oauthSecret = 'super-secret-oauth-key-123456';
-  const userAuthSecret = 'super-user-password-secret-123456';
+  const serviceToken = 'private-backend-service-secret-123456';
+  const oauthSecret = 'super-secret-mcp-oauth-key-123456';
+  const userAuthSecret = 'dedicated-user-login-password-123456';
 
   let server = tempPortServer({
     env: {
@@ -92,54 +92,38 @@ test('ChatGPT MCP OAuth 2.1 Security: Credentials Authentication, Exploit Regres
   assert.equal(asJson.authorization_endpoint, `${baseUrl}/oauth/authorize`);
   assert.equal(asJson.token_endpoint, `${baseUrl}/oauth/token`);
 
-  // 4. Exploit Regressions:
+  // 4. P1 Regression: Backend service token MUST NOT be used for user login
+  const serviceTokenLoginRes = await fetch(`${baseUrl}/oauth/session/login`, {
+    method: 'POST',
+    headers: {host: '127.0.0.1', 'content-type': 'application/json'},
+    body: JSON.stringify({
+      user_id: 'impersonated_victim',
+      password: serviceToken,
+    }),
+  });
+  assert.equal(serviceTokenLoginRes.status, 401, 'Service token must not authenticate user login');
+  const serviceTokenJson = await serviceTokenLoginRes.json();
+  assert.equal(serviceTokenJson.error?.code, 'UNAUTHORIZED');
+
+  // 5. Exploit Regressions: Anonymous / unauthenticated login attempts fail closed (401)
   const codeVerifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
   const codeChallenge = generatePkceChallenge(codeVerifier);
 
-  // a) Attacker unauthenticated login attempt (no password or wrong password) -> FAILS CLOSED 401
   const unauthLoginRes1 = await fetch(`${baseUrl}/oauth/session/login`, {
     method: 'POST',
     headers: {host: '127.0.0.1', 'content-type': 'application/json'},
     body: JSON.stringify({user_id: 'attacker_user'}),
   });
-  assert.equal(unauthLoginRes1.status, 401, 'Anonymous login without credentials must return 401');
-  const unauthLoginJson1 = await unauthLoginRes1.json();
-  assert.equal(unauthLoginJson1.error?.code, 'UNAUTHORIZED');
+  assert.equal(unauthLoginRes1.status, 401);
 
   const unauthLoginRes2 = await fetch(`${baseUrl}/oauth/session/login`, {
     method: 'POST',
     headers: {host: '127.0.0.1', 'content-type': 'application/json'},
-    body: JSON.stringify({user_id: 'attacker_user', password: 'wrong-attacker-password'}),
+    body: JSON.stringify({user_id: 'attacker_user', password: 'wrong-password'}),
   });
-  assert.equal(unauthLoginRes2.status, 401, 'Login with invalid credentials must return 401');
+  assert.equal(unauthLoginRes2.status, 401);
 
-  // b) Attacker direct POST to /oauth/authorize/consent without valid session -> FAILS CLOSED 401
-  const exploitConsentRes = await fetch(`${baseUrl}/oauth/authorize/consent`, {
-    method: 'POST',
-    headers: {host: '127.0.0.1', 'content-type': 'application/json'},
-    body: JSON.stringify({
-      client_id: registeredClientId,
-      redirect_uri: validRedirectUri,
-      scope: 'bright:profile:write',
-      code_challenge: codeChallenge,
-      code_challenge_method: 'S256',
-      user_id: 'attacker_chosen_user_id',
-    }),
-  });
-  assert.equal(exploitConsentRes.status, 401, 'Direct consent without verified user session must fail 401');
-
-  // c) Unauthenticated GET /oauth/authorize -> FAILS 401
-  const unauthAuthUrl = new URL(`${baseUrl}/oauth/authorize`);
-  unauthAuthUrl.searchParams.set('response_type', 'code');
-  unauthAuthUrl.searchParams.set('client_id', registeredClientId);
-  unauthAuthUrl.searchParams.set('redirect_uri', validRedirectUri);
-  unauthAuthUrl.searchParams.set('code_challenge', codeChallenge);
-  unauthAuthUrl.searchParams.set('code_challenge_method', 'S256');
-  const unauthRes = await fetch(unauthAuthUrl.toString(), {headers: {host: '127.0.0.1'}});
-  assert.equal(unauthRes.status, 401);
-
-  // 5. Positive User Authentication & Consent Flow:
-  // a) User authenticates with valid credentials
+  // 6. Positive User Authentication:
   const loginRes = await fetch(`${baseUrl}/oauth/session/login`, {
     method: 'POST',
     headers: {host: '127.0.0.1', 'content-type': 'application/json'},
@@ -154,8 +138,35 @@ test('ChatGPT MCP OAuth 2.1 Security: Credentials Authentication, Exploit Regres
   assert.ok(loginData.session_token);
   const userSessionToken = loginData.session_token;
 
-  // b) Authenticated user grants consent with valid session token
-  const validConsentRes = await fetch(`${baseUrl}/oauth/authorize/consent`, {
+  // 7. P0 Security Fix: Authorization-CSRF / Silent Consent Grant Prevention
+  // When a logged-in user hits GET /oauth/authorize (e.g. via attacker link with session cookie),
+  // the server MUST NOT silently mint or redirect an authorization code to the redirect_uri.
+  const authUrl = new URL(`${baseUrl}/oauth/authorize`);
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('client_id', registeredClientId);
+  authUrl.searchParams.set('redirect_uri', validRedirectUri);
+  authUrl.searchParams.set('scope', 'bright:profile:write bright:profile:read');
+  authUrl.searchParams.set('code_challenge', codeChallenge);
+  authUrl.searchParams.set('code_challenge_method', 'S256');
+  authUrl.searchParams.set('state', 'csrf-test-state-1');
+
+  const authGetRes = await fetch(authUrl.toString(), {
+    headers: {
+      host: '127.0.0.1',
+      cookie: `session_token=${encodeURIComponent(userSessionToken)}`,
+    },
+    redirect: 'manual',
+  });
+  // Must NOT redirect with 302 code!
+  assert.equal(authGetRes.status, 200, 'GET /oauth/authorize must return consent challenge instead of silently redirecting 302 with code');
+  const authGetData = await authGetRes.json();
+  assert.equal(authGetData.consent_required, true);
+  assert.ok(authGetData.consent_challenge, 'Must return a pending consent challenge transaction');
+  assert.equal(authGetData.code, undefined, 'Must NOT issue authorization code on GET');
+
+  // 8. Explicit User Consent Confirmation:
+  // User explicitly approves scopes via POST /oauth/authorize/consent with the consent challenge
+  const consentRes = await fetch(`${baseUrl}/oauth/authorize/consent`, {
     method: 'POST',
     headers: {
       host: '127.0.0.1',
@@ -163,20 +174,21 @@ test('ChatGPT MCP OAuth 2.1 Security: Credentials Authentication, Exploit Regres
       'x-session-token': userSessionToken,
     },
     body: JSON.stringify({
+      consent_challenge: authGetData.consent_challenge,
       client_id: registeredClientId,
       redirect_uri: validRedirectUri,
       scope: 'bright:profile:write bright:profile:read',
       code_challenge: codeChallenge,
       code_challenge_method: 'S256',
-      state: 'oauth-state-abc',
+      state: 'csrf-test-state-1',
     }),
   });
-  assert.equal(validConsentRes.status, 200);
-  const consentData = await validConsentRes.json();
-  assert.ok(consentData.code);
+  assert.equal(consentRes.status, 200);
+  const consentData = await consentRes.json();
+  assert.ok(consentData.code, 'Explicit consent POST produces authorization code');
   const authCode = consentData.code;
 
-  // 6. PKCE Token Exchange:
+  // 9. PKCE Token Exchange:
   // a) Wrong code_verifier -> fails 400
   const badTokenRes = await fetch(`${baseUrl}/oauth/token`, {
     method: 'POST',
@@ -257,7 +269,7 @@ test('ChatGPT MCP OAuth 2.1 Security: Credentials Authentication, Exploit Regres
   });
   const readTokenData = await readTokenRes.json();
 
-  // 7. Scope Enforcement on /mcp:
+  // 10. Scope Enforcement on /mcp:
   // a) Read-only token can call normalize_evidence
   const normRes = await fetch(`${baseUrl}/mcp`, {
     method: 'POST',

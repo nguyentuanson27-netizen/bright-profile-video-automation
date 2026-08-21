@@ -8,6 +8,8 @@ services:
       MCP_HOST: 0.0.0.0
       MCP_PORT: 4190
       MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-}
+      MCP_OAUTH_SECRET: ${MCP_OAUTH_SECRET:-}
+      BRIGHT_USER_AUTH_SECRET: ${BRIGHT_USER_AUTH_SECRET:-}
       MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-https://video.lanadesign.tech/mcp}
       MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-127.0.0.1,localhost}
       MCP_MAX_BODY_BYTES: 2097152

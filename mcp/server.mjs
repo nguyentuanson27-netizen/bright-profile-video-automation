@@ -776,8 +776,10 @@ export function createBrightHttpServer({
     } catch {}
   }
 
-  const oauthSecret = env.MCP_OAUTH_SECRET?.trim() || serviceToken || expectedAuthToken || 'default-oauth-secret-key-16-chars';
-  const userAuthSecret = (env.BRIGHT_USER_AUTH_SECRET || env.BRIGHT_USER_PASSWORD || env.BRIGHT_INTEGRATION_TOKEN || oauthSecret).trim();
+  // Dedicated OAuth secret - NEVER fall back to BRIGHT_INTEGRATION_TOKEN
+  const oauthSecret = (env.MCP_OAUTH_SECRET || expectedAuthToken || 'bright-mcp-oauth-dedicated-secret-32-chars').trim();
+  // Dedicated User Auth secret - NEVER fall back to BRIGHT_INTEGRATION_TOKEN or oauthSecret
+  const userAuthSecret = (env.BRIGHT_USER_AUTH_SECRET || env.BRIGHT_USER_PASSWORD || '').trim();
   const clientStoragePath = env.MCP_CLIENT_STORAGE_PATH || (env.BRIGHT_DATA_DIR ? join(env.BRIGHT_DATA_DIR, 'oauth_clients.json') : null);
   const oauthManager = createOauthManager({
     issuer: defaultIssuer,
@@ -895,6 +897,15 @@ export function createBrightHttpServer({
             return;
           }
 
+          // Service token MUST NOT be used as user password
+          if (serviceToken && credential && compareTokensConstantTime(credential, serviceToken)) {
+            res.setHeader('WWW-Authenticate', `Bearer realm="bright-auth", error="invalid_credentials"`);
+            writeJsonBeforeBodyConsumed(req, res, 401, {
+              error: {code: 'UNAUTHORIZED', message: 'Service token cannot be used for user authentication', requestId},
+            }, requestId);
+            return;
+          }
+
           // User authentication credentials MUST be verified:
           const isValid = userAuthSecret && credential && compareTokensConstantTime(credential, userAuthSecret);
 
@@ -950,6 +961,8 @@ export function createBrightHttpServer({
         }
 
         // OAuth 2.1 Authorize endpoint (both root and /mcp/ prefix)
+        // P0 SAFEGUARD: Never issue an authorization code directly from GET /oauth/authorize!
+        // Always require explicit positive user consent decision via POST /oauth/authorize/consent.
         if (['/oauth/authorize', '/mcp/oauth/authorize'].includes(url.pathname) && req.method === 'GET') {
           const responseType = url.searchParams.get('response_type');
           const clientId = url.searchParams.get('client_id');
@@ -982,7 +995,33 @@ export function createBrightHttpServer({
             return;
           }
 
-          // User authentication & session verification
+          if (!codeChallenge) {
+            writeJsonBeforeBodyConsumed(req, res, 400, {
+              error: {code: 'INVALID_REQUEST', message: 'code_challenge is required for PKCE', requestId},
+            }, requestId);
+            return;
+          }
+
+          let pendingConsent;
+          try {
+            pendingConsent = oauthManager.createPendingConsent({
+              clientId,
+              redirectUri,
+              scope,
+              codeChallenge,
+              codeChallengeMethod,
+              resource,
+              state,
+              issuer: requestIssuer,
+            });
+          } catch (err) {
+            writeJsonBeforeBodyConsumed(req, res, err.status || 400, {
+              error: {code: err.code || 'INVALID_REQUEST', message: err.message, requestId},
+            }, requestId);
+            return;
+          }
+
+          // User authentication check
           const user = authenticateUserSession(req);
 
           if (!user) {
@@ -991,45 +1030,38 @@ export function createBrightHttpServer({
               error: {
                 code: 'UNAUTHORIZED',
                 message: 'User authentication and consent are required to authorize client',
+                consent_required: true,
+                consent_challenge: pendingConsent.consent_challenge,
+                client_id: clientId,
+                client_name: client.clientName,
+                requested_scope: scope,
+                redirect_uri: redirectUri,
                 consent_endpoint: `${requestIssuer}/oauth/authorize/consent`,
                 login_endpoint: `${requestIssuer}/oauth/session/login`,
+                state,
                 requestId,
               },
             }, requestId);
             return;
           }
 
-          try {
-            const code = oauthManager.createAuthorizationCode({
-              clientId,
-              redirectUri,
-              scope,
-              codeChallenge,
-              codeChallengeMethod,
-              user: {id: user.userId, email: user.email},
-              issuer: requestIssuer,
-              resource,
-            });
-
-            if (redirectUri) {
-              const redirectUrl = new URL(redirectUri);
-              redirectUrl.searchParams.set('code', code);
-              if (state) redirectUrl.searchParams.set('state', state);
-              res.statusCode = 302;
-              res.setHeader('Location', redirectUrl.toString());
-              res.setHeader('x-request-id', requestId);
-              res.end();
-              return;
-            }
-
-            writeJsonBeforeBodyConsumed(req, res, 200, {code, state}, requestId);
-            return;
-          } catch (err) {
-            writeJsonBeforeBodyConsumed(req, res, err.status || 400, {
-              error: {code: err.code || 'INVALID_REQUEST', message: err.message, requestId},
-            }, requestId);
-            return;
-          }
+          // Authenticated user: Return consent prompt with challenge transaction
+          // Under NO circumstance is an authorization code minted silently on GET!
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.setHeader('x-request-id', requestId);
+          res.end(JSON.stringify({
+            consent_required: true,
+            consent_challenge: pendingConsent.consent_challenge,
+            client_id: clientId,
+            client_name: client.clientName,
+            requested_scope: scope,
+            redirect_uri: redirectUri,
+            consent_endpoint: `${requestIssuer}/oauth/authorize/consent`,
+            state,
+            user: {id: user.userId, email: user.email || null},
+          }));
+          return;
         }
 
         // OAuth 2.1 Consent confirmation endpoint (both root and /mcp/ prefix)
@@ -1066,44 +1098,38 @@ export function createBrightHttpServer({
             return;
           }
 
-          const client = oauthManager.getClient(parsed.client_id);
-          if (!client) {
-            writeJsonBeforeBodyConsumed(req, res, 400, {
-              error: {code: 'UNAUTHORIZED_CLIENT', message: `Client ${parsed.client_id} is not registered`, requestId},
-            }, requestId);
-            return;
-          }
-
-          if (!client.redirectUris.includes(parsed.redirect_uri)) {
-            writeJsonBeforeBodyConsumed(req, res, 400, {
-              error: {code: 'INVALID_REQUEST', message: `redirect_uri is not registered for client ${parsed.client_id}`, requestId},
-            }, requestId);
-            return;
-          }
-
           try {
             const code = oauthManager.createAuthorizationCode({
-              clientId: parsed.client_id,
-              redirectUri: parsed.redirect_uri,
+              consent_challenge: parsed.consent_challenge,
+              client_id: parsed.client_id,
+              redirect_uri: parsed.redirect_uri,
               scope: parsed.scope || 'bright:profile:write bright:profile:read',
-              codeChallenge: parsed.code_challenge,
-              codeChallengeMethod: parsed.code_challenge_method || 'S256',
+              code_challenge: parsed.code_challenge,
+              code_challenge_method: parsed.code_challenge_method || 'S256',
               user: {id: user.userId, email: user.email},
               issuer: requestIssuer,
               resource: parsed.resource || requestCanonicalResource,
             });
 
-            const redirectUrl = new URL(parsed.redirect_uri);
-            redirectUrl.searchParams.set('code', code);
-            if (parsed.state) redirectUrl.searchParams.set('state', parsed.state);
+            const effectiveRedirectUri = parsed.redirect_uri || oauthManager.getPendingConsent(parsed.consent_challenge)?.redirectUri;
+            let redirectUrl = null;
+            if (effectiveRedirectUri) {
+              try {
+                redirectUrl = new URL(effectiveRedirectUri);
+                redirectUrl.searchParams.set('code', code);
+                if (parsed.state) redirectUrl.searchParams.set('state', parsed.state);
+              } catch {}
+            }
 
             res.statusCode = 200;
             res.setHeader('Content-Type', 'application/json; charset=utf-8');
             res.setHeader('x-request-id', requestId);
             res.end(JSON.stringify({
+              ok: true,
               code,
               state: parsed.state || null,
-              redirect_url: redirectUrl.toString(),
+              redirect_url: redirectUrl ? redirectUrl.toString() : null,
+              user: {id: user.userId, email: user.email || null},
             }));
             return;
           } catch (err) {
