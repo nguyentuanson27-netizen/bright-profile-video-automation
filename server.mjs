@@ -45,6 +45,7 @@ const server = createAppServer({
   researchMaxAttempts: config.worker.maxRetries + 1,
   generationMaxAttempts: config.worker.maxRetries + 1,
   mediaIngestMaxAttempts: config.worker.maxRetries + 1,
+  maxActiveProjects: config.integration.chatgptMaxActiveProjects,
 });
 const port = readPort(process.env.PORT);
 const bindHost = readBindHost(process.env.BRIGHT_BIND_HOST);

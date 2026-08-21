@@ -389,7 +389,6 @@ test('POST /api/integrations/chatgpt/projects/:projectId/render starts media_ing
       projectId,
       revisionId: revision.id,
       expectedPayloadHash: revision.payloadHash,
-      mode: APPROVAL_MODES.USER_REVIEWED,
     },
   });
 

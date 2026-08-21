@@ -215,7 +215,6 @@ export const validateApprovedRevision = (revision, options = {}) => {
 
 export const APPROVAL_MODES = Object.freeze({
   USER_REVIEWED: 'user_reviewed',
-  DELEGATED_E2E: 'delegated_e2e',
 });
 
 export const PROJECT_ORIGINS = Object.freeze({
@@ -244,11 +243,6 @@ export const approveProjectInputSchema = {
     projectId: {type: 'string', minLength: 1, maxLength: 200},
     revisionId: {type: 'string', minLength: 1, maxLength: 200},
     expectedPayloadHash: {type: 'string', pattern: '^[a-f0-9]{64}$'},
-    mode: {enum: ['user_reviewed', 'delegated_e2e']},
-    approvalActor: {type: 'string', minLength: 1, maxLength: 200},
-    approvalContext: {type: 'object'},
-    delegatedContext: {type: 'object'},
-    delegationGrant: {type: 'string'},
   },
 };
 
@@ -334,12 +328,6 @@ export const validateImportProjectInput = (input) => {
 
 export const validateApproveProjectInput = (input) => {
   assertShape(validateApproveProjectShape, input, 'approve project input');
-  if (input.mode === APPROVAL_MODES.DELEGATED_E2E && input.delegatedContext) {
-    const serialized = JSON.stringify(input.delegatedContext);
-    if (serialized && serialized.length > 10000) {
-      throw invalidDomainData('delegatedContext exceeds maximum allowed size of 10000 bytes');
-    }
-  }
   return input;
 };
 

@@ -26,9 +26,6 @@ export const approveVideoProjectInputSchema = {
     projectId: {type: 'string', minLength: 1, maxLength: 200},
     revisionId: {type: 'string', minLength: 1, maxLength: 200},
     expectedPayloadHash: {type: 'string', pattern: '^[a-f0-9]{64}$'},
-    mode: {type: 'string', maxLength: 100},
-    delegationGrant: {type: 'string', maxLength: 2048},
-    delegatedContext: {type: 'object'},
   },
 };
 

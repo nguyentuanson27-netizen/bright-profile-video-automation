@@ -25,6 +25,7 @@ const upperBounds = {
   FETCH_MAX_REDIRECTS: 10,
   OPENAI_API_TIMEOUT_MS: 10 * 60 * 1000,
   OPENAI_API_MAX_RETRIES: 5,
+  BRIGHT_CHATGPT_MAX_ACTIVE_PROJECTS: 100,
 };
 
 test('loadConfig normalizes standalone paths and numeric runtime bounds', () => {
@@ -40,6 +41,15 @@ test('loadConfig normalizes standalone paths and numeric runtime bounds', () => 
     timeoutMs: 60000,
     maxRetries: 2,
   });
+  assert.equal(config.integration.chatgptMaxActiveProjects, 3);
+});
+
+test('loadConfig parses BRIGHT_CHATGPT_MAX_ACTIVE_PROJECTS and fallback MCP_MAX_ACTIVE_PROJECTS', () => {
+  const explicit = loadConfig({...baseEnv, BRIGHT_CHATGPT_MAX_ACTIVE_PROJECTS: '5'});
+  assert.equal(explicit.integration.chatgptMaxActiveProjects, 5);
+
+  const fallback = loadConfig({...baseEnv, MCP_MAX_ACTIVE_PROJECTS: '7'});
+  assert.equal(fallback.integration.chatgptMaxActiveProjects, 7);
 });
 
 test('loadConfig accepts an explicit database path relative to cwd', () => {

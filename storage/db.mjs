@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import {mkdirSync, readFileSync} from 'node:fs';
 import {dirname, resolve} from 'node:path';
 import Database from 'better-sqlite3';
@@ -12,6 +13,7 @@ const MIGRATIONS = Object.freeze({
 });
 const nowIso = () => new Date().toISOString();
 const parseJson = (value) => JSON.parse(value);
+const hashPayload = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 const assertBusyTimeout = (value) => {
   if (!Number.isSafeInteger(value) || value < 1 || value > 60_000) {
@@ -198,6 +200,7 @@ export const createRepositories = (db) => {
     )
   `);
   const getStage = db.prepare('SELECT * FROM stages WHERE id = ?');
+  const getLatestProjectStage = db.prepare('SELECT * FROM stages WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT 1');
   const getActiveMediaIngest = db.prepare(`
     SELECT * FROM stages
     WHERE project_id = ? AND revision_id = ? AND stage_type = 'media_ingest'
@@ -224,6 +227,97 @@ export const createRepositories = (db) => {
       AND id != ?
       AND status NOT IN ('completed', 'failed', 'cancelled')
   `);
+
+  const importProjectTx = db.transaction(({
+    project,
+    sources = [],
+    initialStage,
+    maxActiveProjects = null,
+    incomingFingerprint,
+  }) => {
+    if (project.idempotencyKey) {
+      const existingRow = getProjectByIdempotencyKey.get(project.idempotencyKey);
+      if (existingRow) {
+        const existing = projectFromRow(existingRow);
+        const existingFingerprint = hashPayload({
+          creator: existing.creator,
+          topic: existing.topic,
+          instructions: existing.instructions ?? '',
+          evidenceBundle: existing.research,
+        });
+        if (existingFingerprint !== incomingFingerprint) {
+          throw new AppError(
+            ErrorCodes.IDEMPOTENCY_CONFLICT,
+            'Idempotency key was used with different project parameters',
+            {status: 409},
+          );
+        }
+        const stageRow = getLatestProjectStage.get(existing.id);
+        return {
+          project: existing,
+          stage: stageFromRow(stageRow),
+          isExisting: true,
+        };
+      }
+    }
+
+    if (project.origin === 'chatgpt_mcp' && maxActiveProjects !== null && Number.isInteger(maxActiveProjects)) {
+      const activeCount = countActiveChatGptProjects.get().count;
+      if (activeCount >= maxActiveProjects) {
+        throw new AppError(
+          ErrorCodes.NOAUTH_CAPACITY_REACHED,
+          'Anonymous active project capacity reached',
+          {status: 429},
+        );
+      }
+    }
+
+    const createdAt = project.createdAt ?? nowIso();
+    const updatedAt = project.updatedAt ?? createdAt;
+    insertProject.run({
+      ...project,
+      instructions: project.instructions ?? '',
+      status: project.status ?? 'generating',
+      origin: project.origin ?? 'chatgpt_mcp',
+      idempotencyKey: project.idempotencyKey ?? null,
+      researchJson: project.research ? JSON.stringify(project.research) : null,
+      createdAt,
+      updatedAt,
+    });
+    for (const source of sources) {
+      const sourceCreatedAt = source.createdAt ?? createdAt;
+      insertSource.run({
+        ...source,
+        status: source.status ?? 'available',
+        payloadJson: JSON.stringify(source.payload ?? {}),
+        createdAt: sourceCreatedAt,
+        updatedAt: source.updatedAt ?? sourceCreatedAt,
+      });
+    }
+
+    const stageId = initialStage.id;
+    const stageCreatedAt = initialStage.createdAt ?? createdAt;
+    const logicalKey = `${project.id}:initial:generation`;
+    insertStage.run({
+      id: stageId,
+      logicalKey,
+      projectId: project.id,
+      revisionId: null,
+      type: 'generation',
+      state: 'queued',
+      retryable: 1,
+      maxAttempts: initialStage.maxAttempts ?? 4,
+      availableAtMs: initialStage.availableAtMs ?? 0,
+      createdAt: stageCreatedAt,
+      updatedAt: stageCreatedAt,
+    });
+
+    return {
+      project: projectFromRow(getProject.get(project.id)),
+      stage: stageFromRow(getStage.get(stageId)),
+      isExisting: false,
+    };
+  });
 
   const createProjectTx = db.transaction(({project, sources = [], maxActiveProjects = null}) => {
     if (project.origin === 'chatgpt_mcp' && maxActiveProjects !== null && Number.isInteger(maxActiveProjects)) {
@@ -429,6 +523,9 @@ export const createRepositories = (db) => {
 
   return Object.freeze({
     projects: Object.freeze({
+      importProject(record) {
+        return importProjectTx.immediate(record);
+      },
       create(record, options = {}) {
         return createProjectTx.immediate({project: record, maxActiveProjects: options.maxActiveProjects ?? null});
       },

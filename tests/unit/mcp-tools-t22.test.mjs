@@ -159,7 +159,7 @@ test('edit_video_draft tool sends draft update to backend and returns revised pr
   assert.equal(calls[0].url, 'http://127.0.0.1:4180/api/integrations/chatgpt/projects/proj-123/draft');
 });
 
-test('approve_video_project tool submits user_reviewed or delegated_e2e approval', async (t) => {
+test('approve_video_project tool submits external review acknowledgment approval', async (t) => {
   const calls = [];
   const fakeFetch = async (url, options) => {
     calls.push({url: String(url), options});
@@ -175,7 +175,7 @@ test('approve_video_project tool submits user_reviewed or delegated_e2e approval
         },
         revision: {
           id: 'rev-1',
-          approvalMode: 'delegated_e2e',
+          approvalMode: 'user_reviewed',
         },
       }),
     };
@@ -185,9 +185,7 @@ test('approve_video_project tool submits user_reviewed or delegated_e2e approval
     env: {
       MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
       MCP_NOAUTH_WRITE_ENABLED: 'true',
-      MCP_AUTH_TOKEN: 'test-mcp-token-123456',
-      MCP_NOAUTH_WRITE_ENABLED: 'true',
-        BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
+      BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
       BRIGHT_INTEGRATION_TOKEN: 'service-token-xyz',
     },
     handler: (await import('../../mcp/server.mjs')).createBrightMcpHandler({
@@ -228,9 +226,6 @@ test('approve_video_project tool submits user_reviewed or delegated_e2e approval
         projectId: 'proj-123',
         revisionId: 'rev-1',
         expectedPayloadHash: '1'.repeat(64),
-        mode: 'delegated_e2e',
-        delegationGrant: 'grant-token-123456',
-        delegatedContext: {userExplicitIntent: 'Approve and build video'},
       },
     },
   }, headers);
@@ -240,6 +235,80 @@ test('approve_video_project tool submits user_reviewed or delegated_e2e approval
   assert.equal(called.body.result.structuredContent?.status, 'approved');
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, 'http://127.0.0.1:4180/api/integrations/chatgpt/projects/proj-123/approve');
+  const sentBody = JSON.parse(calls[0].options.body);
+  assert.deepEqual(sentBody, {
+    projectId: 'proj-123',
+    revisionId: 'rev-1',
+    expectedPayloadHash: '1'.repeat(64),
+  });
+});
+
+test('approve_video_project rejects deferred authorization fields (mode, delegationGrant, delegatedContext)', async (t) => {
+  const calls = [];
+  const fakeFetch = async (url, options) => {
+    calls.push({url: String(url), options});
+    return {ok: true, status: 200, headers: new Headers({'content-type': 'application/json'}), json: async () => ({})};
+  };
+
+  const server = createBrightHttpServer({
+    env: {
+      MCP_ALLOWED_HOSTS: '127.0.0.1,localhost',
+      MCP_NOAUTH_WRITE_ENABLED: 'true',
+      BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
+      BRIGHT_INTEGRATION_TOKEN: 'service-token-xyz',
+    },
+    handler: (await import('../../mcp/server.mjs')).createBrightMcpHandler({
+      env: {
+        MCP_NOAUTH_WRITE_ENABLED: 'true',
+        BRIGHT_BACKEND_URL: 'http://127.0.0.1:4180',
+        BRIGHT_INTEGRATION_TOKEN: 'service-token-xyz',
+      },
+      fetchFn: fakeFetch,
+    }),
+  });
+
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => server.close());
+
+  const url = `http://127.0.0.1:${server.address().port}/mcp`;
+
+  await rpc(url, {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: {name: 'bright-test', version: '1.0.0'},
+    },
+  });
+
+  const headers = {'mcp-protocol-version': '2025-06-18'};
+  for (const extra of [
+    {mode: 'delegated_e2e'},
+    {delegationGrant: 'grant-token-123'},
+    {delegatedContext: {auto: true}},
+  ]) {
+    const called = await rpc(url, {
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: {
+        name: 'approve_video_project',
+        arguments: {
+          projectId: 'proj-123',
+          revisionId: 'rev-1',
+          expectedPayloadHash: '1'.repeat(64),
+          ...extra,
+        },
+      },
+    }, headers);
+
+    assert.equal(called.response.status, 200);
+    assert.equal(called.body.result.isError, true);
+    assert.equal(calls.length, 0); // zero backend calls!
+  }
 });
 
 test('start_video_render, retry_video_project, cancel_video_project tool calls dispatch correctly', async (t) => {

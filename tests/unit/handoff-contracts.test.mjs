@@ -27,7 +27,6 @@ const validBundle = normalizeEvidence({
 test('APPROVAL_MODES and PROJECT_ORIGINS define the exact vocabulary', () => {
   assert.deepEqual(APPROVAL_MODES, {
     USER_REVIEWED: 'user_reviewed',
-    DELEGATED_E2E: 'delegated_e2e',
   });
   assert.deepEqual(PROJECT_ORIGINS, {
     STANDALONE: 'standalone',
@@ -80,42 +79,34 @@ test('validateImportProjectInput rejects missing or malformed fields and invalid
   );
 });
 
-test('validateApproveProjectInput enforces approval mode and expected hash', () => {
-  const validUser = {
+test('validateApproveProjectInput enforces exact approval payload and rejects deferred/extra fields', () => {
+  const validApproval = {
     projectId: 'proj-1',
     revisionId: 'rev-1',
     expectedPayloadHash: 'a'.repeat(64),
-    mode: APPROVAL_MODES.USER_REVIEWED,
   };
-  assert.doesNotThrow(() => validateApproveProjectInput(validUser));
-
-  const validDelegated = {
-    projectId: 'proj-1',
-    revisionId: 'rev-1',
-    expectedPayloadHash: 'a'.repeat(64),
-    mode: APPROVAL_MODES.DELEGATED_E2E,
-    delegatedContext: {
-      userExplicitIntent: 'Create full video end to end',
-      authorizedAt: '2026-08-20T00:00:00.000Z',
-    },
-  };
-  assert.doesNotThrow(() => validateApproveProjectInput(validDelegated));
+  assert.doesNotThrow(() => validateApproveProjectInput(validApproval));
 
   assert.throws(
     () => validateApproveProjectInput({
-      ...validUser,
-      mode: 'auto_approve',
-    }),
-    (error) => error.code === ErrorCodes.INVALID_DOMAIN_DATA,
-  );
-
-  assert.throws(
-    () => validateApproveProjectInput({
-      ...validUser,
+      ...validApproval,
       expectedPayloadHash: 'invalid-hash',
     }),
     (error) => error.code === ErrorCodes.INVALID_DOMAIN_DATA,
   );
+
+  for (const extra of [
+    {mode: 'delegated_e2e'},
+    {mode: 'user_reviewed'},
+    {delegationGrant: 'grant-token'},
+    {delegatedContext: {intent: 'auto'}},
+    {approvalActor: 'custom_actor'},
+  ]) {
+    assert.throws(
+      () => validateApproveProjectInput({...validApproval, ...extra}),
+      (error) => error.code === ErrorCodes.INVALID_DOMAIN_DATA,
+    );
+  }
 });
 
 test('validateEditDraftInput requires projectId, revisionId, expectedPayloadHash, and valid draft', () => {

@@ -576,3 +576,154 @@ test('Concurrent Admission Race: Never Exceeds Configured Active Cap', async (t)
   assert.equal(rejected.length, 7, 'Exactly 7 projects must be rejected with NOAUTH_CAPACITY_REACHED');
   assert.equal(repos.projects.countActiveChatGptProjects(), 3, 'Committed active count in SQLite must equal exactly 3');
 });
+
+test('Concurrent Mixed Admission Race (Create vs Retry vs Retry) at Cap Boundary', async (t) => {
+  const dir = tempDir();
+  const dbPath = join(dir, 'mixed-race-test.sqlite');
+  const db = openDatabase(dbPath);
+  migrateDatabase(db);
+  const repos = createRepositories(db);
+  const jobs = createJobStore(db);
+  const artifactStore = createArtifactStore(db);
+  const serviceToken = 'service-secret-token';
+  const maxActiveProjects = 2;
+
+  const appServer = createAppServer({
+    db,
+    repos,
+    jobs,
+    artifactStore,
+    dataDir: dir,
+    integrationToken: serviceToken,
+    maxActiveProjects,
+  });
+  appServer.listen(0, '127.0.0.1');
+  await once(appServer, 'listening');
+  const appPort = appServer.address().port;
+  const appUrl = `http://127.0.0.1:${appPort}`;
+
+  t.after(() => {
+    appServer.close();
+    db.close();
+  });
+
+  const importProject = async (idemp) => {
+    const res = await fetch(`${appUrl}/api/integrations/chatgpt/projects/import`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json', authorization: `Bearer ${serviceToken}`},
+      body: JSON.stringify({creator: 'Creator', topic: 'Topic', evidenceBundle: makeSampleBundle(idemp), idempotencyKey: idemp}),
+    });
+    return {status: res.status, json: await res.json()};
+  };
+
+  // Step 1: Create 2 projects (occupying cap=2)
+  const p1 = await importProject('mixed-p1');
+  const p2 = await importProject('mixed-p2');
+  assert.equal(p1.status, 201);
+  assert.equal(p2.status, 201);
+  assert.equal(repos.projects.countActiveChatGptProjects(), 2);
+
+  // Step 2: Fail both projects so both become failed/retryable (active count = 0)
+  for (let i = 0; i < 2; i++) {
+    const claim = jobs.claimNext({workerId: `w-${i}`, allowedTypes: ['generation'], nowMs: Date.now(), leaseMs: 30000});
+    assert.ok(claim);
+    jobs.fail({
+      stageId: claim.stageId,
+      claimToken: claim.claimToken,
+      nowMs: Date.now(),
+      errorCode: 'GENERATION_FAILED',
+      errorMessage: 'Test fail',
+      retryable: true,
+    });
+  }
+  assert.equal(repos.projects.countActiveChatGptProjects(), 0);
+
+  // Step 3: Fill slot 1 with a new active project (p3) -> active count = 1
+  const p3 = await importProject('mixed-p3');
+  assert.equal(p3.status, 201);
+  assert.equal(repos.projects.countActiveChatGptProjects(), 1);
+
+  // Step 4: Now exactly 1 slot remains under cap=2.
+  // Concurrently launch:
+  // - 1 new create (p4)
+  // - Retry of p1
+  // - Retry of p2
+  // All 3 compete simultaneously for the 1 remaining slot!
+  const [createResult, retryResult1, retryResult2] = await Promise.all([
+    importProject('mixed-p4'),
+    fetch(`${appUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(p1.json.project.projectId)}/retry`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json', authorization: `Bearer ${serviceToken}`},
+    }).then(async (res) => ({status: res.status, json: await res.json()})),
+    fetch(`${appUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(p2.json.project.projectId)}/retry`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json', authorization: `Bearer ${serviceToken}`},
+    }).then(async (res) => ({status: res.status, json: await res.json()})),
+  ]);
+
+  const outcomes = [createResult, retryResult1, retryResult2];
+  const succeeded = outcomes.filter((r) => r.status === 200 || r.status === 201);
+  const rejected = outcomes.filter((r) => r.status === 429 && r.json?.error?.code === 'NOAUTH_CAPACITY_REACHED');
+
+  assert.equal(succeeded.length, 1, 'Exactly 1 concurrent admission must win the remaining slot');
+  assert.equal(rejected.length, 2, 'Exactly 2 concurrent admissions must be rejected with 429 NOAUTH_CAPACITY_REACHED');
+  assert.equal(repos.projects.countActiveChatGptProjects(), 2, 'Active count in SQLite must not exceed configured cap=2');
+});
+
+test('Authoritative Bright Profile Configuration: Deployed Env Cap Overrides Defaults', async (t) => {
+  const dir = tempDir();
+  const dbPath = join(dir, 'env-cap-test.sqlite');
+  const db = openDatabase(dbPath);
+  migrateDatabase(db);
+  const repos = createRepositories(db);
+  const jobs = createJobStore(db);
+  const artifactStore = createArtifactStore(db);
+  const serviceToken = 'service-secret-token';
+
+  // Load config with custom BRIGHT_CHATGPT_MAX_ACTIVE_PROJECTS=1
+  const config = (await import('../../app/config.mjs')).loadConfig({
+    BRIGHT_DATA_DIR: dir,
+    BRIGHT_DATABASE_PATH: dbPath,
+    BRIGHT_INTEGRATION_TOKEN: serviceToken,
+    BRIGHT_CHATGPT_MAX_ACTIVE_PROJECTS: '1',
+  });
+  assert.equal(config.integration.chatgptMaxActiveProjects, 1);
+
+  const appServer = createAppServer({
+    db,
+    repos,
+    jobs,
+    artifactStore,
+    dataDir: dir,
+    integrationToken: serviceToken,
+    maxActiveProjects: config.integration.chatgptMaxActiveProjects,
+  });
+  appServer.listen(0, '127.0.0.1');
+  await once(appServer, 'listening');
+  const appPort = appServer.address().port;
+  const appUrl = `http://127.0.0.1:${appPort}`;
+
+  t.after(() => {
+    appServer.close();
+    db.close();
+  });
+
+  // Project 1 succeeds -> 201
+  const res1 = await fetch(`${appUrl}/api/integrations/chatgpt/projects/import`, {
+    method: 'POST',
+    headers: {'content-type': 'application/json', authorization: `Bearer ${serviceToken}`},
+    body: JSON.stringify({creator: 'Creator 1', topic: 'Topic', evidenceBundle: makeSampleBundle('1'), idempotencyKey: 'cap-env-1'}),
+  });
+  assert.equal(res1.status, 201);
+
+  // Project 2 immediately rejected by authoritative backend cap -> 429
+  const res2 = await fetch(`${appUrl}/api/integrations/chatgpt/projects/import`, {
+    method: 'POST',
+    headers: {'content-type': 'application/json', authorization: `Bearer ${serviceToken}`},
+    body: JSON.stringify({creator: 'Creator 2', topic: 'Topic', evidenceBundle: makeSampleBundle('2'), idempotencyKey: 'cap-env-2'}),
+  });
+  assert.equal(res2.status, 429);
+  const json2 = await res2.json();
+  assert.equal(json2.error?.code, 'NOAUTH_CAPACITY_REACHED');
+  assert.equal(repos.projects.countActiveChatGptProjects(), 1);
+});

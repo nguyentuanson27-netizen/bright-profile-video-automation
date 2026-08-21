@@ -161,32 +161,8 @@ export const createIntegrationsApi = ({
         evidenceBundle: input.evidenceBundle,
       });
 
-      const existing = repos.projects.getByIdempotencyKey(input.idempotencyKey);
-      if (existing) {
-        const existingFingerprint = hashPayload({
-          creator: existing.creator,
-          topic: existing.topic,
-          instructions: existing.instructions ?? '',
-          evidenceBundle: existing.research,
-        });
-
-        if (existingFingerprint !== incomingFingerprint) {
-          throw new AppError(
-            ErrorCodes.IDEMPOTENCY_CONFLICT,
-            'Idempotency key was used with different project parameters',
-            {status: 409},
-          );
-        }
-
-        const stage = jobs.getCurrentStage(existing.id);
-        return {
-          project: projectToStatusOutput(existing),
-          stage,
-          isExisting: true,
-        };
-      }
-
       const projectId = generatedId(projectIdFactory, 'projectIdFactory');
+      const stageId = generatedId(stageIdFactory, 'stageIdFactory');
       const timestamp = new Date(now()).toISOString();
 
       // Extract sources from evidence items
@@ -220,7 +196,7 @@ export const createIntegrationsApi = ({
         creator: input.creator,
         topic: input.topic,
         instructions: input.instructions ?? '',
-        status: 'research_ready',
+        status: 'generating',
         origin: PROJECT_ORIGINS.CHATGPT_MCP,
         idempotencyKey: input.idempotencyKey,
         research: input.evidenceBundle,
@@ -228,20 +204,23 @@ export const createIntegrationsApi = ({
         updatedAt: timestamp,
       };
 
-      repos.projects.createWithSources(projectRecord, sources, {maxActiveProjects});
-
-      // Queue durable generation stage
-      const started = jobs.startGeneration({
-        projectId,
-        stageId: generatedId(stageIdFactory, 'stageIdFactory'),
-        nowMs: nowMs(),
-        maxAttempts: generationMaxAttempts,
+      const result = repos.projects.importProject({
+        project: projectRecord,
+        sources,
+        initialStage: {
+          id: stageId,
+          maxAttempts: generationMaxAttempts,
+          createdAt: timestamp,
+          availableAtMs: nowMs(),
+        },
+        maxActiveProjects,
+        incomingFingerprint,
       });
 
       return {
-        project: projectToStatusOutput(repos.projects.get(projectId)),
-        stage: started.stage,
-        isExisting: false,
+        project: projectToStatusOutput(result.project),
+        stage: result.stage,
+        isExisting: result.isExisting,
       };
     },
 
@@ -318,7 +297,7 @@ export const createIntegrationsApi = ({
 
       const approvalMode = APPROVAL_MODES.USER_REVIEWED; // legacy storage compatibility
       const approvalActor = 'chatgpt_mcp_noauth';
-      const approvalContext = input.approvalContext || {semantic: 'external_review_acknowledged'};
+      const approvalContext = {semantic: 'external_review_acknowledged'};
 
       const approvedRevision = repos.revisions.approve({
         projectId,
@@ -369,13 +348,10 @@ export const createIntegrationsApi = ({
     },
 
     retry(projectId) {
-      const project = requireProject(projectId);
-      if (['failed', 'cancelled', 'completed'].includes(project.status) && project.origin === PROJECT_ORIGINS.CHATGPT_MCP) {
-        repos.projects.assertCapacityForReactivation(projectId, maxActiveProjects);
-      }
+      requireProject(projectId);
       const stage = jobs.getCurrentStage(projectId);
       if (!stage) throw new AppError(ErrorCodes.STAGE_NOT_RETRYABLE, 'Stage is not retryable');
-      const result = jobs.retry({stageId: stage.id, nowMs: nowMs()});
+      const result = jobs.retry({stageId: stage.id, nowMs: nowMs(), maxActiveProjects});
       return {
         changed: result.changed,
         project: projectToStatusOutput(repos.projects.get(projectId)),

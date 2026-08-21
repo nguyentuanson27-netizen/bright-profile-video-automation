@@ -11,6 +11,7 @@ const DEFAULTS = Object.freeze({
   openaiGenerationModel: 'gpt-5',
   openaiTimeoutMs: 60000,
   openaiMaxRetries: 2,
+  chatgptMaxActiveProjects: 3,
 });
 
 const MAXIMUMS = Object.freeze({
@@ -21,6 +22,7 @@ const MAXIMUMS = Object.freeze({
   fetchMaxRedirects: 10,
   openaiTimeoutMs: 10 * 60 * 1000,
   openaiMaxRetries: 5,
+  chatgptMaxActiveProjects: 100,
 });
 
 const readInteger = (env, name, fallback, {min = 0, max = Number.MAX_SAFE_INTEGER} = {}) => {
@@ -71,6 +73,12 @@ export const loadConfig = (env = process.env, {cwd = process.cwd()} = {}) => {
       serviceToken: env.BRIGHT_INTEGRATION_TOKEN?.trim() || undefined,
       backendUrl: env.BRIGHT_BACKEND_URL?.trim() || 'http://127.0.0.1:4180',
       allowedHosts: env.BRIGHT_ALLOWED_INTEGRATION_HOSTS?.split(',').map((h) => h.trim().toLowerCase()).filter(Boolean) || ['127.0.0.1', 'localhost', 'app', '::1', '[::1]'],
+      chatgptMaxActiveProjects: readInteger(
+        env,
+        'BRIGHT_CHATGPT_MAX_ACTIVE_PROJECTS',
+        readInteger(env, 'MCP_MAX_ACTIVE_PROJECTS', DEFAULTS.chatgptMaxActiveProjects, {min: 1, max: MAXIMUMS.chatgptMaxActiveProjects}),
+        {min: 1, max: MAXIMUMS.chatgptMaxActiveProjects},
+      ),
     }),
   });
 };

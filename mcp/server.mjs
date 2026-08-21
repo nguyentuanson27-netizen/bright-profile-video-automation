@@ -375,9 +375,6 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch, inFlig
           projectId: input.projectId,
           revisionId: input.revisionId,
           expectedPayloadHash: input.expectedPayloadHash,
-          mode: 'user_reviewed',
-          approvalActor: 'chatgpt_mcp_noauth',
-          approvalContext: {semantic: 'external_review_acknowledged'},
         };
         const res = await fetchWithCorrelation(`${backendUrl}/api/integrations/chatgpt/projects/${encodeURIComponent(input.projectId)}/approve`, {
           method: 'POST',

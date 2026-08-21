@@ -113,9 +113,9 @@ test('approval provenance (mode, actor, context) is stored and survives database
     projectId: 'proj-appr-1',
     revisionId: 'rev-1',
     expectedPayloadHash: payloadHash,
-    approvalMode: APPROVAL_MODES.DELEGATED_E2E,
-    approvalActor: 'chatgpt_mcp',
-    approvalContext: {userExplicitIntent: 'Run full e2e'},
+    approvalMode: APPROVAL_MODES.USER_REVIEWED,
+    approvalActor: 'chatgpt_mcp_noauth',
+    approvalContext: {semantic: 'external_review_acknowledged'},
   });
 
   db.close();
@@ -123,9 +123,9 @@ test('approval provenance (mode, actor, context) is stored and survives database
   repos = createRepositories(db);
 
   const rev = repos.revisions.get('rev-1');
-  assert.equal(rev.approvalMode, APPROVAL_MODES.DELEGATED_E2E);
-  assert.equal(rev.approvalActor, 'chatgpt_mcp');
-  assert.deepEqual(rev.approvalContext, {userExplicitIntent: 'Run full e2e'});
+  assert.equal(rev.approvalMode, APPROVAL_MODES.USER_REVIEWED);
+  assert.equal(rev.approvalActor, 'chatgpt_mcp_noauth');
+  assert.deepEqual(rev.approvalContext, {semantic: 'external_review_acknowledged'});
 
   db.close();
 });
