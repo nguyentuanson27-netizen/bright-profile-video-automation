@@ -161,13 +161,13 @@ Before delivery under the reset contract:
 - [x] OAuth/DCR/session runtime/config/storage is removed from the current milestone.
 - [x] Delegated E2E is deferred and unreachable from active MCP contract.
 - [x] Deterministic noauth E2E passes on exact implementation HEAD without claiming human-review proof.
-- [x] Full exact-head CI passes after the reset implementation (workflow run #32559907686 on `7f344da`).
+- [x] Full CI suite passes on pull request HEAD (verified via PR Checks/review evidence).
 - [ ] Live ChatGPT noauth Path A shows the tested client waits for user confirmation.
 - [ ] Live review-acknowledged completion Path B passes.
 - [ ] T28 records write/ingress enable values.
 - [ ] T28 restores `MCP_NOAUTH_WRITE_ENABLED=false`.
 - [ ] T28 withdraws external MCP ingress and verifies the remote endpoint is no longer externally reachable.
-- [x] Final docs and PR body match observed current truth.
+- [x] Final docs and PR body match observed implementation and contract truth.
 - [ ] Project-wide Definition of Done is checked.
 
 Closure audit result: **OPEN — implementation and exact-head CI verification are complete; live ChatGPT acceptance and mandatory external-ingress teardown remain open for T28 live execution.**
