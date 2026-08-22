@@ -417,6 +417,89 @@ test('Deterministic No-Auth E2E Flow: Normalize -> Import -> Worker Generation -
   assert.equal(savedRev.approvalActor, 'chatgpt_mcp_noauth');
 });
 
+test('ChatGPT can import normalized evidence with its script as an unapproved review draft', async (t) => {
+  const sys = await startTestSystem();
+  t.after(sys.close);
+
+  const normalized = await rpc(sys.mcpUrl, {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: {
+      name: 'normalize_evidence',
+      arguments: {
+        subject: {name: 'Marques Brownlee'},
+        items: [{
+          url: 'https://www.youtube.com/@mkbhd',
+          claim: 'Marques Brownlee publishes technology videos on YouTube.',
+          category: 'career',
+        }],
+      },
+    },
+  });
+  const evidenceBundle = normalized.body.result.structuredContent;
+  const evidenceId = evidenceBundle.evidence[0].id;
+
+  const create = await rpc(sys.mcpUrl, {
+    jsonrpc: '2.0',
+    id: 2,
+    method: 'tools/call',
+    params: {
+      name: 'create_video_project',
+      arguments: {
+        creator: 'Marques Brownlee',
+        topic: 'Technology creator profile',
+        evidenceBundle,
+        idempotencyKey: 'chatgpt-script-import-001',
+        draft: {
+          creatorName: 'Marques Brownlee',
+          summary: 'A technology creator profile drafted in ChatGPT.',
+          claims: [{
+            id: 'claim-1',
+            text: 'Marques Brownlee publishes technology videos on YouTube.',
+            sourceIds: [evidenceId],
+            verified: true,
+          }],
+          script: [{
+            id: 'script-1',
+            text: 'Meet Marques Brownlee, a technology creator on YouTube.',
+            start: 0,
+            duration: 5,
+            sourceIds: [evidenceId],
+          }],
+          voiceover: {
+            chunks: [{
+              id: 'voice-1',
+              text: 'Meet Marques Brownlee, a technology creator on YouTube.',
+              start: 0,
+              duration: 5,
+            }],
+          },
+          scenes: [{
+            id: 'scene-1',
+            type: 'hero',
+            start: 0,
+            duration: 5,
+            sourceIds: [evidenceId],
+          }],
+          render: {duration: 5},
+        },
+      },
+    },
+  });
+
+  assert.equal(create.response.status, 200);
+  assert.equal(create.body.result.isError, undefined);
+  const imported = create.body.result.structuredContent;
+  assert.equal(imported.status, 'review_required');
+  assert.equal(imported.currentRevision.draft.script[0].text, 'Meet Marques Brownlee, a technology creator on YouTube.');
+  assert.equal(imported.currentRevision.draft.claims[0].verified, false);
+
+  const source = sys.repos.sources.list(imported.projectId)[0];
+  assert.equal(imported.currentRevision.draft.script[0].sourceIds[0], source.id);
+  assert.equal(sys.jobs.claimNext({workerId: 'unused-worker', allowedTypes: ['generation'], nowMs: Date.now(), leaseMs: 30_000}), null);
+});
+
 test('Default Flow stops at review_required and proves NO automatic approval/render occurs', async (t) => {
   const sys = await startTestSystem();
   t.after(sys.close);

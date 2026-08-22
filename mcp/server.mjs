@@ -213,8 +213,8 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch, inFlig
   server.registerTool(
     'create_video_project',
     {
-      title: 'Create and start video project from normalized evidence',
-      description: 'Import normalized EvidenceBundle into Bright Profile system and automatically queue structured generation stage. Default workflow stops safely at review_required for user review.',
+      title: 'Create a video project from normalized evidence and an optional ChatGPT draft',
+      description: 'Import a normalized EvidenceBundle. Provide an optional complete structured draft whose sourceIds reference EvidenceBundle evidence IDs; Bright stores that draft for review without regenerating it. Without a draft, Bright queues structured generation. Both paths stop safely at review_required for user review.',
       inputSchema: createProjectSchema,
       outputSchema: projectStatusSchema,
       annotations: {
@@ -245,7 +245,7 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch, inFlig
         return {
           content: [{
             type: 'text',
-            text: `Project ${project.projectId} imported (status: ${project.status}, stage: ${json.stage?.type || 'queued'}).`,
+            text: `Project ${project.projectId} imported (status: ${project.status}${json.stage?.type ? `, stage: ${json.stage.type}` : ', ready for review'}).`,
           }],
           structuredContent: project,
         };

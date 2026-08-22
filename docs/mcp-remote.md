@@ -67,7 +67,7 @@ BRIGHT_CHATGPT_MAX_ACTIVE_PROJECTS=3
 When registered with ChatGPT, the server advertises 8 tools with root-level `securitySchemes: [{type: "noauth"}]`:
 
 1. `normalize_evidence` — Deterministic evidence validation and deduplication (read-only).
-2. `create_video_project` — Imports evidence bundle and queues project generation.
+2. `create_video_project` — Imports evidence and optionally a ChatGPT-created structured draft. A supplied draft is stored for review; omitting it queues Bright's generation stage.
 3. `get_video_project` — Queries current project status, draft, progress, and signed download URL.
 4. `edit_video_draft` — Modifies structured draft claims, script, voiceover, and scenes during `review_required`.
 5. `approve_video_project` — Explicit user review acknowledgment gate with payload hash attestation.
@@ -83,6 +83,29 @@ When a video project reaches `completed` status, `get_video_project` returns a s
 - The MCP server reverse proxies the download request to the backend `app` service after validating the token.
 - Top-level browser navigation (`Sec-Fetch-Dest: document` / `video`, `Sec-Fetch-Mode: navigate`) is permitted on signed download routes to allow direct browser playback and downloading.
 - Interactive browser document navigation to `/mcp` remains rejected (`403 HOST_NOT_ALLOWED`).
+
+## Send ChatGPT Evidence and Script to Bright
+
+Use this sequence from the refreshed ChatGPT Custom App:
+
+1. ChatGPT researches public sources and calls `normalize_evidence`.
+2. ChatGPT calls `create_video_project` with the returned `evidenceBundle` and, when it has authored the script, an optional complete `draft`.
+3. Bright returns the project at `review_required` with the stored current revision. ChatGPT must show that draft to the user and wait for an explicit review confirmation before it calls `approve_video_project`.
+4. Only after approval may ChatGPT call `start_video_render`.
+
+For a supplied `draft`, every `sourceIds` value in `claims`, `script`, and `scenes` must be an ID from `evidenceBundle.evidence[].id` returned by `normalize_evidence`. Bright replaces those evidence IDs with its own immutable source IDs before storage. Do not use URLs or guessed server IDs in `sourceIds`.
+
+The draft must satisfy the existing structured draft schema: `creatorName`, `summary`, `claims`, timed `script`, `voiceover.chunks`, `scenes`, and `render.duration`. ChatGPT should mark claims as unverified; Bright enforces this regardless of input. `scene.mediaUrl` is rejected because media is selected by Bright's managed media workflow. To use Bright's existing generation instead, omit `draft` and send only evidence.
+
+## Custom App Deployment Checklist
+
+1. Deploy the Compose stack with a strong, private `BRIGHT_INTEGRATION_TOKEN` (at least 16 characters) and keep `MCP_NOAUTH_WRITE_ENABLED=false`.
+2. Publish only the reverse-proxy paths `/mcp`, `/health`, and `/mcp/artifacts/:id/download` over HTTPS. Keep port `4190` loopback-only as shown above.
+3. Create or refresh the ChatGPT Custom App using the exact public MCP URL, for example `https://video.lanadesign.tech/mcp`.
+4. While writes are still disabled, verify the catalog exposes all eight tools listed above. If the catalog shows only `normalize_evidence`, refresh or replace the stale app registration; do not enable writes.
+5. For the bounded acceptance window, set `MCP_NOAUTH_WRITE_ENABLED=true`, restart the MCP service, and run the evidence-and-script flow through `review_required`. Restore it to `false` and withdraw public ingress after the window.
+
+This temporary `noauth` surface is for controlled internal acceptance only. It must not be left publicly reachable after testing.
 
 ## Capacity & Safety Controls
 

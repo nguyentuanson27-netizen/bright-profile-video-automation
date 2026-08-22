@@ -4,6 +4,7 @@ import {
   APPROVAL_MODES,
   PROJECT_ORIGINS,
   validateApproveProjectInput,
+  validateDraft,
   validateEditDraftInput,
   validateImportProjectInput,
   validateProjectStatusOutput,
@@ -34,6 +35,39 @@ const rejectManagedMediaFields = (draft) => {
       throw invalidRequest('scene.mediaUrl is managed by the media workflow and cannot be edited directly');
     }
   }
+};
+
+const prepareImportedDraft = ({draft, evidenceBundle, sources}) => {
+  const sourceIdsByUrl = new Map(sources.map((source) => [source.url, source.id]));
+  const sourceIdsByEvidenceId = new Map();
+  for (const evidence of evidenceBundle.evidence) {
+    const sourceIds = [];
+    for (const source of evidence.sources ?? []) {
+      const sourceId = sourceIdsByUrl.get(source.canonicalUrl || source.url);
+      if (sourceId && !sourceIds.includes(sourceId)) sourceIds.push(sourceId);
+    }
+    if (sourceIds.length === 0) {
+      throw invalidRequest(`Evidence ${evidence.id} has no imported source provenance`);
+    }
+    sourceIdsByEvidenceId.set(evidence.id, sourceIds);
+  }
+
+  const reviewDraft = structuredClone(draft);
+  const replaceEvidenceReferences = (entries = []) => {
+    for (const entry of entries) {
+      entry.sourceIds = entry.sourceIds.flatMap((evidenceId) => sourceIdsByEvidenceId.get(evidenceId) ?? []);
+    }
+  };
+  replaceEvidenceReferences(reviewDraft.claims);
+  replaceEvidenceReferences(reviewDraft.script);
+  replaceEvidenceReferences(reviewDraft.scenes);
+  rejectManagedMediaFields(reviewDraft);
+  for (const claim of reviewDraft.claims) {
+    claim.verified = false;
+    delete claim.overrideReason;
+  }
+  validateDraft(reviewDraft, {knownSourceIds: sources.map((source) => source.id)});
+  return reviewDraft;
 };
 
 export const createIntegrationsApi = ({
@@ -164,15 +198,17 @@ export const createIntegrationsApi = ({
 
     importProject(body) {
       const input = validateImportProjectInput(body);
-      const incomingFingerprint = hashPayload({
+      const handoffParameters = {
         creator: input.creator,
         topic: input.topic,
         instructions: input.instructions ?? '',
         evidenceBundle: input.evidenceBundle,
-      });
+      };
+      if (input.draft !== undefined) handoffParameters.draft = input.draft;
+      const incomingFingerprint = hashPayload(handoffParameters);
 
       const projectId = generatedId(projectIdFactory, 'projectIdFactory');
-      const stageId = generatedId(stageIdFactory, 'stageIdFactory');
+      const stageId = input.draft ? null : generatedId(stageIdFactory, 'stageIdFactory');
       const timestamp = new Date(now()).toISOString();
 
       // Extract sources from evidence items
@@ -201,12 +237,15 @@ export const createIntegrationsApi = ({
       }
 
       const sources = Array.from(sourceMap.values());
+      const importedDraft = input.draft
+        ? prepareImportedDraft({draft: input.draft, evidenceBundle: input.evidenceBundle, sources})
+        : null;
       const projectRecord = {
         id: projectId,
         creator: input.creator,
         topic: input.topic,
         instructions: input.instructions ?? '',
-        status: 'generating',
+        status: importedDraft ? 'review_required' : 'generating',
         origin: PROJECT_ORIGINS.CHATGPT_MCP,
         idempotencyKey: input.idempotencyKey,
         research: input.evidenceBundle,
@@ -217,12 +256,18 @@ export const createIntegrationsApi = ({
       const result = repos.projects.importProject({
         project: projectRecord,
         sources,
-        initialStage: {
+        initialStage: stageId ? {
           id: stageId,
           maxAttempts: generationMaxAttempts,
           createdAt: timestamp,
           availableAtMs: nowMs(),
-        },
+        } : null,
+        initialDraft: importedDraft ? {
+          id: generatedId(revisionIdFactory, 'revisionIdFactory'),
+          payload: importedDraft,
+          payloadHash: hashPayload(importedDraft),
+          createdAt: timestamp,
+        } : null,
         maxActiveProjects,
         incomingFingerprint,
       });

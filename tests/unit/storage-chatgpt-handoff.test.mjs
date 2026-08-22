@@ -12,11 +12,11 @@ import {APPROVAL_MODES, PROJECT_ORIGINS} from '../../domain/schemas.mjs';
 
 const tempDbPath = () => join(mkdtempSync(join(tmpdir(), 'bright-db-test-')), 'test.sqlite');
 
-test('schema v2 upgrades to v3 and supports origin, idempotency_key, and approval provenance', () => {
+test('schema v2 upgrades to v4 and supports ChatGPT handoff persistence', () => {
   const dbPath = tempDbPath();
   const db = openDatabase(dbPath);
   const version = migrateDatabase(db);
-  assert.equal(version, 3);
+  assert.equal(version, 4);
   db.close();
 });
 
@@ -32,6 +32,7 @@ test('project origin and idempotency_key survive database reopen', () => {
     topic: 'Career milestones',
     origin: PROJECT_ORIGINS.CHATGPT_MCP,
     idempotencyKey: 'chatgpt-run-999',
+    handoffFingerprint: 'a'.repeat(64),
     status: 'research_ready',
   });
 
@@ -42,6 +43,7 @@ test('project origin and idempotency_key survive database reopen', () => {
   const project = repos.projects.get('proj-chatgpt-1');
   assert.equal(project.origin, PROJECT_ORIGINS.CHATGPT_MCP);
   assert.equal(project.idempotencyKey, 'chatgpt-run-999');
+  assert.equal(project.handoffFingerprint, 'a'.repeat(64));
 
   const byKey = repos.projects.getByIdempotencyKey('chatgpt-run-999');
   assert.equal(byKey?.id, 'proj-chatgpt-1');

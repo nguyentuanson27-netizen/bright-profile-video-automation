@@ -231,6 +231,7 @@ export const importProjectInputSchema = {
     topic: {type: 'string', minLength: 1, maxLength: 500},
     instructions: {type: 'string', maxLength: 2000},
     evidenceBundle: {type: 'object'},
+    draft: draftSchema,
     idempotencyKey: {type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_.:-]+$'},
   },
 };
@@ -322,6 +323,25 @@ export const validateImportProjectInput = (input) => {
     assertEvidenceBundle(input.evidenceBundle);
   } catch (error) {
     throw invalidDomainData('Invalid evidenceBundle in import project input', error?.details);
+  }
+  if (input.draft !== undefined) {
+    assertShape(validateDraftShape, input.draft, 'import project draft');
+    if (input.draft.creatorName !== input.creator) {
+      throw invalidDomainData('Imported draft creator name must match the project creator');
+    }
+    const evidenceIds = new Set(input.evidenceBundle.evidence.map((item) => item.id));
+    const assertEvidenceReferences = (entries = [], label) => {
+      for (const entry of entries) {
+        for (const evidenceId of entry.sourceIds ?? []) {
+          if (!evidenceIds.has(evidenceId)) {
+            throw invalidDomainData(`${label} references unknown evidence: ${evidenceId}`);
+          }
+        }
+      }
+    };
+    assertEvidenceReferences(input.draft.claims, 'Imported draft claim');
+    assertEvidenceReferences(input.draft.script, 'Imported draft script');
+    assertEvidenceReferences(input.draft.scenes, 'Imported draft scene');
   }
   return input;
 };

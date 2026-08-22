@@ -5,11 +5,12 @@ import Database from 'better-sqlite3';
 
 import {AppError, ErrorCodes} from '../domain/errors.mjs';
 
-const LATEST_VERSION = 3;
+const LATEST_VERSION = 4;
 const MIGRATIONS = Object.freeze({
   1: readFileSync(new URL('./migrations/001_initial.sql', import.meta.url), 'utf8'),
   2: readFileSync(new URL('./migrations/002_research_api.sql', import.meta.url), 'utf8'),
   3: readFileSync(new URL('./migrations/003_chatgpt_handoff.sql', import.meta.url), 'utf8'),
+  4: readFileSync(new URL('./migrations/004_chatgpt_imported_draft.sql', import.meta.url), 'utf8'),
 });
 const nowIso = () => new Date().toISOString();
 const parseJson = (value) => JSON.parse(value);
@@ -60,6 +61,7 @@ const projectFromRow = (row) => row && ({
   status: row.status,
   origin: row.origin ?? 'standalone',
   idempotencyKey: row.idempotency_key ?? null,
+  handoffFingerprint: row.handoff_fingerprint ?? null,
   currentRevisionId: row.current_revision_id,
   approvedRevisionId: row.approved_revision_id,
   failedStage: row.failed_stage,
@@ -121,8 +123,8 @@ const downstreamStartedError = () => new AppError(
 
 export const createRepositories = (db) => {
   const insertProject = db.prepare(`
-    INSERT INTO projects (id, creator, topic, instructions, status, origin, idempotency_key, research_json, created_at, updated_at)
-    VALUES (@id, @creator, @topic, @instructions, @status, @origin, @idempotencyKey, @researchJson, @createdAt, @updatedAt)
+    INSERT INTO projects (id, creator, topic, instructions, status, origin, idempotency_key, handoff_fingerprint, research_json, created_at, updated_at)
+    VALUES (@id, @creator, @topic, @instructions, @status, @origin, @idempotencyKey, @handoffFingerprint, @researchJson, @createdAt, @updatedAt)
   `);
   const getProject = db.prepare('SELECT * FROM projects WHERE id = ?');
   const getProjectByIdempotencyKey = db.prepare('SELECT * FROM projects WHERE idempotency_key = ?');
@@ -231,7 +233,8 @@ export const createRepositories = (db) => {
   const importProjectTx = db.transaction(({
     project,
     sources = [],
-    initialStage,
+    initialStage = null,
+    initialDraft = null,
     maxActiveProjects = null,
     incomingFingerprint,
   }) => {
@@ -239,7 +242,7 @@ export const createRepositories = (db) => {
       const existingRow = getProjectByIdempotencyKey.get(project.idempotencyKey);
       if (existingRow) {
         const existing = projectFromRow(existingRow);
-        const existingFingerprint = hashPayload({
+        const existingFingerprint = existing.handoffFingerprint ?? hashPayload({
           creator: existing.creator,
           topic: existing.topic,
           instructions: existing.instructions ?? '',
@@ -277,9 +280,10 @@ export const createRepositories = (db) => {
     insertProject.run({
       ...project,
       instructions: project.instructions ?? '',
-      status: project.status ?? 'generating',
+      status: project.status ?? (initialDraft ? 'review_required' : 'generating'),
       origin: project.origin ?? 'chatgpt_mcp',
       idempotencyKey: project.idempotencyKey ?? null,
+      handoffFingerprint: incomingFingerprint ?? null,
       researchJson: project.research ? JSON.stringify(project.research) : null,
       createdAt,
       updatedAt,
@@ -295,6 +299,24 @@ export const createRepositories = (db) => {
       });
     }
 
+    if (initialDraft) {
+      insertRevision.run({
+        id: initialDraft.id,
+        projectId: project.id,
+        revisionNo: 1,
+        payloadJson: JSON.stringify(initialDraft.payload),
+        payloadHash: initialDraft.payloadHash,
+        createdAt: initialDraft.createdAt ?? createdAt,
+      });
+      setCurrentRevision.run(initialDraft.id, updatedAt, project.id);
+      return {
+        project: projectFromRow(getProject.get(project.id)),
+        stage: null,
+        isExisting: false,
+      };
+    }
+
+    if (!initialStage?.id) throw new TypeError('initialStage is required when no imported draft is provided');
     const stageId = initialStage.id;
     const stageCreatedAt = initialStage.createdAt ?? createdAt;
     const logicalKey = `${project.id}:initial:generation`;
@@ -338,6 +360,7 @@ export const createRepositories = (db) => {
       status: project.status ?? 'draft',
       origin: project.origin ?? 'standalone',
       idempotencyKey: project.idempotencyKey ?? null,
+      handoffFingerprint: project.handoffFingerprint ?? null,
       researchJson: project.research ? JSON.stringify(project.research) : null,
       createdAt,
       updatedAt,

@@ -179,7 +179,7 @@ Keep the existing read-only deterministic tool backward-compatible.
 
 ### `create_video_project`
 
-Purpose: import a normalized `EvidenceBundle` and start the existing backend generation path without rerunning research.
+Purpose: import a normalized `EvidenceBundle` and either preserve a ChatGPT-created structured draft for review or start the existing backend generation path without rerunning research.
 
 Representative input:
 
@@ -189,6 +189,7 @@ Representative input:
   "topic": "Career and major milestones",
   "instructions": "Create a concise factual creator profile.",
   "evidenceBundle": {},
+  "draft": {},
   "idempotencyKey": "chatgpt-run-..."
 }
 ```
@@ -201,8 +202,9 @@ Required behavior:
 - persist normalized evidence and source provenance;
 - persist origin `chatgpt_mcp`;
 - record imported research completion without calling the research provider;
-- transition to `research_ready`;
-- enqueue the existing generation stage;
+- when `draft` is omitted, transition to `research_ready` and enqueue the existing generation stage;
+- when `draft` is supplied, require the complete existing draft schema, require its `sourceIds` to reference normalized evidence IDs, replace those references with application-owned source IDs, force every claim to `verified=false`, and persist the revision directly at `review_required` with no generation stage;
+- reject caller-managed `scene.mediaUrl` values and never treat model-supplied verification fields as human approval;
 - repeated calls with the same idempotency key return the same project rather than creating duplicates.
 
 ### `get_video_project`
