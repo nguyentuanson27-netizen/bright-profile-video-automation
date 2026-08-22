@@ -663,7 +663,8 @@ test('Concurrent Mixed Admission Race (Create vs Retry vs Retry) at Cap Boundary
   ]);
 
   const outcomes = [createResult, retryResult1, retryResult2];
-  const succeeded = outcomes.filter((r) => r.status === 200 || r.status === 201);
+  const isAdmitted = (r, idx) => (idx === 0 ? r.status === 201 : r.status === 202);
+  const succeeded = outcomes.filter((r, idx) => isAdmitted(r, idx));
   const rejected = outcomes.filter((r) => r.status === 429 && r.json?.error?.code === 'NOAUTH_CAPACITY_REACHED');
 
   assert.equal(succeeded.length, 1, 'Exactly 1 concurrent admission must win the remaining slot');
