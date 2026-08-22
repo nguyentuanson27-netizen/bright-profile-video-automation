@@ -141,7 +141,7 @@ The noauth reset implementation (T17–T27) is complete, tested, and verified on
 - noauth write kill switch + finite edge limits: **implemented (`MCP_NOAUTH_WRITE_ENABLED=false` default, rate 20/min, max in-flight 2)**;
 - durable create/retry active-project admission: **implemented transactionally with single authoritative `BRIGHT_CHATGPT_MAX_ACTIVE_PROJECTS` (and fallback `MCP_MAX_ACTIVE_PROJECTS`)**;
 - deterministic noauth full E2E: **verified across all unit and integration test suites**;
-- exact-head CI after reset implementation: **observed green (workflow run #526 on commit `998d510`)**;
+- exact-head CI after reset implementation: **observed green (workflow run #32472214308 on commit `b759837`)**;
 - live ChatGPT noauth acceptance: **open (requires live test window)**;
 - T28 teardown: **open (requires post-acceptance write-disable and external ingress withdrawal)**.
 
@@ -213,7 +213,7 @@ Implementation and automated verification gates verified on exact-head CI:
 - [x] delegated E2E/delegation grants are deferred and unreachable from active MCP input.
 - [x] deterministic noauth full E2E reaches authoritative MP4 without claiming human-review proof.
 - [x] existing standalone/security/fencing/download regressions remain green.
-- [x] exact-head `Bright Profile Verification` succeeds after reset implementation (workflow run #526).
+- [x] exact-head `Bright Profile Verification` succeeds after reset implementation (workflow run #32472214308 on `b759837`).
 - [ ] live ChatGPT Path A reaches `review_required` and the tested client waits for user confirmation before approval/render.
 - [ ] live Path B records external review acknowledgment, renders, and retrieves a playable MP4.
 - [ ] T28 records ingress/write-window setup.
