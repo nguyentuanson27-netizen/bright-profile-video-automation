@@ -13,6 +13,80 @@ import {openDatabase, migrateDatabase, createRepositories} from './storage/db.mj
 import {createJobStore} from './storage/jobs.mjs';
 import {createJobRunner} from './worker/job-runner.mjs';
 
+const createDeferredProvider = (factory, method) => {
+  let provider;
+  return Object.freeze({
+    async [method](...args) {
+      // Imported ChatGPT drafts bypass research/generation and still need this worker for rendering.
+      provider ??= factory();
+      return provider[method](...args);
+    },
+  });
+};
+
+export const createDefaultWorkerHandlers = ({
+  config,
+  db,
+  repos,
+  provider,
+  researchProvider,
+  generationProvider,
+  mediaFetcher,
+  ttsGenerator,
+  renderer,
+  renderProbe,
+} = {}) => {
+  const resolvedResearchProvider = researchProvider ?? provider ?? createDeferredProvider(
+    () => createOpenAIResearchProvider({
+      apiKey: config.openai.apiKey,
+      model: config.openai.researchModel,
+      timeoutMs: config.openai.timeoutMs,
+      maxRetries: config.openai.maxRetries,
+    }),
+    'research',
+  );
+  const resolvedGenerationProvider = generationProvider ?? createDeferredProvider(
+    () => createOpenAIGenerationProvider({
+      apiKey: config.openai.apiKey,
+      model: config.openai.generationModel,
+      timeoutMs: config.openai.timeoutMs,
+      maxRetries: config.openai.maxRetries,
+    }),
+    'generate',
+  );
+  const researchService = createResearchService({
+    provider: resolvedResearchProvider,
+    fetchOptions: config.fetch,
+  });
+  const generationService = createGenerationService({provider: resolvedGenerationProvider});
+  const artifactStore = createArtifactStore(db);
+  const mediaService = createMediaIngestService({
+    fetcher: mediaFetcher ?? createSafeFetcher(),
+    dataDir: config.dataDir,
+    fetchOptions: config.fetch,
+  });
+  const nextMaxAttempts = config.worker.maxRetries + 1;
+  return Object.freeze({
+    research: createResearchStageHandler({repos, researchService}),
+    generation: createGenerationStageHandler({repos, generationService}),
+    media_ingest: createMediaIngestStageHandler({repos, artifactStore, service: mediaService, nextMaxAttempts}),
+    tts: createTtsStageHandler({
+      repos,
+      artifactStore,
+      dataDir: config.dataDir,
+      ...(ttsGenerator ? {generateTts: ttsGenerator} : {}),
+      nextMaxAttempts,
+    }),
+    render: createRenderStageHandler({
+      repos,
+      artifactStore,
+      dataDir: config.dataDir,
+      ...(renderer ? {renderer} : {}),
+      ...(renderProbe ? {probe: renderProbe} : {}),
+    }),
+  });
+};
+
 export const runWorker = async ({
   handlers,
   provider,
@@ -35,49 +109,18 @@ export const runWorker = async ({
 
   let resolvedHandlers = handlers;
   if (resolvedHandlers === undefined) {
-    const resolvedResearchProvider = researchProvider ?? provider ?? createOpenAIResearchProvider({
-      apiKey: config.openai.apiKey,
-      model: config.openai.researchModel,
-      timeoutMs: config.openai.timeoutMs,
-      maxRetries: config.openai.maxRetries,
+    resolvedHandlers = createDefaultWorkerHandlers({
+      config,
+      db,
+      repos,
+      provider,
+      researchProvider,
+      generationProvider,
+      mediaFetcher,
+      ttsGenerator,
+      renderer,
+      renderProbe,
     });
-    const resolvedGenerationProvider = generationProvider ?? createOpenAIGenerationProvider({
-      apiKey: config.openai.apiKey,
-      model: config.openai.generationModel,
-      timeoutMs: config.openai.timeoutMs,
-      maxRetries: config.openai.maxRetries,
-    });
-    const researchService = createResearchService({
-      provider: resolvedResearchProvider,
-      fetchOptions: config.fetch,
-    });
-    const generationService = createGenerationService({provider: resolvedGenerationProvider});
-    const artifactStore = createArtifactStore(db);
-    const mediaService = createMediaIngestService({
-      fetcher: mediaFetcher ?? createSafeFetcher(),
-      dataDir: config.dataDir,
-      fetchOptions: config.fetch,
-    });
-    const nextMaxAttempts = config.worker.maxRetries + 1;
-    resolvedHandlers = {
-      research: createResearchStageHandler({repos, researchService}),
-      generation: createGenerationStageHandler({repos, generationService}),
-      media_ingest: createMediaIngestStageHandler({repos, artifactStore, service: mediaService, nextMaxAttempts}),
-      tts: createTtsStageHandler({
-        repos,
-        artifactStore,
-        dataDir: config.dataDir,
-        ...(ttsGenerator ? {generateTts: ttsGenerator} : {}),
-        nextMaxAttempts,
-      }),
-      render: createRenderStageHandler({
-        repos,
-        artifactStore,
-        dataDir: config.dataDir,
-        ...(renderer ? {renderer} : {}),
-        ...(renderProbe ? {probe: renderProbe} : {}),
-      }),
-    };
   }
 
   const runner = createJobRunner({

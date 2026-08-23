@@ -13,8 +13,7 @@ The active PR #18 objective is now:
 ```text
 ChatGPT
   -> temporary no-auth MCP ingress
-  -> normalize/import EvidenceBundle
-  -> durable generation
+  -> normalize/import EvidenceBundle + structured draft
   -> review_required
   -> draft/evidence shown in ChatGPT
   -> user confirms/continues in the tested ChatGPT flow
@@ -121,9 +120,15 @@ Bright Evidence MCP
   | private/internal network
   v
 Bright Profile integration API
-  |-- transactional active-work admission
+  |-- persist normalized evidence + ChatGPT draft at review_required
   `-> durable worker -> media/TTS/render -> authoritative MP4
 ```
+
+### ChatGPT draft handoff and provider credentials
+
+The T17–T28 ChatGPT path imports both a normalized `EvidenceBundle` and a structured draft. It therefore reaches `review_required` without a server-side OpenAI call. The worker must remain available without `OPENAI_API_KEY` so it can process media, TTS, and render stages after the explicit approval.
+
+`OPENAI_API_KEY` is optional and retained solely for the independent standalone research/structured-generation flow. It is not a T28 discovery, Path A, Path B, or ChatGPT draft-handoff prerequisite.
 
 ### Current implementation truth
 
@@ -139,7 +144,8 @@ The noauth reset implementation (T17–T27) is complete and covered by automated
 - noauth write kill switch + finite edge limits: **implemented (`MCP_NOAUTH_WRITE_ENABLED=false` default, rate 20/min, max in-flight 2)**;
 - durable create/retry active-project admission: **implemented transactionally with single authoritative `BRIGHT_CHATGPT_MAX_ACTIVE_PROJECTS` (and fallback `MCP_MAX_ACTIVE_PROJECTS`)**;
 - deterministic noauth full E2E: **verified across all unit and integration test suites**;
-- automated CI verification: **the suite has 279 unit, integration, and container checks; the current PR/merge candidate must retain a green `Bright Profile Verification` result, recorded in PR Checks/review evidence**;
+- ChatGPT evidence + draft import: **does not require a server OpenAI key; worker defers standalone OpenAI-provider initialization until a standalone research/generation stage actually runs**;
+- automated CI verification: **unit, integration, and container checks are required; the current PR/merge candidate must retain a green `Bright Profile Verification` result, recorded in PR Checks/review evidence**;
 - live ChatGPT noauth acceptance: **open; the recorded pre-acceptance Gate 0 state has anonymous writes disabled and the external MCP ingress withdrawn. Mutable deployment evidence is retained in the PR/review record**;
 - T28 teardown: **pending after a bounded live acceptance window; it requires write-disable and external ingress withdrawal/verification**.
 

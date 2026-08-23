@@ -25,7 +25,7 @@ The generated draft is never auto-approved. Model-provided verification flags an
 
 ## Run with Docker Compose
 
-Copy the environment template and set the required provider credentials:
+Copy the environment template and set only the provider credentials required by the flow you run. A ChatGPT MCP import that includes evidence and a structured draft does not require `OPENAI_API_KEY`; that key is only for the retained standalone research/generation flow.
 
 ```sh
 cp .env.example .env
