@@ -1,8 +1,8 @@
 # Bright Profile — Current Project Status
 
-**Status date:** 2026-08-21  
+**Status date:** 2026-08-23
 **Authoritative scope:** completed standalone internal MVP baseline (T01-T16) plus an in-progress ChatGPT MCP video-handoff milestone (T17-T28) reset to temporary external `noauth`, private MCP-to-app service authentication, bounded anonymous writes, durable active-work admission, and external review acknowledgment semantics.  
-**Lifecycle:** standalone T01-T16 repository promotion complete; ChatGPT MCP implementation exists on PR #18 but the earlier OAuth/delegated-E2E contract is superseded; implementation rework, exact-head verification, and live ChatGPT acceptance remain open.
+**Lifecycle:** standalone T01-T16 repository promotion complete; ChatGPT MCP implementation exists on PR #18 but the earlier OAuth/delegated-E2E contract is superseded; implementation rework and exact-head verification are complete, while live ChatGPT acceptance and teardown remain open.
 
 ## Current objective
 
@@ -141,8 +141,8 @@ The noauth reset implementation (T17–T27) is complete, tested, and verified on
 - noauth write kill switch + finite edge limits: **implemented (`MCP_NOAUTH_WRITE_ENABLED=false` default, rate 20/min, max in-flight 2)**;
 - durable create/retry active-project admission: **implemented transactionally with single authoritative `BRIGHT_CHATGPT_MAX_ACTIVE_PROJECTS` (and fallback `MCP_MAX_ACTIVE_PROJECTS`)**;
 - deterministic noauth full E2E: **verified across all unit and integration test suites**;
-- automated CI verification: **all 278 unit, integration, and container gates pass; green CI on the current pull request / merge candidate HEAD is required and tracked in PR Checks / review records**;
-- live ChatGPT noauth acceptance: **open (requires live test window)**;
+- automated CI verification: **all 279 unit, integration, and container gates pass; `Bright Profile Verification` is green on candidate head `58c7c4a22b63c73c855e6bd51e930641f2067607`**;
+- live ChatGPT noauth acceptance: **open; Gate 0 is blocked until the previous external MCP ingress is withdrawn and that closure is recorded**;
 - T28 teardown: **open (requires post-acceptance write-disable and external ingress withdrawal)**.
 
 ## Required security/integrity boundaries after the reset
