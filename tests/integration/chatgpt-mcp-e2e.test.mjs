@@ -429,16 +429,24 @@ test('ChatGPT can import normalized evidence with its script as an unapproved re
       name: 'normalize_evidence',
       arguments: {
         subject: {name: 'Marques Brownlee'},
-        items: [{
-          url: 'https://www.youtube.com/@mkbhd',
-          claim: 'Marques Brownlee publishes technology videos on YouTube.',
-          category: 'career',
-        }],
+        items: [
+          {
+            url: 'https://www.youtube.com/@mkbhd',
+            claim: 'Marques Brownlee publishes technology videos on YouTube.',
+            category: 'career',
+          },
+          {
+            url: 'https://www.youtube.com/@mkbhd',
+            claim: 'Marques Brownlee is known for consumer technology reviews.',
+            category: 'career',
+          },
+        ],
       },
     },
   });
   const evidenceBundle = normalized.body.result.structuredContent;
-  const evidenceId = evidenceBundle.evidence[0].id;
+  assert.equal(evidenceBundle.evidence.length, 2);
+  const evidenceIds = evidenceBundle.evidence.map((evidence) => evidence.id);
 
   const create = await rpc(sys.mcpUrl, {
     jsonrpc: '2.0',
@@ -457,7 +465,7 @@ test('ChatGPT can import normalized evidence with its script as an unapproved re
           claims: [{
             id: 'claim-1',
             text: 'Marques Brownlee publishes technology videos on YouTube.',
-            sourceIds: [evidenceId],
+            sourceIds: evidenceIds,
             verified: true,
           }],
           script: [{
@@ -465,7 +473,7 @@ test('ChatGPT can import normalized evidence with its script as an unapproved re
             text: 'Meet Marques Brownlee, a technology creator on YouTube.',
             start: 0,
             duration: 5,
-            sourceIds: [evidenceId],
+            sourceIds: evidenceIds,
           }],
           voiceover: {
             chunks: [{
@@ -473,6 +481,7 @@ test('ChatGPT can import normalized evidence with its script as an unapproved re
               text: 'Meet Marques Brownlee, a technology creator on YouTube.',
               start: 0,
               duration: 5,
+              sourceIds: evidenceIds,
             }],
           },
           scenes: [{
@@ -480,7 +489,7 @@ test('ChatGPT can import normalized evidence with its script as an unapproved re
             type: 'hero',
             start: 0,
             duration: 5,
-            sourceIds: [evidenceId],
+            sourceIds: evidenceIds,
           }],
           render: {duration: 5},
         },
@@ -496,7 +505,11 @@ test('ChatGPT can import normalized evidence with its script as an unapproved re
   assert.equal(imported.currentRevision.draft.claims[0].verified, false);
 
   const source = sys.repos.sources.list(imported.projectId)[0];
-  assert.equal(imported.currentRevision.draft.script[0].sourceIds[0], source.id);
+  assert.equal(sys.repos.sources.list(imported.projectId).length, 1);
+  assert.deepEqual(imported.currentRevision.draft.claims[0].sourceIds, [source.id]);
+  assert.deepEqual(imported.currentRevision.draft.script[0].sourceIds, [source.id]);
+  assert.deepEqual(imported.currentRevision.draft.voiceover.chunks[0].sourceIds, [source.id]);
+  assert.deepEqual(imported.currentRevision.draft.scenes[0].sourceIds, [source.id]);
   assert.equal(sys.jobs.claimNext({workerId: 'unused-worker', allowedTypes: ['generation'], nowMs: Date.now(), leaseMs: 30_000}), null);
 });
 

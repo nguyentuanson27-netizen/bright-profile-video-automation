@@ -174,6 +174,17 @@ const assertKnownSource = (id, known) => {
   }
 };
 
+export const forEachDraftSourceEntry = (draft, visit) => {
+  for (const [label, entries] of [
+    ['claim', draft.claims],
+    ['script item', draft.script],
+    ['voiceover chunk', draft.voiceover?.chunks],
+    ['scene', draft.scenes],
+  ]) {
+    for (const entry of entries ?? []) visit(entry, label);
+  }
+};
+
 const assertWithinTimeline = (entry, duration, label) => {
   if (entry.start + entry.duration > duration + 1e-9) {
     throw invalidDomainData(`${label} falls outside render timeline`);
@@ -194,9 +205,10 @@ export const validateEvidence = (evidence, {knownSourceIds = []} = {}) => {
 export const validateDraft = (draft, {knownSourceIds = []} = {}) => {
   assertShape(validateDraftShape, draft, 'draft');
   const known = knownSet(knownSourceIds);
-  for (const claim of draft.claims) for (const sourceId of claim.sourceIds) assertKnownSource(sourceId, known);
+  forEachDraftSourceEntry(draft, (entry) => {
+    for (const sourceId of entry.sourceIds ?? []) assertKnownSource(sourceId, known);
+  });
   for (const item of draft.script) {
-    for (const sourceId of item.sourceIds) assertKnownSource(sourceId, known);
     assertWithinTimeline(item, draft.render.duration, `Script item ${item.id}`);
   }
   for (const chunk of draft.voiceover.chunks) assertWithinTimeline(chunk, draft.render.duration, `Voice chunk ${chunk.id}`);
@@ -330,18 +342,13 @@ export const validateImportProjectInput = (input) => {
       throw invalidDomainData('Imported draft creator name must match the project creator');
     }
     const evidenceIds = new Set(input.evidenceBundle.evidence.map((item) => item.id));
-    const assertEvidenceReferences = (entries = [], label) => {
-      for (const entry of entries) {
-        for (const evidenceId of entry.sourceIds ?? []) {
-          if (!evidenceIds.has(evidenceId)) {
-            throw invalidDomainData(`${label} references unknown evidence: ${evidenceId}`);
-          }
+    forEachDraftSourceEntry(input.draft, (entry, label) => {
+      for (const evidenceId of entry.sourceIds ?? []) {
+        if (!evidenceIds.has(evidenceId)) {
+          throw invalidDomainData(`Imported draft ${label} references unknown evidence: ${evidenceId}`);
         }
       }
-    };
-    assertEvidenceReferences(input.draft.claims, 'Imported draft claim');
-    assertEvidenceReferences(input.draft.script, 'Imported draft script');
-    assertEvidenceReferences(input.draft.scenes, 'Imported draft scene');
+    });
   }
   return input;
 };

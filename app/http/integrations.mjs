@@ -2,6 +2,7 @@ import {createHash, randomUUID} from 'node:crypto';
 import {AppError, ErrorCodes} from '../../domain/errors.mjs';
 import {
   APPROVAL_MODES,
+  forEachDraftSourceEntry,
   PROJECT_ORIGINS,
   validateApproveProjectInput,
   validateDraft,
@@ -53,14 +54,18 @@ const prepareImportedDraft = ({draft, evidenceBundle, sources}) => {
   }
 
   const reviewDraft = structuredClone(draft);
-  const replaceEvidenceReferences = (entries = []) => {
-    for (const entry of entries) {
-      entry.sourceIds = entry.sourceIds.flatMap((evidenceId) => sourceIdsByEvidenceId.get(evidenceId) ?? []);
+  forEachDraftSourceEntry(reviewDraft, (entry) => {
+    if (entry.sourceIds === undefined) return;
+    const sourceIds = new Set();
+    for (const evidenceId of entry.sourceIds) {
+      const mappedSourceIds = sourceIdsByEvidenceId.get(evidenceId);
+      if (!mappedSourceIds) {
+        throw invalidRequest(`Evidence ${evidenceId} has no imported source provenance`);
+      }
+      for (const sourceId of mappedSourceIds) sourceIds.add(sourceId);
     }
-  };
-  replaceEvidenceReferences(reviewDraft.claims);
-  replaceEvidenceReferences(reviewDraft.script);
-  replaceEvidenceReferences(reviewDraft.scenes);
+    entry.sourceIds = [...sourceIds];
+  });
   rejectManagedMediaFields(reviewDraft);
   for (const claim of reviewDraft.claims) {
     claim.verified = false;

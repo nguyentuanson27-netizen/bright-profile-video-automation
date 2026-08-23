@@ -79,6 +79,32 @@ test('validateImportProjectInput rejects missing or malformed fields and invalid
   );
 });
 
+test('validateImportProjectInput rejects voiceover provenance outside the normalized EvidenceBundle', () => {
+  const evidenceId = validBundle.evidence[0].id;
+  const draft = {
+    creatorName: 'Marques Brownlee',
+    summary: 'Summary text',
+    claims: [{id: 'c-1', text: 'Claim', sourceIds: [evidenceId], verified: true}],
+    script: [{id: 's-1', text: 'Script', start: 0, duration: 5, sourceIds: [evidenceId]}],
+    voiceover: {
+      chunks: [{id: 'v-1', text: 'Voiceover', start: 0, duration: 5, sourceIds: ['invented-evidence-id']}],
+    },
+    scenes: [{id: 'sc-1', type: 'hero', start: 0, duration: 5, sourceIds: [evidenceId]}],
+    render: {duration: 5},
+  };
+
+  assert.throws(
+    () => validateImportProjectInput({
+      creator: 'Marques Brownlee',
+      topic: 'Career milestones',
+      evidenceBundle: validBundle,
+      draft,
+      idempotencyKey: 'voiceover-provenance-reject',
+    }),
+    (error) => error.code === ErrorCodes.INVALID_DOMAIN_DATA,
+  );
+});
+
 test('validateApproveProjectInput enforces exact approval payload and rejects deferred/extra fields', () => {
   const validApproval = {
     projectId: 'proj-1',
@@ -142,5 +168,12 @@ test('validateEditDraftInput requires projectId, revisionId, expectedPayloadHash
       expectedPayloadHash: 'short',
     }, {knownSourceIds: ['src-1']}),
     (error) => error.code === ErrorCodes.INVALID_DOMAIN_DATA,
+  );
+
+  const unknownVoiceoverSource = structuredClone(validEdit);
+  unknownVoiceoverSource.draft.voiceover.chunks[0].sourceIds = ['invented-source-id'];
+  assert.throws(
+    () => validateEditDraftInput(unknownVoiceoverSource, {knownSourceIds: ['src-1']}),
+    (error) => error.code === ErrorCodes.UNKNOWN_SOURCE_REFERENCE,
   );
 });
