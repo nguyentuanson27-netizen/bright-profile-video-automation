@@ -49,8 +49,8 @@ User request in ChatGPT
   -> ChatGPT researches public sources
   -> normalize_evidence
   -> normalized EvidenceBundle
-  -> create_video_project/import into Bright Profile
-  -> durable generation
+  -> ChatGPT constructs a complete structured draft from normalized evidence IDs
+  -> create_video_project({ evidenceBundle, draft, ... })
   -> review_required
   -> show draft/evidence to user
   -> user confirms/continues in ChatGPT
@@ -67,7 +67,7 @@ The server guarantees a stop at `review_required` before any approval/render is 
 
 ## Product Rules
 
-1. The backend-driven workflow stops at `review_required` before approval/render.
+1. The T28 supported path supplies a complete structured draft and persists it directly at `review_required` before approval/render.
 2. The user may request edits while the project remains legally editable.
 3. Approval through MCP is an external review acknowledgment for this milestone, not authenticated human-review proof.
 4. MCP/model tool arguments cannot invent a trusted human identity or delegated authorization state.
@@ -80,17 +80,19 @@ The server guarantees a stop at `review_required` before any approval/render is 
 
 ## Supported User Flow
 
-### Default / normal flow
+### T28 supported / keyless flow
 
 ```text
 ChatGPT research
   -> normalize_evidence
-  -> create/import backend project
-  -> durable generation
+  -> construct a complete structured draft using normalized evidence IDs
+  -> create_video_project({ evidenceBundle, draft, ... })
   -> review_required
   -> show draft + evidence summary
   -> STOP
 ```
+
+This is the required Path A contract for T28. It does not invoke the backend research or structured-generation provider and does not require `OPENAI_API_KEY`. Omitting `draft` is not an acceptable fallback during T28.
 
 After the user requests edits or explicitly confirms/continues in the tested ChatGPT flow:
 
@@ -160,8 +162,8 @@ Bright Profile integration API
   |-- SQLite repositories
   |-- durable anonymous-capacity admission
   `-- durable worker stages
-       -> generation
-       -> media ingest
+       -> generation       # compatibility path only when draft is omitted
+       -> media ingest     # T28 resumes here after review acknowledgment
        -> TTS
        -> render
        -> MP4
@@ -179,7 +181,7 @@ Keep the existing read-only deterministic tool backward-compatible.
 
 ### `create_video_project`
 
-Purpose: import a normalized `EvidenceBundle` and either preserve a ChatGPT-created structured draft for review or start the existing backend generation path without rerunning research.
+Purpose: import a normalized `EvidenceBundle` and preserve a ChatGPT-created structured draft for review. The API also retains an omitted-draft backend-generation path for standalone/backward compatibility.
 
 Representative input:
 
@@ -206,6 +208,11 @@ Required behavior:
 - when `draft` is supplied, require the complete existing draft schema, require its `sourceIds` to reference normalized evidence IDs, replace those references with application-owned source IDs, force every claim to `verified=false`, and persist the revision directly at `review_required` with no generation stage;
 - reject caller-managed `scene.mediaUrl` values and never treat model-supplied verification fields as human approval;
 - repeated calls with the same idempotency key return the same project rather than creating duplicates.
+
+Milestone routing contract:
+
+- **T28 supported path:** `draft` is operationally required even though it remains optional in the public schema for compatibility. ChatGPT must construct and submit the complete draft; this path is keyless and goes directly to `review_required`.
+- **Compatibility path:** when `draft` is omitted, Bright Profile queues backend structured generation. That worker stage may require its configured OpenAI provider credentials, including `OPENAI_API_KEY`, and is not a T28 Path A/B acceptance path.
 
 ### `get_video_project`
 
@@ -455,30 +462,45 @@ Required coverage includes:
 14. Create idempotency prevents duplicate projects and replay does not consume a second capacity slot.
 15. Direct backend integration calls without the valid service token fail closed with zero mutation.
 16. Malformed/invalid EvidenceBundle fails closed.
-17. Backend-driven flow stops at `review_required` and does not auto-approve/start downstream work.
-18. Draft edits require the current revision/hash and preserve schema/source validation.
-19. Approval mode/actor/delegation data is not caller-selectable through MCP.
-20. Approval is recorded as external review acknowledgment; any legacy `user_reviewed` storage value is not asserted as authenticated human proof.
-21. Stale/illegal approval is rejected.
-22. Repeated render-start does not create duplicate downstream work.
-23. Retry is available only for durable retryable failures and obeys capacity admission when it reactivates work.
-24. Terminal failures cannot be retried.
-25. Cancel fences stale worker publication.
-26. Completed output download serves only the authoritative artifact.
-27. Expired/tampered/mismatched download tokens fail closed.
-28. Source prompt-injection-looking text remains inert data.
-29. Existing standalone UI/manual flow remains green.
-30. Existing MCP `normalize_evidence` behavior remains green.
-31. T28 teardown evidence proves both writes disabled and external MCP ingress withdrawn.
+17. Supplied-draft import reaches `review_required` without a generation job and does not auto-approve/start downstream work.
+18. Omitted-draft compatibility import reaches `research_ready`, queues backend generation, and is not treated as the keyless T28 path.
+19. Draft edits require the current revision/hash and preserve schema/source validation.
+20. Approval mode/actor/delegation data is not caller-selectable through MCP.
+21. Approval is recorded as external review acknowledgment; any legacy `user_reviewed` storage value is not asserted as authenticated human proof.
+22. Stale/illegal approval is rejected.
+23. Repeated render-start does not create duplicate downstream work.
+24. Retry is available only for durable retryable failures and obeys capacity admission when it reactivates work.
+25. Terminal failures cannot be retried.
+26. Cancel fences stale worker publication.
+27. Completed output download serves only the authoritative artifact.
+28. Expired/tampered/mismatched download tokens fail closed.
+29. Source prompt-injection-looking text remains inert data.
+30. Existing standalone UI/manual flow remains green.
+31. Existing MCP `normalize_evidence` behavior remains green.
+32. T28 teardown evidence proves both writes disabled and external MCP ingress withdrawn.
 
 ## Deterministic End-to-End Regression
 
-The current milestone's deterministic E2E path is:
+Automated verification deliberately covers two distinct paths.
+
+The supported T28 handoff contract regression is:
 
 ```text
 candidate evidence
   -> normalize_evidence
-  -> import EvidenceBundle
+  -> construct complete structured draft
+  -> import EvidenceBundle + draft
+  -> review_required with no generation job
+  -> prove imported source references are application-owned
+  -> prove no backend auto-approval/render yet
+```
+
+The retained compatibility/lifecycle E2E is:
+
+```text
+candidate evidence
+  -> normalize_evidence
+  -> import EvidenceBundle without draft
   -> durable generation fake
   -> review_required
   -> prove no backend auto-approval/render yet
@@ -490,7 +512,7 @@ candidate evidence
   -> completed authoritative downloadable MP4
 ```
 
-The deterministic test proves server lifecycle and tool behavior; it does **not** prove a real human reviewed the draft. Human/client confirmation behavior is verified only by T28 live acceptance.
+Together these regressions prove the supplied-draft handoff and the retained backend-generation lifecycle. The compatibility E2E is not the T28 client sequence. Neither automated test proves a real human reviewed the draft; human/client confirmation behavior is verified only by T28 live acceptance.
 
 The regression also proves representative restart/idempotency/fencing, kill-switch, and transactional no-auth capacity invariants rather than only the happy path.
 
@@ -504,13 +526,14 @@ CI is necessary but not sufficient. Before marking this milestone complete, reco
 user asks for a creator video
   -> ChatGPT researches public sources
   -> actual normalize_evidence call
-  -> actual create_video_project call
+  -> ChatGPT constructs a complete structured draft using normalized evidence IDs
+  -> actual create_video_project call containing EvidenceBundle + draft
   -> backend reaches review_required
   -> draft/evidence is shown in ChatGPT
   -> ChatGPT does not invoke approval/render before user confirmation
 ```
 
-This proves the tested ChatGPT client behavior, not an enforceable server guarantee against arbitrary anonymous callers.
+The acceptance record must prove that the `create_video_project` input contained a complete `draft`. If the client omits it and enters backend generation, stop and classify Path A as failed/blocked rather than relying on provider credentials. This proves the tested ChatGPT client behavior, not an enforceable server guarantee against arbitrary anonymous callers.
 
 ### Acceptance B: review-acknowledged completion
 
@@ -603,8 +626,10 @@ Do not log provider API keys, integration service tokens, Google credentials, fu
 - [ ] ChatGPT public research -> `normalize_evidence` works live without OAuth linking.
 - [ ] ChatGPT can persist that normalized EvidenceBundle into Bright Profile through no-auth MCP during an explicit write-enabled window.
 - [ ] Imported projects do not rerun the backend research provider.
-- [ ] Generation uses imported normalized evidence/source records.
-- [ ] Backend-driven flow stops at `review_required` and does not auto-approve/render.
+- [ ] ChatGPT constructs and submits a complete structured draft whose provenance uses normalized evidence IDs.
+- [ ] The T28 supplied-draft import reaches `review_required` without backend generation or `OPENAI_API_KEY`.
+- [ ] The retained draft-omitted compatibility path is documented separately and may require the backend OpenAI generation provider.
+- [ ] The supplied-draft flow stops at `review_required` and does not auto-approve/render.
 - [ ] Live ChatGPT acceptance shows the tested client waits for user confirmation before invoking approval.
 - [ ] Approval is represented as external review acknowledgment, not authenticated human proof.
 - [ ] Caller cannot select actor/mode/delegation fields.

@@ -3,7 +3,7 @@
 **Primary spec:** `docs/specs/chatgpt-mcp-e2e-video-handoff.md`  
 **Baseline status:** `docs/project-status.md`  
 **Completed predecessor milestone:** standalone T01-T16 on `main`  
-**Plan status:** Approved reset direction; implementation pending  
+**Plan status:** T17-T27 implemented and CI-verified; T28 live acceptance open
 **Reset date:** 2026-08-21  
 **Task range retained:** T17-T28
 
@@ -16,7 +16,9 @@ ChatGPT
   -> no-auth MCP
   -> Bright MCP tool surface
   -> private authenticated Bright Profile integration API
-  -> durable generation/review/render pipeline
+  -> supplied ChatGPT draft at review_required
+  -> user checkpoint
+  -> durable media/TTS/render pipeline
   -> authoritative MP4
 ```
 
@@ -37,7 +39,8 @@ The no-auth reset removes those root causes instead of patching individual OAuth
 - explicit ChatGPT-facing MCP `noauth` transport;
 - existing video handoff tools;
 - private MCP -> Bright Profile HTTP integration protected by `BRIGHT_INTEGRATION_TOKEN`;
-- imported EvidenceBundle -> durable generation;
+- imported EvidenceBundle + complete ChatGPT draft -> direct `review_required` for the supported T28 path;
+- omitted-draft backend generation retained only as a compatibility path;
 - backend stop at `review_required`;
 - draft edit and external review acknowledgment approval;
 - render/retry/cancel using existing durable backend semantics;
@@ -219,14 +222,15 @@ Verify migration/reopen behavior and ensure no OAuth client/session/token persis
 
 ### T20 — Retain private backend EvidenceBundle import + durable capacity admission
 
-**Outcome:** existing import path remains authoritative/service-authenticated and a new ChatGPT-origin project cannot exceed the durable active-work cap.
+**Outcome:** existing import path remains authoritative/service-authenticated, supports the T28 draft handoff and the omitted-draft compatibility path, and a new ChatGPT-origin project cannot exceed the durable active-work cap.
 
 Requirements:
 
 - backend revalidates EvidenceBundle;
 - same idempotency key returns the same project before allocating a second capacity slot;
 - imported research does not call backend research provider;
-- project enters `research_ready` and generation is queued;
+- when a complete draft is supplied, validate/remap its evidence references and persist directly at `review_required` without a generation job;
+- when draft is omitted, enter `research_ready` and queue generation as a compatibility path that may require the backend OpenAI provider;
 - state survives reopen;
 - for a genuinely new project, the backend checks current active ChatGPT-origin count and creates/enqueues the project in the **same SQLite transaction**;
 - if the cap is full, return `NOAUTH_CAPACITY_REACHED` and commit no new project/job;
@@ -320,7 +324,7 @@ T28 closure additionally requires proving the remote MCP ingress was withdrawn a
 
 ### T27 — Deterministic noauth full E2E + adversarial regression
 
-Positive path:
+Supported T28 contract regression:
 
 ```text
 start app + MCP
@@ -328,7 +332,21 @@ start app + MCP
  -> prove writes disabled by default
  -> enable writes in test config
  -> normalize_evidence
- -> create_video_project
+ -> construct complete structured draft from normalized evidence IDs
+ -> create_video_project({ evidenceBundle, draft, ... })
+ -> review_required with no generation job
+ -> prove no backend auto-approval/render
+```
+
+Retained compatibility/lifecycle E2E:
+
+```text
+start app + MCP
+ -> initialize without Authorization
+ -> prove writes disabled by default
+ -> enable writes in test config
+ -> normalize_evidence
+ -> create_video_project without draft
  -> generation -> review_required
  -> prove no backend auto-approval/render
  -> invoke approve_video_project
@@ -354,7 +372,7 @@ Adversarial/recovery coverage must include:
 - signed-download tamper/expiry;
 - source prompt-injection-looking content as inert data.
 
-The deterministic E2E does **not** prove a real human reviewed the draft; human/client confirmation timing belongs to T28.
+The compatibility E2E verifies the retained backend generation lifecycle; it is not the T28 client path. Automated verification does **not** prove a real human reviewed the draft; human/client confirmation timing belongs to T28.
 
 ### T28 — Live ChatGPT bounded noauth acceptance + docs/ship closure
 
@@ -370,11 +388,14 @@ Path A:
 ```text
 ChatGPT connects without OAuth linking
  -> normalize_evidence
- -> create_video_project
+ -> construct complete structured draft from normalized evidence IDs
+ -> create_video_project({ evidenceBundle, draft, ... })
  -> review_required
  -> draft shown
  -> ChatGPT does not call approval/render before user action
 ```
+
+Path A is keyless: it must not omit `draft` or depend on the compatibility generation path/`OPENAI_API_KEY`.
 
 Path B:
 

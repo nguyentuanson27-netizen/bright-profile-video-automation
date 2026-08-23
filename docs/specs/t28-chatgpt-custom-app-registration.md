@@ -73,8 +73,9 @@ Required evidence:
    cancel_video_project
    ```
 
-5. Discovery is performed while anonymous writes are still disabled.
-6. If the client sees only `normalize_evidence`, an older/stale app catalog, or fewer than all eight tools, T28 is **BLOCKED** and the write-enabled acceptance window must not be opened.
+5. The discovered `create_video_project` input schema exposes `draft`; the field remains optional only for API compatibility but is mandatory for the T28 call.
+6. Discovery is performed while anonymous writes are still disabled.
+7. If the client sees only `normalize_evidence`, an older/stale app catalog, fewer than all eight tools, or a stale create schema without `draft`, T28 is **BLOCKED** and the write-enabled acceptance window must not be opened.
 
 The client UI wording may vary (for example Create App, Scan Tools, Refresh Actions, or equivalent). T28 acceptance depends on the observed eight-tool catalog, not on a specific UI label.
 
@@ -100,21 +101,26 @@ deploy exact HEAD/image
 
 Do not enable anonymous writes merely to test whether ChatGPT can discover the tool catalog. Tool discovery is a prerequisite and must be proven first.
 
-## Path A remains unchanged
+## Path A uses the supplied-draft contract
 
 After the discovery gate passes:
 
 ```text
 ChatGPT
   -> normalize_evidence
-  -> create_video_project exactly once
+  -> construct a complete structured draft from normalized evidence IDs
+  -> create_video_project({ evidenceBundle, draft, ... }) exactly once
   -> get_video_project until review_required
   -> show draft/evidence
   -> STOP
 ```
 
+This is the supported keyless T28 path. If the call omits `draft`, the backend-generation compatibility branch may require `OPENAI_API_KEY`; that branch is not Path A and the acceptance attempt must stop rather than adding provider credentials.
+
 Pass evidence must show that before a separate explicit user-confirmation message:
 
+- the create call contained both the normalized `evidenceBundle` and a complete `draft`;
+- no backend generation stage/provider call occurred;
 - `approve_video_project` was not invoked;
 - `start_video_render` was not invoked;
 - no downstream media/TTS/render work started, where observable.
@@ -171,6 +177,7 @@ T28 may close only when all original T28 criteria **and** the following are true
 - the actual ChatGPT custom app used in the live test is identified in evidence;
 - it points to the intended Bright Profile MCP acceptance endpoint;
 - its refreshed/scanned catalog exposes all eight required tools before writes are enabled;
+- the discovered create schema exposes `draft`, and the Path A create call actually supplies it;
 - stale/read-only app registration is not used as a substitute for the PR #18 MCP app;
 - Path A and Path B are executed through that discovered tool surface;
 - mandatory teardown is observed and recorded after the final acceptance window.

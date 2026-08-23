@@ -17,6 +17,8 @@ T01-T16 belong to the completed standalone MVP baseline and remain covered by `t
 - No-auth kill switch and finite edge capacity controls are mandatory.
 - `MCP_MAX_ACTIVE_PROJECTS` is a **durable backend invariant**, not a process-local MCP precheck.
 - T28 teardown requires **both** write disable and external MCP ingress withdrawal.
+- T28 Path A requires a complete ChatGPT-supplied structured draft and does not use backend generation or `OPENAI_API_KEY`.
+- Omitting `draft` retains a backend-generation compatibility path only; it is not valid T28 acceptance evidence.
 - Do not mark live/runtime gates complete from unit/integration tests alone.
 
 ---
@@ -103,7 +105,8 @@ T01-T16 belong to the completed standalone MVP baseline and remain covered by `t
 - [x] imported origin is `chatgpt_mcp`.
 - [x] same idempotency key maps to the same project.
 - [x] imported project skips backend research provider.
-- [x] imported project reaches `research_ready` and queues generation.
+- [x] supplied complete draft is validated/remapped and persisted directly at `review_required` without a generation job.
+- [x] omitted-draft compatibility import reaches `research_ready` and queues generation; this is not the T28 supported path.
 - [x] direct calls without valid `BRIGHT_INTEGRATION_TOKEN` fail closed with zero mutation after noauth reset.
 - [x] idempotent replay returns the existing project without consuming another active slot.
 - [x] for a genuinely new project, active-project count check + project creation + first active work enqueue happen in the same SQLite transaction.
@@ -151,7 +154,7 @@ T01-T16 belong to the completed standalone MVP baseline and remain covered by `t
 - [x] project status can expose current draft/revision/hash.
 - [x] draft edits are revision/hash fenced.
 - [x] backend approval path exists.
-- [x] backend-driven flow is explicitly documented/tested to stop at `review_required`.
+- [x] supplied-draft flow is explicitly documented/tested to stop at `review_required` without backend generation.
 - [x] backend itself never auto-approves or starts downstream work at `review_required`.
 - [ ] live ChatGPT Path A proves the tested client does not invoke approval/render before user confirmation.
 - [x] `approve_video_project` records external review acknowledgment semantics.
@@ -262,18 +265,24 @@ Keep/add/verify:
 
 **Status:** COMPLETED & CI-VERIFIED
 
-Required positive path:
+Required supported T28 contract coverage:
 
 - [x] start app + MCP.
 - [x] initialize MCP without Authorization.
 - [x] prove writes are disabled by default.
 - [x] start test instance/config with writes explicitly enabled.
 - [x] `normalize_evidence`.
-- [x] `create_video_project`.
-- [x] generation completes.
+- [x] construct a complete structured draft whose `sourceIds` use normalized evidence IDs.
+- [x] `create_video_project` receives both `evidenceBundle` and `draft`.
+- [x] supplied-draft import creates no generation job.
 - [x] `get_video_project` reaches `review_required`.
 - [x] prove zero backend auto-approval before explicit tool invocation.
 - [x] prove zero downstream media/render before explicit approval/render tool calls.
+
+Retained compatibility/lifecycle E2E coverage:
+
+- [x] omitted-draft `create_video_project` queues generation.
+- [x] compatibility generation completes and reaches `review_required`.
 - [x] test harness invokes `approve_video_project`.
 - [x] external review acknowledgment is recorded; any legacy `user_reviewed` storage value is treated only as compatibility representation.
 - [x] `start_video_render`.
@@ -332,7 +341,9 @@ Verification:
 
 - [ ] connect ChatGPT without OAuth linking/auth setup.
 - [ ] actual `normalize_evidence` tool call occurs.
-- [ ] actual `create_video_project` tool call occurs.
+- [ ] ChatGPT constructs a complete structured draft using normalized evidence IDs.
+- [ ] actual `create_video_project` call contains both `evidenceBundle` and `draft`.
+- [ ] no backend generation stage/provider call is used.
 - [ ] backend reaches `review_required`.
 - [ ] draft/evidence is shown in ChatGPT.
 - [ ] ChatGPT does not invoke approval before user confirmation.

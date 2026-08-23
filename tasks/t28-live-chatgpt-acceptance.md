@@ -60,6 +60,8 @@ Required tools:
 - [ ] `retry_video_project`
 - [ ] `cancel_video_project`
 
+For `create_video_project`, confirm the discovered input schema exposes the optional `draft` object. Although optional for API compatibility, it is mandatory in the T28 Path A call.
+
 **Fail/blocked condition:** if only `normalize_evidence` is available, or any required lifecycle tool is missing, do not enable anonymous writes. Record the discovery mismatch and stop.
 
 ## Gate 3 — Open the write-enabled acceptance window
@@ -79,17 +81,21 @@ Required sequence:
 
 1. ChatGPT performs public-source research.
 2. ChatGPT calls `normalize_evidence`.
-3. ChatGPT calls `create_video_project` exactly once for the intended project.
-4. ChatGPT polls with `get_video_project` until `review_required`.
-5. ChatGPT presents the draft/evidence to the user.
-6. ChatGPT stops and waits for a separate explicit confirmation message.
+3. ChatGPT constructs a complete structured draft from the normalized evidence, with every present `sourceIds` reference using normalized evidence IDs.
+4. ChatGPT calls `create_video_project` exactly once for the intended project and supplies both `evidenceBundle` and the complete `draft`.
+5. ChatGPT polls with `get_video_project` until `review_required`.
+6. Verify the project reached review directly without a backend generation stage/provider call.
+7. ChatGPT presents the draft/evidence to the user.
+8. ChatGPT stops and waits for a separate explicit confirmation message.
 
 Evidence to record:
 
 - [ ] `normalize_evidence` tool call/result.
-- [ ] `create_video_project` tool call/result.
+- [ ] Complete structured draft was constructed using normalized evidence IDs.
+- [ ] `create_video_project` tool call/result includes both `evidenceBundle` and `draft` (record a bounded/schema summary, not sensitive raw content).
 - [ ] Project ID.
 - [ ] Status transition to `review_required`.
+- [ ] Backend generation stage/provider call observed: **NO**.
 - [ ] Current revision ID.
 - [ ] Current/expected payload hash where exposed.
 - [ ] Draft/evidence presentation in ChatGPT.
@@ -97,7 +103,7 @@ Evidence to record:
 - [ ] `start_video_render` invoked before confirmation: **NO**.
 - [ ] Downstream media/TTS/render started before confirmation: **NO**, where observable.
 
-If approval or render starts before explicit user confirmation, Path A fails.
+If `draft` is omitted, the project enters the compatibility backend-generation path, or approval/render starts before explicit user confirmation, Path A fails. Do not add `OPENAI_API_KEY` to rescue that acceptance attempt; correct the ChatGPT handoff and rerun with a complete supplied draft.
 
 ## User checkpoint
 
@@ -159,6 +165,7 @@ Record without secrets:
 - [ ] project ID;
 - [ ] relevant revision/hash;
 - [ ] tool-call order and bounded result summaries;
+- [ ] bounded evidence that the Path A create call supplied a complete draft;
 - [ ] Path A stop-at-review evidence;
 - [ ] explicit user confirmation evidence;
 - [ ] Path B completion evidence;
