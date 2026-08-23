@@ -2,7 +2,7 @@
 
 **Status date:** 2026-08-23
 **Authoritative scope:** completed standalone internal MVP baseline (T01-T16) plus an in-progress ChatGPT MCP video-handoff milestone (T17-T28) reset to temporary external `noauth`, private MCP-to-app service authentication, bounded anonymous writes, durable active-work admission, and external review acknowledgment semantics.  
-**Lifecycle:** standalone T01-T16 repository promotion complete; ChatGPT MCP implementation exists on PR #18 but the earlier OAuth/delegated-E2E contract is superseded; implementation rework and exact-head verification are complete, while live ChatGPT acceptance and teardown remain open.
+**Lifecycle:** standalone T01-T16 repository promotion complete; ChatGPT MCP implementation exists on PR #18 but the earlier OAuth/delegated-E2E contract is superseded. Implementation rework is complete; live ChatGPT acceptance and post-acceptance teardown remain open.
 
 ## Current objective
 
@@ -127,9 +127,7 @@ Bright Profile integration API
 
 ### Current implementation truth
 
-### Current implementation truth
-
-The noauth reset implementation (T17–T27) is complete, tested, and verified on exact-head CI:
+The noauth reset implementation (T17–T27) is complete and covered by automated verification. Before merge, `Bright Profile Verification` must be green for the current PR/merge-candidate HEAD; mutable commit SHA and workflow-run evidence belong in PR Checks and review records, not this status document.
 
 - standalone T01-T16: **complete and promoted**;
 - ChatGPT handoff domain/import/render/download foundations: **implemented and verified in CI**;
@@ -141,9 +139,9 @@ The noauth reset implementation (T17–T27) is complete, tested, and verified on
 - noauth write kill switch + finite edge limits: **implemented (`MCP_NOAUTH_WRITE_ENABLED=false` default, rate 20/min, max in-flight 2)**;
 - durable create/retry active-project admission: **implemented transactionally with single authoritative `BRIGHT_CHATGPT_MAX_ACTIVE_PROJECTS` (and fallback `MCP_MAX_ACTIVE_PROJECTS`)**;
 - deterministic noauth full E2E: **verified across all unit and integration test suites**;
-- automated CI verification: **all 279 unit, integration, and container gates pass; `Bright Profile Verification` is green on candidate head `58c7c4a22b63c73c855e6bd51e930641f2067607`**;
-- live ChatGPT noauth acceptance: **open; Gate 0 is blocked until the previous external MCP ingress is withdrawn and that closure is recorded**;
-- T28 teardown: **open (requires post-acceptance write-disable and external ingress withdrawal)**.
+- automated CI verification: **the suite has 279 unit, integration, and container checks; the current PR/merge candidate must retain a green `Bright Profile Verification` result, recorded in PR Checks/review evidence**;
+- live ChatGPT noauth acceptance: **open; the recorded pre-acceptance Gate 0 state has anonymous writes disabled and the external MCP ingress withdrawn. Mutable deployment evidence is retained in the PR/review record**;
+- T28 teardown: **pending after a bounded live acceptance window; it requires write-disable and external ingress withdrawal/verification**.
 
 ## Required security/integrity boundaries after the reset
 
@@ -198,7 +196,7 @@ These statements do not claim the waived browser walkthrough passed and do not c
 
 ## Current verification gates for PR #18
 
-Implementation and automated verification gates verified on exact-head CI:
+Implementation gates are covered by automated checks. The current PR/merge-candidate HEAD must have a green `Bright Profile Verification` result in PR Checks before merge:
 
 - [x] MCP initialize/tool discovery work without Authorization.
 - [x] active tools advertise `noauth` (root-level `securitySchemes: [{type: 'noauth'}]`).
@@ -219,7 +217,7 @@ Implementation and automated verification gates verified on exact-head CI:
 - [ ] T28 records ingress/write-window setup.
 - [ ] T28 restores write-disabled state **and** withdraws/verifies external MCP ingress unreachable.
 - [ ] project-wide Definition of Done is checked.
-- [x] final docs and PR body reflect observed implementation, architectural, and contract truth.
+- [ ] final docs and PR body reflect final live-acceptance and teardown evidence.
 
 ## Traceability
 
