@@ -47,7 +47,7 @@ export const matchRoute = (method, pathname) => {
   }
 
   const integrationArtifact = pathname.match(integrationArtifactPattern);
-  if (integrationArtifact && method === 'GET') {
+  if (integrationArtifact && ['GET', 'HEAD'].includes(method)) {
     const id = decodeId(integrationArtifact[1]);
     return id ? {name: 'integrations.chatgpt.artifacts.download', id} : null;
   }

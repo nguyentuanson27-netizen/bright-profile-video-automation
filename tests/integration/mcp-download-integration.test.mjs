@@ -144,9 +144,22 @@ test('GET /api/integrations/chatgpt/artifacts/:artifactId/download streams autho
   });
   assert.equal(signedRes.status, 200);
   assert.equal(signedRes.headers['content-type'], 'video/mp4');
+  assert.equal(signedRes.headers['content-disposition'], 'inline; filename="bright-profile.mp4"');
   assert.equal(signedRes.buffer.toString('utf8'), 'fake mp4 video stream bytes for testing');
 
-  // 3. Download with invalid token fails
+  // 3. HEAD returns playback metadata without streaming the artifact body.
+  const signedHeadRes = await request({
+    port,
+    method: 'HEAD',
+    path: `/api/integrations/chatgpt/artifacts/${art.id}/download?token=${encodeURIComponent(queryToken)}`,
+  });
+  assert.equal(signedHeadRes.status, 200);
+  assert.equal(signedHeadRes.headers['content-type'], 'video/mp4');
+  assert.equal(signedHeadRes.headers['content-length'], String(videoContent.length));
+  assert.equal(signedHeadRes.headers['content-disposition'], 'inline; filename="bright-profile.mp4"');
+  assert.equal(signedHeadRes.buffer.length, 0);
+
+  // 4. Download with invalid token fails
   const invalidRes = await request({
     port,
     path: `/api/integrations/chatgpt/artifacts/${art.id}/download?token=invalid.token`,
@@ -154,7 +167,7 @@ test('GET /api/integrations/chatgpt/artifacts/:artifactId/download streams autho
   assert.equal(invalidRes.status, 401);
   assert.equal(invalidRes.json?.error?.code, 'DOWNLOAD_TOKEN_INVALID');
 
-  // 4. Download with token for wrong project fails
+  // 5. Download with token for wrong project fails
   const wrongProjectToken = generateDownloadToken({
     projectId: 'wrong-proj-999',
     revisionId: 'rev-down-1',
@@ -169,7 +182,7 @@ test('GET /api/integrations/chatgpt/artifacts/:artifactId/download streams autho
   assert.equal(wrongProjRes.status, 401);
   assert.equal(wrongProjRes.json?.error?.code, 'DOWNLOAD_TOKEN_INVALID');
 
-  // 5. Download with token for wrong revision fails
+  // 6. Download with token for wrong revision fails
   const wrongRevToken = generateDownloadToken({
     projectId: 'proj-down-1',
     revisionId: 'wrong-rev-999',
@@ -184,7 +197,7 @@ test('GET /api/integrations/chatgpt/artifacts/:artifactId/download streams autho
   assert.equal(wrongRevRes.status, 401);
   assert.equal(wrongRevRes.json?.error?.code, 'DOWNLOAD_TOKEN_INVALID');
 
-  // 6. Download with expired token fails
+  // 7. Download with expired token fails
   const expiredToken = generateDownloadToken({
     projectId: 'proj-down-1',
     revisionId: 'rev-down-1',
@@ -199,7 +212,7 @@ test('GET /api/integrations/chatgpt/artifacts/:artifactId/download streams autho
   assert.equal(expiredRes.status, 401);
   assert.equal(expiredRes.json?.error?.code, 'DOWNLOAD_TOKEN_EXPIRED');
 
-  // 7. Download without any auth fails
+  // 8. Download without any auth fails
   const unauthRes = await request({
     port,
     path: `/api/integrations/chatgpt/artifacts/${art.id}/download`,
@@ -374,7 +387,19 @@ test('Public MCP Server streams authoritative MP4 through /artifacts/:artifactId
 
   assert.equal(proxyRes.status, 200);
   assert.equal(proxyRes.headers['content-type'], 'video/mp4');
+  assert.equal(proxyRes.headers['content-disposition'], 'inline; filename="bright-profile.mp4"');
   assert.equal(proxyRes.buffer.toString('utf8'), 'streamed via public mcp proxy');
+
+  const proxyHeadRes = await request({
+    port: mcpPort,
+    method: 'HEAD',
+    path: `/artifacts/art-mcp-down-1/download?token=${encodeURIComponent(queryToken)}`,
+  });
+  assert.equal(proxyHeadRes.status, 200);
+  assert.equal(proxyHeadRes.headers['content-type'], 'video/mp4');
+  assert.equal(proxyHeadRes.headers['content-length'], String(videoContent.length));
+  assert.equal(proxyHeadRes.headers['content-disposition'], 'inline; filename="bright-profile.mp4"');
+  assert.equal(proxyHeadRes.buffer.length, 0);
 });
 
 test('Public MCP Server enforces rate limiting on public download proxy', async (t) => {

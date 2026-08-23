@@ -71,15 +71,19 @@ const json = (res, status, value, requestId) => {
   res.end(body);
 };
 
-const sendOutput = (res, output, requestId) => {
+const sendOutput = (res, output, requestId, {includeBody = true} = {}) => {
   res.writeHead(200, {
     'content-type': output.mimeType,
     'content-length': output.byteSize,
-    'content-disposition': 'attachment; filename="bright-profile.mp4"',
+    'content-disposition': 'inline; filename="bright-profile.mp4"',
     'cache-control': 'no-store',
     'x-content-type-options': 'nosniff',
     ...(requestId ? {'x-request-id': requestId} : {}),
   });
+  if (!includeBody) {
+    res.end();
+    return;
+  }
   const stream = createReadStream(output.absolutePath);
   stream.once('error', () => res.destroy());
   stream.pipe(res);
@@ -298,7 +302,7 @@ export const createAppServer = ({
           const token = urlObj.searchParams.get('token');
           const tokenClaims = integrations.assertDownloadAuth(authHeader, token, route.id);
           const output = await artifacts.getArtifactById(route.id, tokenClaims);
-          sendOutput(res, output, requestId);
+          sendOutput(res, output, requestId, {includeBody: req.method !== 'HEAD'});
           return undefined;
         }
 
