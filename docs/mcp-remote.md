@@ -75,12 +75,17 @@ When registered with ChatGPT, the server advertises 8 tools with root-level `sec
 7. `retry_video_project` — Re-queues a retryable failed stage.
 8. `cancel_video_project` — Cancels an active project.
 
+### MCP SDK compatibility boundary
+
+The root-level `securitySchemes` response is emitted by the isolated compatibility adapter at `mcp/tools-list-security-compat.mjs`. It uses a private `@modelcontextprotocol/server` 2.0.0 handler registry because that exact version has no public result-rewrite hook. Keep the dependency exactly pinned. Before upgrading it, run `node --test tests/integration/mcp-noauth.test.mjs` and repeat the T28 ChatGPT discovery gate to verify all eight tools still expose root-level `securitySchemes: [{type: "noauth"}]`.
+
 ## Download Reverse Proxy & Playback
 
 When a video project reaches `completed` status, `get_video_project` returns a signed download URL:
 `https://video.lanadesign.tech/mcp/artifacts/<artifactId>/download?token=<hmacToken>`
 
 - The MCP server reverse proxies the download request to the backend `app` service after validating the token.
+- Signed MP4 responses use `Content-Disposition: inline` and support `GET` and `HEAD`; `HEAD` returns the same playback metadata without a body.
 - Top-level browser navigation (`Sec-Fetch-Dest: document` / `video`, `Sec-Fetch-Mode: navigate`) is permitted on signed download routes to allow direct browser playback and downloading.
 - Interactive browser document navigation to `/mcp` remains rejected (`403 HOST_NOT_ALLOWED`).
 

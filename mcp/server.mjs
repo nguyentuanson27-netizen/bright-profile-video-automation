@@ -5,6 +5,7 @@ import {Readable} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
 import {fileURLToPath} from 'node:url';
 import {createMcpHandler, fromJsonSchema, McpServer} from '@modelcontextprotocol/server';
+import {applyRootNoAuthToolSecuritySchemes} from './tools-list-security-compat.mjs';
 import {normalizeEvidence} from '../lib/evidence/normalize-evidence.mjs';
 import {
   assertEvidenceBundle,
@@ -541,30 +542,7 @@ export function buildBrightMcpServer({env = process.env, fetchFn = fetch, inFlig
     }),
   );
 
-  // Compatibility shim: OpenAI MCP connector protocol requires per-tool root-level securitySchemes: [{type: 'noauth'}]
-  // rather than placing securitySchemes inside tool.annotations. We wrap the tools/list handler to emit root-level securitySchemes.
-  const originalToolsListHandler = server.server?._requestHandlers?.get('tools/list');
-  if (!originalToolsListHandler) {
-    throw new Error('MCP SDK compatibility shim failed: tools/list handler not found in server._requestHandlers');
-  }
-  server.server._requestHandlers.set('tools/list', async (request, extra) => {
-    const result = await originalToolsListHandler(request, extra);
-    if (result && Array.isArray(result.tools)) {
-      return {
-        ...result,
-        tools: result.tools.map((tool) => {
-          const {securitySchemes: _omitted, ...cleanAnnotations} = tool.annotations || {};
-          const hasAnnotations = Object.keys(cleanAnnotations).length > 0;
-          return {
-            ...tool,
-            annotations: hasAnnotations ? cleanAnnotations : undefined,
-            securitySchemes: [{type: 'noauth'}],
-          };
-        }),
-      };
-    }
-    return result;
-  });
+  applyRootNoAuthToolSecuritySchemes(server);
 
   return server;
 }
