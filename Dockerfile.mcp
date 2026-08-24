@@ -6,7 +6,9 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
     && npm cache clean --force
 
+COPY --chown=node:node domain ./domain
 COPY --chown=node:node lib/evidence ./lib/evidence
+COPY --chown=node:node security ./security
 COPY --chown=node:node mcp ./mcp
 
 USER node
@@ -15,8 +17,11 @@ ENV NODE_ENV=production \
     MCP_PORT=4190 \
     MCP_ALLOWED_HOSTS=127.0.0.1,localhost \
     MCP_MAX_BODY_BYTES=2097152 \
-    MCP_RATE_LIMIT_PER_MINUTE=60 \
-    MCP_REQUEST_TIMEOUT_MS=10000
+    MCP_RATE_LIMIT_PER_MINUTE=20 \
+    MCP_REQUEST_TIMEOUT_MS=10000 \
+    MCP_NOAUTH_WRITE_ENABLED=false \
+    MCP_MAX_ACTIVE_PROJECTS=3 \
+    MCP_MAX_INFLIGHT_WRITE_REQUESTS=2
 
 EXPOSE 4190
 HEALTHCHECK --interval=5s --timeout=3s --start-period=2s --retries=3 \

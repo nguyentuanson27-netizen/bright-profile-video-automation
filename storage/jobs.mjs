@@ -238,6 +238,12 @@ export const createJobStore = (db, {
         failed_stage = NULL, failure_retryable = NULL, failure_code = NULL, updated_at = ?
     WHERE id = ? AND status = 'generating'
   `);
+  const countOtherActiveChatGptProjects = db.prepare(`
+    SELECT COUNT(*) AS count FROM projects
+    WHERE origin = 'chatgpt_mcp'
+      AND id != ?
+      AND status NOT IN ('completed', 'failed', 'cancelled')
+  `);
   const deleteProjectSources = db.prepare('DELETE FROM sources WHERE project_id = ?');
   const insertSource = db.prepare(`
     INSERT INTO sources (id, project_id, url, status, payload_json, created_at, updated_at)
@@ -426,12 +432,29 @@ export const createJobStore = (db, {
     return {recovered, exhausted};
   });
 
-  const retryTx = db.transaction(({stageId, nowMs}) => {
+  const retryTx = db.transaction(({stageId, nowMs, maxActiveProjects = null}) => {
     assertNow(nowMs);
     const row = getStageRow.get(stageId);
     if (!row) throw stageNotRetryableError();
     if (row.state === 'queued' || row.state === 'running') return {changed: false, stage: stageFromRow(row)};
     if (row.state !== 'failed' || !row.retryable || row.attempt_count >= row.max_attempts) throw stageNotRetryableError();
+
+    const project = getProjectRow.get(row.project_id);
+    if (!project) throw transitionError('Project disappeared while retrying stage');
+
+    if (project.origin === 'chatgpt_mcp' && maxActiveProjects !== null && Number.isInteger(maxActiveProjects)) {
+      if (['failed', 'cancelled', 'completed'].includes(project.status)) {
+        const activeCount = countOtherActiveChatGptProjects.get(row.project_id).count;
+        if (activeCount >= maxActiveProjects) {
+          throw new AppError(
+            ErrorCodes.NOAUTH_CAPACITY_REACHED,
+            'Anonymous active project capacity reached',
+            {status: 429},
+          );
+        }
+      }
+    }
+
     const timestamp = nowIso(nowMs);
     if (queueRetry.run(nowMs, timestamp, stageId).changes !== 1) throw stageNotRetryableError();
     if (markProjectActive.run(activeProjectStatus(row.stage_type), timestamp, row.project_id).changes !== 1) throw transitionError('Project disappeared while retrying stage');

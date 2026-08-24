@@ -103,7 +103,6 @@ export const createSafeFetcher = ({
         Promise.resolve().then(operation),
         new Promise((_, reject) => {
           timer = setTimeout(() => reject(timeoutError()), remaining);
-          timer.unref?.();
         }),
       ]);
       remainingMs(deadline);
@@ -185,7 +184,6 @@ export const createSafeFetcher = ({
           rejectOpened(error);
         }
       }, remaining);
-      timer.unref?.();
 
       try {
         request = requestFn(options, (incoming) => {

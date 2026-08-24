@@ -5,13 +5,15 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 
-const script = new URL('../../scripts/verify-mcp-prod-audit.mjs', import.meta.url);
+import {fileURLToPath} from 'node:url';
+
+const scriptPath = fileURLToPath(new URL('../../scripts/verify-mcp-prod-audit.mjs', import.meta.url));
 
 const runPolicy = (report, auditStatus = 0) => {
   const dir = mkdtempSync(join(tmpdir(), 'mcp-audit-'));
   const path = join(dir, 'audit.json');
   writeFileSync(path, JSON.stringify(report));
-  return spawnSync(process.execPath, [script.pathname, path, String(auditStatus)], {encoding: 'utf8'});
+  return spawnSync(process.execPath, [scriptPath, path, String(auditStatus)], {encoding: 'utf8'});
 };
 
 const report = (vulnerabilities, critical = 0) => {

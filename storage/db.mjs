@@ -1,16 +1,20 @@
+import {createHash} from 'node:crypto';
 import {mkdirSync, readFileSync} from 'node:fs';
 import {dirname, resolve} from 'node:path';
 import Database from 'better-sqlite3';
 
 import {AppError, ErrorCodes} from '../domain/errors.mjs';
 
-const LATEST_VERSION = 2;
+const LATEST_VERSION = 4;
 const MIGRATIONS = Object.freeze({
   1: readFileSync(new URL('./migrations/001_initial.sql', import.meta.url), 'utf8'),
   2: readFileSync(new URL('./migrations/002_research_api.sql', import.meta.url), 'utf8'),
+  3: readFileSync(new URL('./migrations/003_chatgpt_handoff.sql', import.meta.url), 'utf8'),
+  4: readFileSync(new URL('./migrations/004_chatgpt_imported_draft.sql', import.meta.url), 'utf8'),
 });
 const nowIso = () => new Date().toISOString();
 const parseJson = (value) => JSON.parse(value);
+const hashPayload = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 const assertBusyTimeout = (value) => {
   if (!Number.isSafeInteger(value) || value < 1 || value > 60_000) {
@@ -55,6 +59,9 @@ const projectFromRow = (row) => row && ({
   topic: row.topic,
   instructions: row.instructions ?? '',
   status: row.status,
+  origin: row.origin ?? 'standalone',
+  idempotencyKey: row.idempotency_key ?? null,
+  handoffFingerprint: row.handoff_fingerprint ?? null,
   currentRevisionId: row.current_revision_id,
   approvedRevisionId: row.approved_revision_id,
   failedStage: row.failed_stage,
@@ -82,6 +89,9 @@ const revisionFromRow = (row) => row && ({
   payload: parseJson(row.payload_json),
   payloadHash: row.payload_hash,
   approvedAt: row.approved_at,
+  approvalMode: row.approval_mode ?? null,
+  approvalActor: row.approval_actor ?? null,
+  approvalContext: row.approval_context_json ? parseJson(row.approval_context_json) : null,
   createdAt: row.created_at,
 });
 
@@ -113,10 +123,11 @@ const downstreamStartedError = () => new AppError(
 
 export const createRepositories = (db) => {
   const insertProject = db.prepare(`
-    INSERT INTO projects (id, creator, topic, instructions, status, created_at, updated_at)
-    VALUES (@id, @creator, @topic, @instructions, @status, @createdAt, @updatedAt)
+    INSERT INTO projects (id, creator, topic, instructions, status, origin, idempotency_key, handoff_fingerprint, research_json, created_at, updated_at)
+    VALUES (@id, @creator, @topic, @instructions, @status, @origin, @idempotencyKey, @handoffFingerprint, @researchJson, @createdAt, @updatedAt)
   `);
   const getProject = db.prepare('SELECT * FROM projects WHERE id = ?');
+  const getProjectByIdempotencyKey = db.prepare('SELECT * FROM projects WHERE idempotency_key = ?');
   const listProjects = db.prepare('SELECT * FROM projects ORDER BY created_at, id');
   const insertSource = db.prepare(`
     INSERT INTO sources (id, project_id, url, status, payload_json, created_at, updated_at)
@@ -149,7 +160,11 @@ export const createRepositories = (db) => {
       AND approved_revision_id = @expectedRevisionId
   `);
   const approveRevisionRow = db.prepare(`
-    UPDATE revisions SET approved_at = @approvedAt
+    UPDATE revisions
+    SET approved_at = @approvedAt,
+        approval_mode = @approvalMode,
+        approval_actor = @approvalActor,
+        approval_context_json = @approvalContextJson
     WHERE id = @revisionId
       AND project_id = @projectId
       AND approved_at IS NULL
@@ -187,6 +202,7 @@ export const createRepositories = (db) => {
     )
   `);
   const getStage = db.prepare('SELECT * FROM stages WHERE id = ?');
+  const getLatestProjectStage = db.prepare('SELECT * FROM stages WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT 1');
   const getActiveMediaIngest = db.prepare(`
     SELECT * FROM stages
     WHERE project_id = ? AND revision_id = ? AND stage_type = 'media_ingest'
@@ -202,14 +218,150 @@ export const createRepositories = (db) => {
     WHERE project_id = ? AND revision_id = ? AND stage_type IN ('media_ingest', 'tts', 'render')
     LIMIT 1
   `);
+  const countActiveChatGptProjects = db.prepare(`
+    SELECT COUNT(*) AS count FROM projects
+    WHERE origin = 'chatgpt_mcp'
+      AND status NOT IN ('completed', 'failed', 'cancelled')
+  `);
+  const countOtherActiveChatGptProjects = db.prepare(`
+    SELECT COUNT(*) AS count FROM projects
+    WHERE origin = 'chatgpt_mcp'
+      AND id != ?
+      AND status NOT IN ('completed', 'failed', 'cancelled')
+  `);
 
-  const createProjectTx = db.transaction(({project, sources = []}) => {
+  const importProjectTx = db.transaction(({
+    project,
+    sources = [],
+    initialStage = null,
+    initialDraft = null,
+    maxActiveProjects = null,
+    incomingFingerprint,
+  }) => {
+    if (project.idempotencyKey) {
+      const existingRow = getProjectByIdempotencyKey.get(project.idempotencyKey);
+      if (existingRow) {
+        const existing = projectFromRow(existingRow);
+        const existingFingerprint = existing.handoffFingerprint ?? hashPayload({
+          creator: existing.creator,
+          topic: existing.topic,
+          instructions: existing.instructions ?? '',
+          evidenceBundle: existing.research,
+        });
+        if (existingFingerprint !== incomingFingerprint) {
+          throw new AppError(
+            ErrorCodes.IDEMPOTENCY_CONFLICT,
+            'Idempotency key was used with different project parameters',
+            {status: 409},
+          );
+        }
+        const stageRow = getLatestProjectStage.get(existing.id);
+        return {
+          project: existing,
+          stage: stageFromRow(stageRow),
+          isExisting: true,
+        };
+      }
+    }
+
+    if (project.origin === 'chatgpt_mcp' && maxActiveProjects !== null && Number.isInteger(maxActiveProjects)) {
+      const activeCount = countActiveChatGptProjects.get().count;
+      if (activeCount >= maxActiveProjects) {
+        throw new AppError(
+          ErrorCodes.NOAUTH_CAPACITY_REACHED,
+          'Anonymous active project capacity reached',
+          {status: 429},
+        );
+      }
+    }
+
+    const createdAt = project.createdAt ?? nowIso();
+    const updatedAt = project.updatedAt ?? createdAt;
+    insertProject.run({
+      ...project,
+      instructions: project.instructions ?? '',
+      status: project.status ?? (initialDraft ? 'review_required' : 'generating'),
+      origin: project.origin ?? 'chatgpt_mcp',
+      idempotencyKey: project.idempotencyKey ?? null,
+      handoffFingerprint: incomingFingerprint ?? null,
+      researchJson: project.research ? JSON.stringify(project.research) : null,
+      createdAt,
+      updatedAt,
+    });
+    for (const source of sources) {
+      const sourceCreatedAt = source.createdAt ?? createdAt;
+      insertSource.run({
+        ...source,
+        status: source.status ?? 'available',
+        payloadJson: JSON.stringify(source.payload ?? {}),
+        createdAt: sourceCreatedAt,
+        updatedAt: source.updatedAt ?? sourceCreatedAt,
+      });
+    }
+
+    if (initialDraft) {
+      insertRevision.run({
+        id: initialDraft.id,
+        projectId: project.id,
+        revisionNo: 1,
+        payloadJson: JSON.stringify(initialDraft.payload),
+        payloadHash: initialDraft.payloadHash,
+        createdAt: initialDraft.createdAt ?? createdAt,
+      });
+      setCurrentRevision.run(initialDraft.id, updatedAt, project.id);
+      return {
+        project: projectFromRow(getProject.get(project.id)),
+        stage: null,
+        isExisting: false,
+      };
+    }
+
+    if (!initialStage?.id) throw new TypeError('initialStage is required when no imported draft is provided');
+    const stageId = initialStage.id;
+    const stageCreatedAt = initialStage.createdAt ?? createdAt;
+    const logicalKey = `${project.id}:initial:generation`;
+    insertStage.run({
+      id: stageId,
+      logicalKey,
+      projectId: project.id,
+      revisionId: null,
+      type: 'generation',
+      state: 'queued',
+      retryable: 1,
+      maxAttempts: initialStage.maxAttempts ?? 4,
+      availableAtMs: initialStage.availableAtMs ?? 0,
+      createdAt: stageCreatedAt,
+      updatedAt: stageCreatedAt,
+    });
+
+    return {
+      project: projectFromRow(getProject.get(project.id)),
+      stage: stageFromRow(getStage.get(stageId)),
+      isExisting: false,
+    };
+  });
+
+  const createProjectTx = db.transaction(({project, sources = [], maxActiveProjects = null}) => {
+    if (project.origin === 'chatgpt_mcp' && maxActiveProjects !== null && Number.isInteger(maxActiveProjects)) {
+      const activeCount = countActiveChatGptProjects.get().count;
+      if (activeCount >= maxActiveProjects) {
+        throw new AppError(
+          ErrorCodes.NOAUTH_CAPACITY_REACHED,
+          'Anonymous active project capacity reached',
+          {status: 429},
+        );
+      }
+    }
     const createdAt = project.createdAt ?? nowIso();
     const updatedAt = project.updatedAt ?? createdAt;
     insertProject.run({
       ...project,
       instructions: project.instructions ?? '',
       status: project.status ?? 'draft',
+      origin: project.origin ?? 'standalone',
+      idempotencyKey: project.idempotencyKey ?? null,
+      handoffFingerprint: project.handoffFingerprint ?? null,
+      researchJson: project.research ? JSON.stringify(project.research) : null,
       createdAt,
       updatedAt,
     });
@@ -233,12 +385,29 @@ export const createRepositories = (db) => {
     return revisionFromRow(getRevision.get(record.id));
   });
 
-  const approveRevisionTx = db.transaction(({projectId, revisionId, expectedPayloadHash, approvedAt}) => {
+  const approveRevisionTx = db.transaction(({
+    projectId,
+    revisionId,
+    expectedPayloadHash,
+    approvedAt,
+    approvalMode = 'user_reviewed',
+    approvalActor = 'user',
+    approvalContext = null,
+  }) => {
     if (typeof expectedPayloadHash !== 'string' || !/^[a-f0-9]{64}$/.test(expectedPayloadHash)) {
       throw transitionError('Expected revision hash is required for approval');
     }
     const timestamp = approvedAt ?? nowIso();
-    if (approveRevisionRow.run({projectId, revisionId, expectedPayloadHash, approvedAt: timestamp}).changes !== 1) {
+    const approvalContextJson = approvalContext ? JSON.stringify(approvalContext) : null;
+    if (approveRevisionRow.run({
+      projectId,
+      revisionId,
+      expectedPayloadHash,
+      approvedAt: timestamp,
+      approvalMode,
+      approvalActor,
+      approvalContextJson,
+    }).changes !== 1) {
       throw transitionError('Revision changed before approval');
     }
     if (approveProject.run({projectId, revisionId, updatedAt: timestamp}).changes !== 1) {
@@ -377,14 +546,40 @@ export const createRepositories = (db) => {
 
   return Object.freeze({
     projects: Object.freeze({
-      create(record) {
-        return createProjectTx.immediate({project: record});
+      importProject(record) {
+        return importProjectTx.immediate(record);
       },
-      createWithSources(project, sources) {
-        return createProjectTx.immediate({project, sources});
+      create(record, options = {}) {
+        return createProjectTx.immediate({project: record, maxActiveProjects: options.maxActiveProjects ?? null});
+      },
+      createWithSources(project, sources, options = {}) {
+        return createProjectTx.immediate({project, sources, maxActiveProjects: options.maxActiveProjects ?? null});
+      },
+      countActiveChatGptProjects() {
+        return countActiveChatGptProjects.get().count;
+      },
+      countOtherActiveChatGptProjects(projectId) {
+        return countOtherActiveChatGptProjects.get(projectId).count;
+      },
+      assertCapacityForReactivation(projectId, maxActiveProjects) {
+        if (maxActiveProjects !== null && maxActiveProjects !== undefined && Number.isInteger(maxActiveProjects)) {
+          const count = countOtherActiveChatGptProjects.get(projectId).count;
+          if (count >= maxActiveProjects) {
+            throw new AppError(
+              ErrorCodes.NOAUTH_CAPACITY_REACHED,
+              'Anonymous active project capacity reached',
+              {status: 429},
+            );
+          }
+        }
       },
       get(id) {
         return projectFromRow(getProject.get(id));
+      },
+      getByIdempotencyKey(key) {
+        if (typeof key !== 'string' || !key) return null;
+        const row = getProjectByIdempotencyKey.get(key);
+        return row ? projectFromRow(row) : null;
       },
       list() {
         return listProjects.all().map(projectFromRow);

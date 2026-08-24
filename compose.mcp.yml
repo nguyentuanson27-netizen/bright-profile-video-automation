@@ -10,8 +10,12 @@ services:
       MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-https://video.lanadesign.tech/mcp}
       MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-127.0.0.1,localhost}
       MCP_MAX_BODY_BYTES: 2097152
-      MCP_RATE_LIMIT_PER_MINUTE: 60
+      MCP_RATE_LIMIT_PER_MINUTE: ${MCP_RATE_LIMIT_PER_MINUTE:-20}
       MCP_REQUEST_TIMEOUT_MS: 10000
+      MCP_NOAUTH_WRITE_ENABLED: ${MCP_NOAUTH_WRITE_ENABLED:-false}
+      MCP_MAX_INFLIGHT_WRITE_REQUESTS: ${MCP_MAX_INFLIGHT_WRITE_REQUESTS:-2}
+      BRIGHT_BACKEND_URL: ${BRIGHT_BACKEND_URL:-http://app:4180}
+      BRIGHT_INTEGRATION_TOKEN: ${BRIGHT_INTEGRATION_TOKEN:-}
     ports:
       - "127.0.0.1:4190:4190"
     healthcheck:
@@ -22,3 +26,4 @@ services:
       start_period: 2s
     cpus: 0.5
     mem_limit: 256m
+

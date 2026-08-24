@@ -1,6 +1,6 @@
 # Bright Creator Profile
 
-Internal creator-profile video automation built around a standalone Node/SQLite app, durable worker stages, React/Vite review UI, Remotion, Google Cloud TTS, and the read-only Bright Evidence MCP integration for ChatGPT.
+Internal creator-profile video automation built around a standalone Node/SQLite app, durable worker stages, React/Vite review UI, Remotion, Google Cloud TTS, and the Bright Evidence MCP integration for ChatGPT.
 
 ## Standalone internal MVP
 
@@ -25,7 +25,7 @@ The generated draft is never auto-approved. Model-provided verification flags an
 
 ## Run with Docker Compose
 
-Copy the environment template and set the required provider credentials:
+Copy the environment template and set only the provider credentials required by the flow you run. A ChatGPT MCP import that includes evidence and a structured draft does not require `OPENAI_API_KEY`; that key is only for the retained standalone research/generation flow.
 
 ```sh
 cp .env.example .env
@@ -78,7 +78,7 @@ node worker.mjs
 
 ## Security boundaries
 
-- The standalone Compose HTTP port is published on host loopback by default. Add an explicit trusted access boundary before exposing it remotely.
+- The standalone Compose HTTP port is published on host loopback by default. To expose the UI remotely, proxy only an explicit HTTPS hostname and set `BRIGHT_ALLOWED_BROWSER_HOSTS` to that hostname; unknown hosts remain rejected.
 - Public-source/media fetching uses the SSRF-safe fetch path with DNS/IP validation, redirect revalidation, MIME limits, byte limits, and bounded timeouts.
 - Remote filenames never choose local artifact paths. Media and output files live under application-owned attempt directories and are bound to the immutable approved revision with size/SHA-256 metadata.
 - The normal Remotion path accepts only application-controlled local media references; arbitrary HTTP(S), `file:` and absolute/traversal references are rejected and Chromium web security is not disabled.
@@ -103,8 +103,8 @@ Supported scene types are `hero`, `claim`, `vertical`, `source`, `social`, and `
 
 ## Bright Evidence MCP for ChatGPT
 
-The repository also contains the read-only Bright Evidence MCP tool `normalize_evidence`. The MCP Docker service remains independently published on host loopback and is expected to sit behind an HTTPS reverse proxy when used remotely. See `docs/mcp-remote.md` and `docs/mcp-evidence.md` for that boundary.
+The repository exposes the Bright Evidence MCP integration for ChatGPT research and video automation with 8 tools (`normalize_evidence`, `create_video_project`, `get_video_project`, `edit_video_draft`, `approve_video_project`, `start_video_render`, `retry_video_project`, `cancel_video_project`). ChatGPT can submit normalized evidence with an optional structured script draft; Bright stores supplied drafts at `review_required` and never auto-approves or auto-renders them. The MCP Docker service remains independently published on host loopback and sits behind an HTTPS reverse proxy when used remotely with temporary noauth access. See `docs/mcp-remote.md` and `docs/mcp-evidence.md` for that boundary and lifecycle contract.
 
 The current project scope is direct internal ChatGPT use. Public plugin distribution, Codex packaging, commercial launch readiness, and public Plugins Directory submission are not current goals.
 
-See `docs/project-status.md`, `docs/specs/standalone-internal-mvp-amendment.md`, and `tasks/traceability.md` for the authoritative internal-MVP scope and closure ledger.
+See `docs/project-status.md`, `docs/specs/chatgpt-mcp-e2e-video-handoff.md`, and `tasks/traceability.md` for the authoritative milestone scope and closure ledger.

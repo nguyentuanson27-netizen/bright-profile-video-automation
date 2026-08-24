@@ -2,6 +2,11 @@ const projectActionPattern = /^\/api\/projects\/([^/]+)\/(research|generate|rend
 const projectOutputPattern = /^\/api\/projects\/([^/]+)\/artifacts\/output$/;
 const projectPattern = /^\/api\/projects\/([^/]+)$/;
 
+const integrationImportPattern = /^\/api\/integrations\/chatgpt\/projects\/import$/;
+const integrationActionPattern = /^\/api\/integrations\/chatgpt\/projects\/([^/]+)\/(draft|approve|render|retry|cancel)$/;
+const integrationProjectPattern = /^\/api\/integrations\/chatgpt\/projects\/([^/]+)$/;
+const integrationArtifactPattern = /^\/api\/integrations\/chatgpt\/artifacts\/([^/]+)\/download$/;
+
 const decodeId = (value) => {
   try {
     return decodeURIComponent(value);
@@ -18,6 +23,35 @@ export const matchRoute = (method, pathname) => {
     if (method === 'GET') return {name: 'projects.list'};
   }
 
+  if (integrationImportPattern.test(pathname)) {
+    if (method === 'POST') return {name: 'integrations.chatgpt.projects.import'};
+    return null;
+  }
+
+  const integrationAction = pathname.match(integrationActionPattern);
+  if (integrationAction) {
+    const id = decodeId(integrationAction[1]);
+    const action = integrationAction[2];
+    if (!id) return null;
+    if (method === 'POST') {
+      if (action === 'draft') return {name: 'integrations.chatgpt.projects.draft.edit', id};
+      return {name: `integrations.chatgpt.projects.${action}`, id};
+    }
+    return null;
+  }
+
+  const integrationProject = pathname.match(integrationProjectPattern);
+  if (integrationProject && method === 'GET') {
+    const id = decodeId(integrationProject[1]);
+    return id ? {name: 'integrations.chatgpt.projects.get', id} : null;
+  }
+
+  const integrationArtifact = pathname.match(integrationArtifactPattern);
+  if (integrationArtifact && ['GET', 'HEAD'].includes(method)) {
+    const id = decodeId(integrationArtifact[1]);
+    return id ? {name: 'integrations.chatgpt.artifacts.download', id} : null;
+  }
+
   const output = pathname.match(projectOutputPattern);
   if (output && method === 'GET') {
     const id = decodeId(output[1]);
@@ -32,8 +66,9 @@ export const matchRoute = (method, pathname) => {
     if (method === 'GET' && name === 'sources') return {name: 'projects.sources', id};
     if (method === 'GET' && name === 'draft') return {name: 'projects.draft.get', id};
     if (method === 'PUT' && name === 'draft') return {name: 'projects.draft.edit', id};
-    if (method === 'POST' && ['research', 'generate', 'render', 'retry', 'cancel', 'approve'].includes(name)) {
-      return {name: name === 'approve' ? 'projects.approve' : `projects.${name}`, id};
+    if (method === 'POST') {
+      if (name === 'approve') return {name: 'projects.approve', id};
+      return {name: `projects.${name}`, id};
     }
     return null;
   }

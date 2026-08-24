@@ -11,6 +11,7 @@ const DEFAULTS = Object.freeze({
   openaiGenerationModel: 'gpt-5',
   openaiTimeoutMs: 60000,
   openaiMaxRetries: 2,
+  chatgptMaxActiveProjects: 3,
 });
 
 const MAXIMUMS = Object.freeze({
@@ -21,6 +22,7 @@ const MAXIMUMS = Object.freeze({
   fetchMaxRedirects: 10,
   openaiTimeoutMs: 10 * 60 * 1000,
   openaiMaxRetries: 5,
+  chatgptMaxActiveProjects: 100,
 });
 
 const readInteger = (env, name, fallback, {min = 0, max = Number.MAX_SAFE_INTEGER} = {}) => {
@@ -39,6 +41,19 @@ const readRequiredText = (env, name, fallback) => {
     throw new Error(`${name} must be a non-empty string`);
   }
   return value.trim();
+};
+
+const readSecret = (env, name, fallback, {minLength = 16} = {}) => {
+  const value = env[name];
+  if (value === undefined || value === '') return fallback;
+  if (typeof value !== 'string') {
+    throw new Error(`${name} must be a string`);
+  }
+  const trimmed = value.trim();
+  if (trimmed.length < minLength) {
+    throw new Error(`${name} must be at least ${minLength} characters`);
+  }
+  return trimmed;
 };
 
 export const loadConfig = (env = process.env, {cwd = process.cwd()} = {}) => {
@@ -66,6 +81,21 @@ export const loadConfig = (env = process.env, {cwd = process.cwd()} = {}) => {
       generationModel: readRequiredText(env, 'OPENAI_GENERATION_MODEL', DEFAULTS.openaiGenerationModel),
       timeoutMs: readInteger(env, 'OPENAI_API_TIMEOUT_MS', DEFAULTS.openaiTimeoutMs, {min: 1, max: MAXIMUMS.openaiTimeoutMs}),
       maxRetries: readInteger(env, 'OPENAI_API_MAX_RETRIES', DEFAULTS.openaiMaxRetries, {min: 0, max: MAXIMUMS.openaiMaxRetries}),
+    }),
+    integration: Object.freeze({
+      serviceToken: readSecret(env, 'BRIGHT_INTEGRATION_TOKEN', undefined, {minLength: 16}),
+      downloadSigningSecret: readSecret(env, 'BRIGHT_DOWNLOAD_SIGNING_SECRET', undefined, {minLength: 16}),
+      backendUrl: env.BRIGHT_BACKEND_URL?.trim() || 'http://127.0.0.1:4180',
+      allowedHosts: env.BRIGHT_ALLOWED_INTEGRATION_HOSTS?.split(',').map((h) => h.trim().toLowerCase()).filter(Boolean) || ['127.0.0.1', 'localhost', 'app', '::1', '[::1]'],
+      chatgptMaxActiveProjects: readInteger(
+        env,
+        'BRIGHT_CHATGPT_MAX_ACTIVE_PROJECTS',
+        readInteger(env, 'MCP_MAX_ACTIVE_PROJECTS', DEFAULTS.chatgptMaxActiveProjects, {min: 1, max: MAXIMUMS.chatgptMaxActiveProjects}),
+        {min: 1, max: MAXIMUMS.chatgptMaxActiveProjects},
+      ),
+    }),
+    browser: Object.freeze({
+      allowedHosts: env.BRIGHT_ALLOWED_BROWSER_HOSTS?.split(',').map((h) => h.trim().toLowerCase()).filter(Boolean) || [],
     }),
   });
 };

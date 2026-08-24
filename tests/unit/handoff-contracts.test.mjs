@@ -1,0 +1,179 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  APPROVAL_MODES,
+  PROJECT_ORIGINS,
+  validateApproveProjectInput,
+  validateEditDraftInput,
+  validateImportProjectInput,
+} from '../../domain/schemas.mjs';
+import {ErrorCodes} from '../../domain/errors.mjs';
+
+import {normalizeEvidence} from '../../lib/evidence/normalize-evidence.mjs';
+
+const validBundle = normalizeEvidence({
+  researchedAt: '2026-08-20T00:00:00.000Z',
+  subject: {name: 'Marques Brownlee'},
+  items: [
+    {
+      url: 'https://en.wikipedia.org/wiki/MKBHD',
+      claim: 'Marques Keith Brownlee is an American YouTuber.',
+      category: 'identity',
+      value: 'Marques Keith Brownlee',
+    },
+  ],
+});
+
+test('APPROVAL_MODES and PROJECT_ORIGINS define the exact vocabulary', () => {
+  assert.deepEqual(APPROVAL_MODES, {
+    USER_REVIEWED: 'user_reviewed',
+  });
+  assert.deepEqual(PROJECT_ORIGINS, {
+    STANDALONE: 'standalone',
+    CHATGPT_MCP: 'chatgpt_mcp',
+  });
+});
+
+test('validateImportProjectInput validates valid handoff input', () => {
+  const valid = {
+    creator: 'Marques Brownlee',
+    topic: 'Career milestones',
+    instructions: 'Create a factual profile',
+    evidenceBundle: validBundle,
+    idempotencyKey: 'chatgpt-run-12345',
+  };
+  const validated = validateImportProjectInput(valid);
+  assert.equal(validated.creator, 'Marques Brownlee');
+  assert.equal(validated.idempotencyKey, 'chatgpt-run-12345');
+});
+
+test('validateImportProjectInput rejects missing or malformed fields and invalid EvidenceBundle', () => {
+  assert.throws(
+    () => validateImportProjectInput({
+      creator: '',
+      topic: 'Topic',
+      evidenceBundle: validBundle,
+      idempotencyKey: 'key',
+    }),
+    (error) => error.code === ErrorCodes.INVALID_DOMAIN_DATA,
+  );
+
+  assert.throws(
+    () => validateImportProjectInput({
+      creator: 'Creator',
+      topic: 'Topic',
+      evidenceBundle: {invalid: true},
+      idempotencyKey: 'key',
+    }),
+    (error) => error.code === ErrorCodes.INVALID_DOMAIN_DATA,
+  );
+
+  assert.throws(
+    () => validateImportProjectInput({
+      creator: 'Creator',
+      topic: 'Topic',
+      evidenceBundle: validBundle,
+      idempotencyKey: '',
+    }),
+    (error) => error.code === ErrorCodes.INVALID_DOMAIN_DATA,
+  );
+});
+
+test('validateImportProjectInput rejects voiceover provenance outside the normalized EvidenceBundle', () => {
+  const evidenceId = validBundle.evidence[0].id;
+  const draft = {
+    creatorName: 'Marques Brownlee',
+    summary: 'Summary text',
+    claims: [{id: 'c-1', text: 'Claim', sourceIds: [evidenceId], verified: true}],
+    script: [{id: 's-1', text: 'Script', start: 0, duration: 5, sourceIds: [evidenceId]}],
+    voiceover: {
+      chunks: [{id: 'v-1', text: 'Voiceover', start: 0, duration: 5, sourceIds: ['invented-evidence-id']}],
+    },
+    scenes: [{id: 'sc-1', type: 'hero', start: 0, duration: 5, sourceIds: [evidenceId]}],
+    render: {duration: 5},
+  };
+
+  assert.throws(
+    () => validateImportProjectInput({
+      creator: 'Marques Brownlee',
+      topic: 'Career milestones',
+      evidenceBundle: validBundle,
+      draft,
+      idempotencyKey: 'voiceover-provenance-reject',
+    }),
+    (error) => error.code === ErrorCodes.INVALID_DOMAIN_DATA,
+  );
+});
+
+test('validateApproveProjectInput enforces exact approval payload and rejects deferred/extra fields', () => {
+  const validApproval = {
+    projectId: 'proj-1',
+    revisionId: 'rev-1',
+    expectedPayloadHash: 'a'.repeat(64),
+  };
+  assert.doesNotThrow(() => validateApproveProjectInput(validApproval));
+
+  assert.throws(
+    () => validateApproveProjectInput({
+      ...validApproval,
+      expectedPayloadHash: 'invalid-hash',
+    }),
+    (error) => error.code === ErrorCodes.INVALID_DOMAIN_DATA,
+  );
+
+  for (const extra of [
+    {mode: 'delegated_e2e'},
+    {mode: 'user_reviewed'},
+    {delegationGrant: 'grant-token'},
+    {delegatedContext: {intent: 'auto'}},
+    {approvalActor: 'custom_actor'},
+  ]) {
+    assert.throws(
+      () => validateApproveProjectInput({...validApproval, ...extra}),
+      (error) => error.code === ErrorCodes.INVALID_DOMAIN_DATA,
+    );
+  }
+});
+
+test('validateEditDraftInput requires projectId, revisionId, expectedPayloadHash, and valid draft', () => {
+  const validEdit = {
+    projectId: 'proj-1',
+    revisionId: 'rev-1',
+    expectedPayloadHash: 'b'.repeat(64),
+    draft: {
+      creatorName: 'Marques Brownlee',
+      summary: 'Summary text',
+      claims: [
+        {id: 'c-1', text: 'Marques is a YouTuber', sourceIds: ['src-1'], verified: true},
+      ],
+      script: [
+        {id: 's-1', text: 'Opening', start: 0, duration: 5, sourceIds: ['src-1']},
+      ],
+      voiceover: {
+        chunks: [
+          {id: 'v-1', text: 'Opening', start: 0, duration: 5, sourceIds: ['src-1']},
+        ],
+      },
+      scenes: [
+        {id: 'sc-1', type: 'hero', start: 0, duration: 5, sourceIds: ['src-1']},
+      ],
+      render: {duration: 5, renderScale: 1, crf: 20},
+    },
+  };
+  assert.doesNotThrow(() => validateEditDraftInput(validEdit, {knownSourceIds: ['src-1']}));
+
+  assert.throws(
+    () => validateEditDraftInput({
+      ...validEdit,
+      expectedPayloadHash: 'short',
+    }, {knownSourceIds: ['src-1']}),
+    (error) => error.code === ErrorCodes.INVALID_DOMAIN_DATA,
+  );
+
+  const unknownVoiceoverSource = structuredClone(validEdit);
+  unknownVoiceoverSource.draft.voiceover.chunks[0].sourceIds = ['invented-source-id'];
+  assert.throws(
+    () => validateEditDraftInput(unknownVoiceoverSource, {knownSourceIds: ['src-1']}),
+    (error) => error.code === ErrorCodes.UNKNOWN_SOURCE_REFERENCE,
+  );
+});

@@ -27,13 +27,13 @@ const approveSeedRevision = (repos) => repos.revisions.approve({
 test('fresh database migrates explicitly from user_version 0', () => {
   const db = openDatabase(tempDatabasePath());
   assert.equal(db.pragma('user_version', {simple: true}), 0);
-  assert.equal(migrateDatabase(db), 2);
-  assert.equal(db.pragma('user_version', {simple: true}), 2);
-  assert.equal(migrateDatabase(db), 2);
+  assert.equal(migrateDatabase(db), 4);
+  assert.equal(db.pragma('user_version', {simple: true}), 4);
+  assert.equal(migrateDatabase(db), 4);
   db.close();
 });
 
-test('schema v1 upgrades to v2 without losing existing projects', () => {
+test('schema v1 upgrades to v4 without losing existing projects', () => {
   const db = openDatabase(tempDatabasePath());
   const initialSql = readFileSync(new URL('../../storage/migrations/001_initial.sql', import.meta.url), 'utf8');
   db.exec(initialSql);
@@ -43,11 +43,12 @@ test('schema v1 upgrades to v2 without losing existing projects', () => {
     VALUES (?, ?, ?, ?, ?, ?)
   `).run('project-old', 'Old Creator', 'Old topic', 'draft', '2026-08-13T00:00:00.000Z', '2026-08-13T00:00:00.000Z');
 
-  assert.equal(migrateDatabase(db), 2);
+  assert.equal(migrateDatabase(db), 4);
   const project = createRepositories(db).projects.get('project-old');
   assert.equal(project.creator, 'Old Creator');
   assert.equal(project.instructions, '');
   assert.equal(project.research, null);
+  assert.equal(project.origin, 'standalone');
   db.close();
 });
 

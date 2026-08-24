@@ -6,7 +6,7 @@ import {createBrightHttpServer} from '../../mcp/server.mjs';
 
 const start = async (env = {}) => {
   const server = createBrightHttpServer({
-    env: {MCP_ALLOWED_HOSTS: '127.0.0.1,localhost', ...env},
+    env: {MCP_ALLOWED_HOSTS: '127.0.0.1,localhost', MCP_AUTH_TOKEN: 'test-mcp-token-123456', ...env},
     log: () => {},
   });
   server.listen(0, '127.0.0.1');
@@ -35,6 +35,7 @@ const oversizedStalledConnection = ({port, guardMs = 1_000}) => new Promise((res
     socket.write([
       'POST /mcp HTTP/1.1',
       `Host: 127.0.0.1:${port}`,
+      'Authorization: Bearer test-mcp-token-123456',
       'Content-Type: application/json',
       'Content-Length: 4096',
       'Connection: keep-alive',

@@ -37,6 +37,7 @@ COPY --chown=node:node lib ./lib
 COPY --chown=node:node video ./video
 COPY --chown=node:node scripts ./scripts
 COPY --chown=node:node assets ./assets
+COPY --chown=node:node mcp ./mcp
 
 RUN mkdir -p /app/data && chown -R node:node /app/data
 

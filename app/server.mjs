@@ -5,8 +5,10 @@ import {stat} from 'node:fs/promises';
 import {extname, resolve, sep} from 'node:path';
 
 import {AppError} from '../domain/errors.mjs';
+import {redactSecrets} from '../security/integration-auth.mjs';
 import {createArtifactStore} from '../storage/artifacts.mjs';
 import {createArtifactsApi} from './http/artifacts.mjs';
+import {createIntegrationsApi} from './http/integrations.mjs';
 import {createProjectsApi} from './http/projects.mjs';
 import {createRevisionsApi} from './http/revisions.mjs';
 import {matchRoute} from './http/router.mjs';
@@ -35,9 +37,9 @@ const hostnameFromAuthority = (value) => {
   }
 };
 
-const assertBrowserBoundary = (req) => {
+const assertBrowserBoundary = (req, allowedBrowserHosts) => {
   const host = hostnameFromAuthority(req.headers.host);
-  if (!host || !LOOPBACK_HOSTS.has(host)) {
+  if (!host || !allowedBrowserHosts.has(host)) {
     throw new AppError('HOST_NOT_ALLOWED', 'Request Host is not allowed', {status: 403});
   }
   const method = String(req.method ?? 'GET').toUpperCase();
@@ -49,7 +51,7 @@ const assertBrowserBoundary = (req) => {
   if (origin === undefined) return;
   try {
     const parsed = new URL(String(origin));
-    if (!['http:', 'https:'].includes(parsed.protocol) || !LOOPBACK_HOSTS.has(parsed.hostname.toLowerCase())) {
+    if (!['http:', 'https:'].includes(parsed.protocol) || !allowedBrowserHosts.has(parsed.hostname.toLowerCase())) {
       throw new Error('not loopback');
     }
   } catch {
@@ -69,15 +71,19 @@ const json = (res, status, value, requestId) => {
   res.end(body);
 };
 
-const sendOutput = (res, output, requestId) => {
+const sendOutput = (res, output, requestId, {includeBody = true} = {}) => {
   res.writeHead(200, {
     'content-type': output.mimeType,
     'content-length': output.byteSize,
-    'content-disposition': 'attachment; filename="bright-profile.mp4"',
+    'content-disposition': 'inline; filename="bright-profile.mp4"',
     'cache-control': 'no-store',
     'x-content-type-options': 'nosniff',
     ...(requestId ? {'x-request-id': requestId} : {}),
   });
+  if (!includeBody) {
+    res.end();
+    return;
+  }
   const stream = createReadStream(output.absolutePath);
   stream.once('error', () => res.destroy());
   stream.pipe(res);
@@ -189,6 +195,11 @@ export const createAppServer = ({
   generationMaxAttempts = 4,
   mediaIngestMaxAttempts = 4,
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
+  integrationToken,
+  downloadSigningSecret,
+  allowedIntegrationHosts = ['127.0.0.1', 'localhost', 'app', '::1', '[::1]'],
+  allowedBrowserHosts = [],
+  maxActiveProjects,
 } = {}) => {
   if (!db || typeof db.prepare !== 'function') throw new TypeError('database is required');
   if (!dataDir) throw new TypeError('dataDir is required');
@@ -198,6 +209,14 @@ export const createAppServer = ({
   if (typeof requestIdFactory !== 'function') throw new TypeError('requestIdFactory is required');
   const resolvedDataDir = resolve(dataDir);
   const resolvedWebDir = webDir ? resolve(webDir) : undefined;
+  const integrationHostsSet = new Set([
+    ...LOOPBACK_HOSTS,
+    ...(allowedIntegrationHosts || []).map((h) => String(h).trim().toLowerCase()).filter(Boolean),
+  ]);
+  const browserHostsSet = new Set([
+    ...LOOPBACK_HOSTS,
+    ...(allowedBrowserHosts || []).map((h) => String(h).trim().toLowerCase()).filter(Boolean),
+  ]);
   const projects = createProjectsApi({
     repos,
     jobs,
@@ -213,6 +232,24 @@ export const createAppServer = ({
   const revisions = createRevisionsApi({repos, now, revisionIdFactory});
   const resolvedArtifactStore = artifactStore ?? createArtifactStore(db);
   const artifacts = createArtifactsApi({repos, artifactStore: resolvedArtifactStore, dataDir: resolvedDataDir});
+  const integrations = createIntegrationsApi({
+    repos,
+    jobs,
+    artifactStore: resolvedArtifactStore,
+    dataDir: resolvedDataDir,
+    serviceToken: integrationToken,
+    downloadSigningSecret,
+    mcpPublicUrl: process.env.MCP_PUBLIC_URL || process.env.BRIGHT_PUBLIC_URL || 'http://127.0.0.1:4190',
+    maxActiveProjects,
+    now,
+    nowMs,
+    projectIdFactory,
+    stageIdFactory,
+    sourceIdFactory,
+    revisionIdFactory,
+    generationMaxAttempts,
+    mediaIngestMaxAttempts,
+  });
   const readinessQuery = db.prepare('SELECT 1 AS ok');
 
   return http.createServer(async (req, res) => {
@@ -220,10 +257,25 @@ export const createAppServer = ({
     const requestId = typeof requestIdValue === 'string' && requestIdValue.length > 0
       ? requestIdValue.slice(0, 200)
       : randomUUID();
+    const correlationId = typeof req.headers['x-correlation-id'] === 'string' && req.headers['x-correlation-id'].trim()
+      ? req.headers['x-correlation-id'].trim().slice(0, 200)
+      : (typeof req.headers['x-request-id'] === 'string' && req.headers['x-request-id'].trim()
+        ? req.headers['x-request-id'].trim().slice(0, 200)
+        : requestId);
+    const reqStartedAt = Date.now();
     try {
-      assertBrowserBoundary(req);
       const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
       const route = matchRoute(req.method ?? 'GET', pathname);
+
+      if (route && (route.name.startsWith('health.') || route.name.startsWith('integrations.'))) {
+        const host = hostnameFromAuthority(req.headers.host);
+        if (!host || !integrationHostsSet.has(host)) {
+          throw new AppError('HOST_NOT_ALLOWED', 'Request Host is not allowed', {status: 403});
+        }
+      } else {
+        assertBrowserBoundary(req, browserHostsSet);
+      }
+
       if (!route) {
         if (await tryServeWeb(req, res, pathname, resolvedWebDir)) return undefined;
         return json(res, 404, {error: {code: 'NOT_FOUND', message: 'Route not found'}, requestId}, requestId);
@@ -245,6 +297,51 @@ export const createAppServer = ({
             requestId,
           }, requestId);
         }
+      }
+
+      if (route.name.startsWith('integrations.')) {
+        const authHeader = req.headers.authorization || req.headers['x-bright-service-token'];
+
+        if (route.name === 'integrations.chatgpt.artifacts.download') {
+          const urlObj = new URL(req.url ?? '/', 'http://localhost');
+          const token = urlObj.searchParams.get('token');
+          const tokenClaims = integrations.assertDownloadAuth(authHeader, token, route.id);
+          const output = await artifacts.getArtifactById(route.id, tokenClaims);
+          sendOutput(res, output, requestId, {includeBody: req.method !== 'HEAD'});
+          return undefined;
+        }
+
+        integrations.assertAuth(authHeader);
+
+        if (route.name === 'integrations.chatgpt.projects.import') {
+          const body = await readJsonBody(req, maxBodyBytes);
+          const result = integrations.importProject(body);
+          return json(res, result.isExisting ? 200 : 201, {...result, requestId}, requestId);
+        }
+        if (route.name === 'integrations.chatgpt.projects.get') {
+          return json(res, 200, {...integrations.getProjectStatus(route.id), requestId}, requestId);
+        }
+        if (route.name === 'integrations.chatgpt.projects.draft.edit') {
+          const body = await readJsonBody(req, maxBodyBytes);
+          return json(res, 200, {...integrations.editDraft(route.id, body), requestId}, requestId);
+        }
+        if (route.name === 'integrations.chatgpt.projects.approve') {
+          const body = await readJsonBody(req, maxBodyBytes);
+          return json(res, 200, {...integrations.approveProject(route.id, body), requestId}, requestId);
+        }
+        if (route.name === 'integrations.chatgpt.projects.render') {
+          const result = integrations.startRender(route.id);
+          return json(res, 202, {...result, requestId}, requestId);
+        }
+        if (route.name === 'integrations.chatgpt.projects.retry') {
+          const result = integrations.retry(route.id);
+          return json(res, 202, {...result, requestId}, requestId);
+        }
+        if (route.name === 'integrations.chatgpt.projects.cancel') {
+          const result = integrations.cancel(route.id);
+          return json(res, 200, {...result, requestId}, requestId);
+        }
+        return json(res, 404, {error: {code: 'NOT_FOUND', message: 'Route not found'}, requestId}, requestId);
       }
 
       if (route.name === 'projects.create') {
@@ -303,6 +400,18 @@ export const createAppServer = ({
         error: {code: safeCode(error), message: safeMessage(error, status)},
         requestId,
       }, requestId);
+    } finally {
+      const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
+      if (pathname.startsWith('/api/integrations/')) {
+        console.error(JSON.stringify(redactSecrets({
+          event: 'integration.request',
+          correlationId,
+          method: req.method,
+          path: pathname,
+          status: res.statusCode,
+          durationMs: Date.now() - reqStartedAt,
+        })));
+      }
     }
   });
 };

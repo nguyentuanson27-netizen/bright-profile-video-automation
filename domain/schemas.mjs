@@ -1,5 +1,6 @@
 import Ajv2020 from 'ajv/dist/2020.js';
 import {AppError, ErrorCodes, invalidDomainData} from './errors.mjs';
+import {assertEvidenceBundle} from '../lib/evidence/schema-validator.mjs';
 
 const sourceIds = {
   type: 'array',
@@ -173,6 +174,17 @@ const assertKnownSource = (id, known) => {
   }
 };
 
+export const forEachDraftSourceEntry = (draft, visit) => {
+  for (const [label, entries] of [
+    ['claim', draft.claims],
+    ['script item', draft.script],
+    ['voiceover chunk', draft.voiceover?.chunks],
+    ['scene', draft.scenes],
+  ]) {
+    for (const entry of entries ?? []) visit(entry, label);
+  }
+};
+
 const assertWithinTimeline = (entry, duration, label) => {
   if (entry.start + entry.duration > duration + 1e-9) {
     throw invalidDomainData(`${label} falls outside render timeline`);
@@ -193,9 +205,10 @@ export const validateEvidence = (evidence, {knownSourceIds = []} = {}) => {
 export const validateDraft = (draft, {knownSourceIds = []} = {}) => {
   assertShape(validateDraftShape, draft, 'draft');
   const known = knownSet(knownSourceIds);
-  for (const claim of draft.claims) for (const sourceId of claim.sourceIds) assertKnownSource(sourceId, known);
+  forEachDraftSourceEntry(draft, (entry) => {
+    for (const sourceId of entry.sourceIds ?? []) assertKnownSource(sourceId, known);
+  });
   for (const item of draft.script) {
-    for (const sourceId of item.sourceIds) assertKnownSource(sourceId, known);
     assertWithinTimeline(item, draft.render.duration, `Script item ${item.id}`);
   }
   for (const chunk of draft.voiceover.chunks) assertWithinTimeline(chunk, draft.render.duration, `Voice chunk ${chunk.id}`);
@@ -210,4 +223,148 @@ export const validateApprovedRevision = (revision, options = {}) => {
   assertShape(validateApprovedShape, revision, 'approved revision');
   validateDraft(revision.payload, options);
   return revision;
+};
+
+export const APPROVAL_MODES = Object.freeze({
+  USER_REVIEWED: 'user_reviewed',
+});
+
+export const PROJECT_ORIGINS = Object.freeze({
+  STANDALONE: 'standalone',
+  CHATGPT_MCP: 'chatgpt_mcp',
+});
+
+export const importProjectInputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['creator', 'topic', 'evidenceBundle', 'idempotencyKey'],
+  properties: {
+    creator: {type: 'string', minLength: 1, maxLength: 200},
+    topic: {type: 'string', minLength: 1, maxLength: 500},
+    instructions: {type: 'string', maxLength: 2000},
+    evidenceBundle: {type: 'object'},
+    draft: draftSchema,
+    idempotencyKey: {type: 'string', minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_.:-]+$'},
+  },
+};
+
+export const approveProjectInputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['projectId', 'revisionId', 'expectedPayloadHash'],
+  properties: {
+    projectId: {type: 'string', minLength: 1, maxLength: 200},
+    revisionId: {type: 'string', minLength: 1, maxLength: 200},
+    expectedPayloadHash: {type: 'string', pattern: '^[a-f0-9]{64}$'},
+  },
+};
+
+export const editDraftInputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['projectId', 'revisionId', 'expectedPayloadHash', 'draft'],
+  properties: {
+    projectId: {type: 'string', minLength: 1, maxLength: 200},
+    revisionId: {type: 'string', minLength: 1, maxLength: 200},
+    expectedPayloadHash: {type: 'string', pattern: '^[a-f0-9]{64}$'},
+    draft: {type: 'object'},
+  },
+};
+
+export const projectStatusOutputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['projectId', 'status'],
+  properties: {
+    projectId: {type: 'string', minLength: 1, maxLength: 200},
+    status: {type: 'string', minLength: 1, maxLength: 100},
+    origin: {type: 'string', maxLength: 50},
+    currentRevision: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'payloadHash'],
+      properties: {
+        id: {type: 'string', minLength: 1, maxLength: 200},
+        payloadHash: {type: 'string', pattern: '^[a-f0-9]{64}$'},
+        draft: {type: 'object'},
+      },
+    },
+    progress: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        currentStage: {type: 'string'},
+        stageStatus: {type: 'string'},
+        attemptCount: {type: 'integer', minimum: 0},
+        failureRetryable: {type: 'boolean'},
+        failureCode: {type: 'string'},
+      },
+    },
+    evidenceSummary: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        inputItems: {type: 'integer', minimum: 0},
+        retainedEvidence: {type: 'integer', minimum: 0},
+        conflictGroups: {type: 'integer', minimum: 0},
+        rejectedItems: {type: 'integer', minimum: 0},
+      },
+    },
+    output: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        artifactId: {type: 'string'},
+        downloadUrl: {type: 'string'},
+        sizeBytes: {type: 'integer', minimum: 0},
+        sha256: {type: 'string'},
+      },
+    },
+    requestId: {type: 'string'},
+  },
+};
+
+const validateImportProjectShape = ajv.compile(importProjectInputSchema);
+const validateApproveProjectShape = ajv.compile(approveProjectInputSchema);
+const validateEditDraftShape = ajv.compile(editDraftInputSchema);
+const validateProjectStatusOutputShape = ajv.compile(projectStatusOutputSchema);
+
+export const validateImportProjectInput = (input) => {
+  assertShape(validateImportProjectShape, input, 'import project input');
+  try {
+    assertEvidenceBundle(input.evidenceBundle);
+  } catch (error) {
+    throw invalidDomainData('Invalid evidenceBundle in import project input', error?.details);
+  }
+  if (input.draft !== undefined) {
+    assertShape(validateDraftShape, input.draft, 'import project draft');
+    if (input.draft.creatorName !== input.creator) {
+      throw invalidDomainData('Imported draft creator name must match the project creator');
+    }
+    const evidenceIds = new Set(input.evidenceBundle.evidence.map((item) => item.id));
+    forEachDraftSourceEntry(input.draft, (entry, label) => {
+      for (const evidenceId of entry.sourceIds ?? []) {
+        if (!evidenceIds.has(evidenceId)) {
+          throw invalidDomainData(`Imported draft ${label} references unknown evidence: ${evidenceId}`);
+        }
+      }
+    });
+  }
+  return input;
+};
+
+export const validateApproveProjectInput = (input) => {
+  assertShape(validateApproveProjectShape, input, 'approve project input');
+  return input;
+};
+
+export const validateEditDraftInput = (input, options = {}) => {
+  assertShape(validateEditDraftShape, input, 'edit draft input');
+  validateDraft(input.draft, options);
+  return input;
+};
+
+export const validateProjectStatusOutput = (output) => {
+  assertShape(validateProjectStatusOutputShape, output, 'project status output');
+  return output;
 };

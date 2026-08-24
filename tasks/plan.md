@@ -1,554 +1,517 @@
-# Implementation Plan: Standalone Bright Profile Internal MVP
+# Implementation Plan: ChatGPT MCP Temporary No-Auth Reset
 
-**Primary scope:** `docs/project-status.md` and `docs/specs/standalone-internal-mvp-amendment.md`  
-**Historical detail:** `docs/specs/standalone-production-app.md` where not superseded  
-**Target branch:** `spec/standalone-production-app`  
-**Plan status:** Ready for human review  
-**Implementation status:** Not started for the standalone MVP
+**Primary spec:** `docs/specs/chatgpt-mcp-e2e-video-handoff.md`  
+**Baseline status:** `docs/project-status.md`  
+**Completed predecessor milestone:** standalone T01-T16 on `main`  
+**Plan status:** T17-T27 implemented and CI-verified; T28 live acceptance open
+**Reset date:** 2026-08-21  
+**Task range retained:** T17-T28
+
+## 2026-08-24 T28 internal-client amendment
+
+`docs/decisions/001-t28-internal-mcp-acceptance.md` supersedes the earlier external ChatGPT custom-app and ingress procedure. ChatGPT Plus supplies research and a structured draft, while an operator uses the existing MCP server through an authenticated SSH tunnel to its loopback endpoint. Public `/mcp` remains withdrawn for the entire T28 run. The canonical runbook is `tasks/t28-internal-mcp-acceptance.md`.
 
 ## Goal
 
-Build the smallest internal standalone application that removes n8n/manual project-JSON orchestration from the supported creator-profile workflow:
+Stop iterating on a home-grown OAuth/delegated-authorization implementation and reset the current ChatGPT MCP milestone around the smallest coherent contract that can be verified now:
 
 ```text
-creator/topic + optional public URLs
-  -> public-source research
-  -> normalized/deduplicated evidence
-  -> structured claims/script/voiceover/scene draft
-  -> human review/edit
-  -> explicit approval snapshot
-  -> approved media ingest
-  -> Google TTS
-  -> Remotion render
-  -> MP4 download
+ChatGPT Plus
+  -> operator-mediated internal MCP
+  -> Bright MCP tool surface
+  -> private authenticated Bright Profile integration API
+  -> supplied ChatGPT draft at review_required
+  -> user checkpoint
+  -> durable media/TTS/render pipeline
+  -> authoritative MP4
 ```
 
-The current Remotion renderer, Google TTS integration, Bright Evidence normalizer, MCP deployment, and existing tests are foundations to reuse rather than rewrite.
-
-The milestone is complete when one internal operator can run the flow above without n8n and without manually constructing render JSON, while project/job state survives supported process/container restarts.
-
-## Explicit non-goals
-
-Do not add in this milestone unless the user changes scope:
-
-- public/commercial launch work;
-- public SaaS, multi-tenancy, billing, roles, or signup;
-- Codex-specific plugin work or ChatGPT desktop repo-marketplace acceptance;
-- public Plugins Directory submission or legal/listing pages;
-- Kubernetes, Redis, PostgreSQL, object storage, or multi-host workers;
-- private/authenticated social scraping or access-control bypass;
-- automatic posting to social networks;
-- broad Remotion redesign or new scene system;
-- production SLO/metrics platform, OAuth gateway, or public ingress hardening not required by the actual internal deployment.
-
-Security controls still apply where real trust boundaries exist: external URLs, model output, MCP/API input, secrets, artifacts, dependencies executed by the app/worker, and any endpoint intentionally exposed outside localhost/trusted networking.
-
-## Current baseline to preserve
-
-Already implemented and verified before this plan:
-
-- Remotion `BrightCreatorProfile` render core and supported scene types;
-- Google Cloud TTS integration;
-- H.264 MP4 render path through Chromium/FFmpeg;
-- current API-key protected render job/status/download baseline;
-- Bright Evidence deterministic normalizer under `lib/evidence/`;
-- read-only MCP wrapper and remote ChatGPT connectivity;
-- observed live `normalize_evidence` call returning a structured `EvidenceBundle` with duplicate removal;
-- Node `node:test`, ESLint, MCP verification CI, render smoke, Compose/Docker checks;
-- an MCP-specific production dependency audit gate whose existing risk acceptances are scoped to the MCP request/container boundary and are not standalone-app security evidence.
-
-Known gaps that this plan addresses:
-
-- current render API still uses an in-memory queue;
-- current `compose.yml` still depends on the n8n Docker network;
-- no durable project/revision/job database;
-- no standalone research/generation/review orchestration;
-- no operator UI for the end-to-end flow;
-- renderer normal path still uses `chromiumOptions.disableWebSecurity: true`;
-- no standalone/root production dependency audit policy for the app/worker runtime graph.
-
-## Architecture decisions
-
-### 1. Runtime: keep Node.js ESM and project-owned HTTP code
-
-Keep Node.js ESM and the existing `node:http` style. Add a small application router/service layer rather than introducing Express/Fastify.
-
-Reason: the app is internal, the route surface is finite, and explicit boundary validation keeps dependencies and migration scope small.
-
-### 2. Durable state: SQLite on the existing persistent data volume
-
-Use SQLite via `better-sqlite3`, selected and pinned during build after verifying current Node 24 compatibility from upstream documentation.
-
-Required properties:
-
-- explicit numbered migrations;
-- WAL mode, foreign keys, bounded busy timeout;
-- parameterized statements;
-- short transactions;
-- immutable approved revisions;
-- durable jobs/stages with lease expiry, heartbeat renewal, bounded retries, and per-claim fencing tokens so stale owners cannot commit after reclaim.
-
-Large source/media/render blobs stay on the filesystem, not in SQLite.
-
-### 3. Reuse the Bright Evidence normalizer directly inside the standalone app
-
-The standalone pipeline must call the existing `lib/evidence` normalization code **in-process**. It must not depend on the remote MCP endpoint or ChatGPT UI to normalize evidence.
-
-The remote MCP remains a separate ChatGPT integration surface over the same deterministic normalization behavior.
-
-This keeps one normalization implementation and avoids a network dependency inside the app.
-
-### 4. Research provider: OpenAI Responses API web search
-
-Initial research provider: official OpenAI JavaScript SDK + Responses API web search.
-
-Official OpenAI documentation was re-checked on 2026-08-13 and still supports the `web_search` built-in tool in `responses.create`.
-
-Research responsibilities:
-
-- discover public sources and citation/source metadata;
-- merge operator-supplied public URLs into the same candidate pipeline;
-- treat all search/page content as untrusted data;
-- produce atomic evidence candidates with provenance;
-- pass candidates to the existing deterministic normalizer;
-- preserve unavailable/inaccessible sources rather than fabricate replacements.
-
-Normal CI uses deterministic fakes; live OpenAI calls are manual/gated.
-
-### 5. Generation provider: OpenAI Responses API structured output
-
-Initial generation provider: official OpenAI SDK + Responses API Structured Outputs.
-
-Official OpenAI documentation was re-checked on 2026-08-13 and supports JSON-schema structured responses via the Responses API. `/build` must still re-check the exact pinned SDK/API syntax before implementation.
-
-Generation receives only application-owned normalized evidence/source records and operator context. It does not browse independently.
-
-Returned claims/script/voiceover/scene plan must be validated locally with the shared Ajv schema before persistence.
-
-Generation itself is a durable worker stage. The HTTP generate action only enqueues/requests the stage; it does not own the long provider call. The durable transition is `research_ready -> generating -> review_required`, with provider attempts/retryable failures persisted and the final validated draft committed only by the current fenced stage owner.
-
-### 6. Application and worker are separate processes over the same durable store
-
-Use one HTTP/app process and one worker process.
-
-The app:
-
-- serves the internal operator UI and API;
-- validates input and persists state;
-- enqueues durable stages;
-- never blocks an HTTP request on research, generation, media ingest, TTS, or rendering.
-
-The worker:
-
-- atomically claims runnable stages using a unique claim/attempt token;
-- renews/heartbeats leases while long-running work is still owned;
-- records attempt/lease/error state;
-- fences progress, terminal state, draft creation, and artifact registration/promotion against the current claim token so a stale worker cannot commit after lease loss/reclaim or cancellation;
-- recovers expired work after restart or worker loss;
-- runs research, generation, media ingest, TTS, and render through the same durable stage mechanism;
-- runs render concurrency 1 by default;
-- consumes immutable approved revisions for media/TTS/render work.
-
-### 7. Human approval remains the gate before expensive/output-producing work
-
-Research and draft generation may run automatically.
-
-Media ingest, TTS, and render require an immutable approved revision.
-
-Approval-relevant edits use one simple race-safe policy:
-
-- after approval, an edit may still be accepted only while **no downstream durable stage record exists** for that approved revision;
-- an accepted edit atomically invalidates approval and returns the project to `review_required`;
-- creating the first downstream `media_ingest` stage atomically verifies that the same approved revision is still current;
-- once any downstream `media_ingest`, TTS, or render logical stage has been created for the approved revision, approval-relevant edits are rejected with a stable transition error and do not mutate the approved revision/project state;
-- the edit transaction and downstream-stage creation transaction must serialize so one wins cleanly: either the edit invalidates approval before downstream work exists, or downstream creation wins and the edit is rejected.
-
-This avoids allowing an invalidated approval to race with already queued/running artifact-producing work without introducing cascade-cancellation complexity into the MVP.
-
-### 8. One safe HTTP(S) fetch boundary for public URLs and media
-
-All application-owned remote HTTP(S) fetches use one safe-fetch module with:
-
-- HTTP/HTTPS allowlist;
-- explicit rejection of URL-embedded credentials (`username` / `password`);
-- application-controlled DNS resolution for every request attempt;
-- private/reserved/link-local/loopback/cloud-metadata rejection before connect;
-- a check-to-connect invariant: the outbound socket connects only to an IP address that was resolved and validated for that exact attempt, with no fresh/default hostname lookup allowed to choose a different address after validation;
-- preservation of the original hostname for HTTP `Host` and HTTPS SNI/certificate validation while the socket is pinned to the validated IP;
-- independent re-resolution, re-validation, and validated-IP connection pinning for every redirect hop;
-- timeout/size/MIME limits;
-- no secret/auth-header forwarding;
-- generated local filenames for downloaded artifacts.
-
-No renderer/browser setting is treated as an SSRF control.
-
-### 9. Render only approved local/application-controlled media on the normal path
-
-Approved remote media is ingested before render. The normal render manifest references local/application-controlled assets only.
-
-After that path is proven, remove `chromiumOptions.disableWebSecurity: true` from the default Remotion render path and keep existing scene behavior covered by smoke tests.
-
-### 10. Minimal React/Vite operator UI, no browser auth subsystem in the MVP
-
-Use existing React with Vite and plain JavaScript.
-
-Screens:
-
-- project list/create;
-- project status/research progress;
-- review/edit/approve;
-- render status/completed download.
-
-No raw JSON editing is required for normal use.
-
-The internal MVP does not add a new browser authentication system. The app is private/loopback by default. If it is later exposed beyond trusted networking, authenticated/TLS ingress becomes a separate explicit task before exposure.
-
-### 11. Compose target: n8n-free, internal, reversible
-
-Final MVP Compose runs app + worker with the existing persistent data/artifact volume and no dependency on `n8n-docker_n8n-network`.
-
-The app should publish to loopback/private networking by default. The worker publishes no port.
-
-MCP deployment remains separate and unchanged unless a later task explicitly requires integration changes.
-
-### 12. Standalone dependency-risk evidence belongs to the standalone runtime boundary
-
-The standalone app/worker uses the repository root production dependency graph and intentionally reaches code paths that the MCP container does not, including render/bundler dependencies plus new database/provider dependencies.
-
-Therefore:
-
-- keep the current MCP-specific audit/allowlist for the MCP image if it remains useful;
-- add a separate standalone/root production dependency audit gate for the actual app/worker install/runtime boundary;
-- do not inherit `docs/security/mcp-dependency-audit.md` reachability claims as standalone evidence;
-- any existing high-severity finding may be accepted for the standalone app only after a fresh standalone reachability assessment is recorded;
-- new high/critical packages/advisories fail closed unless explicitly reviewed and recorded for the standalone boundary;
-- normal CI must use the frozen root lockfile and run the standalone audit gate before the MVP can be considered complete.
-
-## Dependency graph
+The current milestone does **not** claim authenticated human review. Its approval semantic is `external_review_acknowledged`: the operator invokes approval only after the user confirms/continues, while the backend records only that the external flow acknowledged review. OAuth and `delegated_e2e` are explicitly deferred to a later trust-boundary milestone.
+
+If the existing database continues to persist `approval_mode='user_reviewed'`, that value is treated as a legacy storage label for `external_review_acknowledged` during this milestone, not as proof of authenticated human review.
+
+## Why This Reset Exists
+
+The previous implementation combined too many security roles inside `mcp/server.mjs`: external OAuth authorization server, user-login/session system, OAuth resource server, static bearer auth, MCP server, private backend service client, and download proxy. Review repeatedly found variants of the same root problem: the runtime lacked a trustworthy source of project-specific human authorization for delegated execution, while the MCP process was also implementing its own identity system.
+
+The no-auth reset removes those root causes instead of patching individual OAuth/delegation findings. The loopback-only MCP port and authenticated SSH tunnel provide the operator boundary; the reset retains explicit operational guardrails and a **durable** active-work capacity invariant.
+
+## Scope Decisions
+
+### In scope
+
+- internal operator MCP `noauth` transport over an authenticated tunnel;
+- existing video handoff tools;
+- private MCP -> Bright Profile HTTP integration protected by `BRIGHT_INTEGRATION_TOKEN`;
+- imported EvidenceBundle + complete ChatGPT draft -> direct `review_required` for the supported T28 path;
+- omitted-draft backend generation retained only as a compatibility path;
+- backend stop at `review_required`;
+- draft edit and external review acknowledgment approval;
+- render/retry/cancel using existing durable backend semantics;
+- signed authoritative MP4 delivery;
+- Host/Origin, body-size, request-deadline, rate-limit, logging, SSRF, artifact, and worker-fencing controls;
+- default-off no-auth write kill switch;
+- bounded anonymous request/concurrency/project capacity;
+- **transactional Bright Profile admission** for any create/retry/reactivation that adds active ChatGPT-origin work;
+- deterministic no-auth end-to-end regression;
+- live internal-MCP acceptance in a bounded write-enabled window;
+- mandatory post-acceptance write disable, tunnel closure, and public `/mcp` HTTP-404 verification.
+
+### Deferred
+
+- OAuth/OIDC external authentication;
+- DCR, OAuth metadata, authorization code, PKCE, login/session, consent, access-token issuance/verification;
+- `MCP_AUTH_TOKEN` static external auth;
+- authenticated user identity propagation;
+- server-verifiable human-review provenance;
+- `delegated_e2e` approval;
+- delegation grants or any model/tool-input-based authorization surrogate.
+
+### Unchanged
+
+- Bright Profile standalone app remains private/loopback by default;
+- worker remains unexposed;
+- MCP never mounts the Bright SQLite/artifact volume;
+- SQLite/job/render architecture remains canonical;
+- `BRIGHT_INTEGRATION_TOKEN` remains required for the private integration boundary;
+- signed MP4 capability remains required for completed output delivery.
+
+## Target Runtime
 
 ```text
-T01 Config/dependency/audit foundation
-  |
-  +--> T02 Domain + schema contracts
-         |
-         +--> T03 SQLite persistence
-         |      |
-         |      +--> T04 Durable jobs/leases/renewal/fencing + retry/cancel controls
-         |
-         +--> T05 Safe URL fetch boundary
-                |
-                +--> T06 Research service + provider fakes + normalizer reuse
-                       |
-                       +--> T07 OpenAI web-search adapter
-                              |
-T03 + T04 + T05 + T07 ------> T08 Research API + generic retry/cancel controls
-                                      |
-                                      +--> T09 Durable structured generation stage
-                                             |
-                                             +--> T10 Review + approval API
-                                                    |
-T04 + T05 + T10 -------------------------------> T11 Durable approved media ingest
-                                                        |
-T04 + T11 --------------------------------------> T12 Durable TTS/render worker
-                                                        |
-                                                        +--> T13 Renderer trusted-local hardening
-
-T08 -------------------------------> T14 UI create/status
-T10 + T12 + T14 -------------------> T15 UI review/approve/completed
-T03 + T04 + T12 + T13 + T15 ------> T16 n8n-free Compose + standalone audit/CI/E2E gate
+ChatGPT Plus
+   |
+   | research + structured draft material
+   v
+Operator
+   |
+   | authenticated SSH tunnel to loopback MCP
+   v
+Bright Evidence MCP
+   |-- normalize_evidence
+   |-- create_video_project
+   |-- get_video_project
+   |-- edit_video_draft
+   |-- approve_video_project      # external review acknowledgment
+   |-- start_video_render
+   |-- retry_video_project
+   `-- cancel_video_project
+   |
+   | BRIGHT_INTEGRATION_TOKEN
+   | private network
+   v
+Bright Profile App
+   |-- transactional active-work admission
+   `-> durable worker -> media/TTS/render -> authoritative MP4
 ```
 
-## Vertical slices
-
-### Slice A — Durable foundations
-
-Tasks T01-T05.
-
-Prove the hardest invariants first:
-
-- config/dependencies are deterministic;
-- the standalone app has dependency-risk evidence for its actual root production runtime graph rather than inheriting MCP-only reachability claims;
-- project lifecycle/contracts are explicit;
-- state survives process reopen;
-- job claims recover after simulated worker failure;
-- long-running claims renew leases and stale owners are fenced from progress/final/artifact commits after reclaim or cancellation;
-- retry requeues only a failed retryable logical stage without duplicating completed work;
-- cancel prevents new claims and invalidates the current claim so late worker writes cannot become authoritative;
-- every future remote fetch goes through one SSRF-safe boundary whose validated DNS result is the address actually used to connect.
-
-**Checkpoint A:** stop if standalone production dependency audit policy/fail-closed behavior, SQLite persistence/lease recovery, heartbeat/fencing stale-owner regression, retry/cancel job semantics, safe-fetch redirect/DNS policy, DNS-rebinding/check-to-connect regression, or credential-bearing URL rejection is red.
-
-### Slice B — Creator/topic to normalized research
-
-Tasks T06-T08.
-
-Deliver an API-driven slice:
+## Temporary No-Auth Deployment Contract
 
 ```text
-create project
-  -> enqueue research
-  -> provider discovery/operator URLs
-  -> atomic evidence candidates
-  -> existing Bright Evidence normalizer in-process
-  -> persisted research_ready project
+MCP_NOAUTH_WRITE_ENABLED=false
+MCP_RATE_LIMIT_PER_MINUTE=20
+MCP_MAX_INFLIGHT_WRITE_REQUESTS=2
+MCP_MAX_ACTIVE_PROJECTS=3
 ```
 
-**Checkpoint B:** with fake providers, restart the app/worker and confirm the project and normalized evidence survive. Exercise one failed-retryable research stage through `/retry` and one blocked in-flight research stage through `/cancel`, proving a cancelled/stale worker cannot later commit. Then run one optional live OpenAI research smoke.
+Semantics:
 
-### Slice C — Research to approved immutable draft
+- writes are **off by default**;
+- `NOAUTH_WRITE_DISABLED` is returned before backend side effects when writes are disabled;
+- `MCP_MAX_INFLIGHT_WRITE_REQUESTS` bounds simultaneous anonymous mutating calls at the MCP edge;
+- `MCP_MAX_ACTIVE_PROJECTS` is a **durable global invariant** over non-terminal `origin=chatgpt_mcp` projects that can own/queue active work;
+- Bright Profile, not a process-local MCP counter, is authoritative for active-project admission;
+- admission occurs in the same SQLite transaction that creates or reactivates active work;
+- create, retry/requeue/reactivation, and any future inactive/terminal -> active transition use the same admission invariant;
+- idempotent replay that only returns an existing result does not allocate a new slot;
+- concurrent callers/processes cannot commit state above the configured active-project cap;
+- capacity failure returns `NOAUTH_CAPACITY_REACHED` with zero new project/job/attempt/reactivation mutation;
+- no no-auth limit may default to unlimited;
+- T28 may enable writes only for the explicit internal acceptance window;
+- T28 teardown requires `MCP_NOAUTH_WRITE_ENABLED=false`, tunnel closure, and public `/mcp` HTTP-404 verification;
+- a later test window must be opened explicitly rather than leaving writes enabled.
 
-Tasks T09-T10.
+## Approval Truth Contract
 
-Deliver:
+- **Client behavior to verify live:** the operator presents the persisted review state to the user and waits for user confirmation before invoking `approve_video_project`.
+- **Backend guarantee:** the backend itself does not auto-approve at `review_required`; approval is revision/hash/state/schema fenced.
+- **Backend limitation in noauth mode:** the backend records an external acknowledgment but cannot prove a real human reviewed the draft; the operator tunnel narrows access and does not turn that acknowledgment into authenticated identity proof.
+- **Audit semantics:** record `external_review_acknowledged` at the integration/docs level and a bounded actor/origin such as `chatgpt_mcp_noauth`; never claim an authenticated human identity.
+- **Storage compatibility:** if schema v3 retains `approval_mode='user_reviewed'`, map/document it as the legacy persistence value for the above external acknowledgment only.
+
+## Dependency Graph
 
 ```text
-research_ready
-  -> enqueue generation
-  -> generating
-  -> durable worker + structured generation provider
-  -> persisted review_required draft
-  -> edit
-  -> explicit approval
-  -> immutable approved revision
+T17  noauth transport + kill switch + edge request limits
+ |
+ +--> T21  noauth tool surface
+ |
+ +--> T26  remove OAuth deployment state + internal-tunnel access contract
+ |
+T20  backend import + transactional active-work admission
+ |
+ +--> T24  retry/reactivation uses same durable admission
+ |
+T18 + T22 + T23  truthful approval + delegated removal
+ |
+T25  signed output
+ |
+T17-T26 --> T27 deterministic/adversarial verification
+              |
+              +--> T28 bounded live acceptance + mandatory teardown
 ```
 
-**Checkpoint C:** prove generation restart/expired-lease recovery produces exactly one persisted draft, stale generation owners cannot finalize after reclaim/cancel, unknown source references are rejected, unverified claims block approval unless explicitly overridden, and approval-relevant edit/downstream-stage creation races obey Architecture Decision 7 / T10: edit wins before downstream work exists or is rejected after downstream work exists, with no mixed state.
+## Execution Order
 
-### Slice D — Approved revision to valid MP4
+1. contract/spec reset;
+2. loopback MCP `noauth` transport + default-off write kill switch;
+3. delete OAuth/DCR/session runtime surface;
+4. add transactional backend active-work admission before relying on active-project caps;
+5. simplify Compose/env/CI and add finite edge limits;
+6. collapse approval to external review acknowledgment semantics;
+7. remove delegation implementation/routes/tests;
+8. ensure retry/reactivation uses the same durable active-work admission;
+9. rewrite deterministic E2E around the actual no-auth review-acknowledged flow and capacity races;
+10. run full verification;
+11. run live internal-MCP acceptance in a bounded write-enabled window through the operator tunnel;
+12. restore write-disabled state, close the operator tunnel, and verify public `/mcp` remains HTTP 404 before docs/PR closure.
 
-Tasks T11-T13.
+Do not start by repairing OAuth or by implementing a process-local active-project counter as the source of truth.
 
-Deliver:
+## Task Details
+
+### T17 — Temporary no-auth MCP boundary + private service auth + edge guards
+
+**Outcome:** an operator uses an authenticated tunnel to reach loopback MCP without OAuth/static bearer; private MCP -> app remains authenticated; writes are default-off and edge concurrency is bounded.
+
+Implementation requirements:
+
+- `/mcp` initialize/tool discovery/legal calls work without `Authorization`;
+- all active tools advertise `securitySchemes: [{type: 'noauth'}]`;
+- remove external auth dispatch/fallback logic from `mcp/server.mjs`;
+- preserve Host/Origin, request size, request deadline, rate limit, protocol validation, and secret-safe logging;
+- keep `BRIGHT_INTEGRATION_TOKEN` for MCP -> app;
+- direct integration API calls without the service token remain fail-closed with zero durable mutation;
+- implement `MCP_NOAUTH_WRITE_ENABLED=false` by default;
+- disabled writes fail with `NOAUTH_WRITE_DISABLED` before backend side effects;
+- implement finite rate and in-flight write limits;
+- do not treat an MCP-local active-project count as authoritative.
+
+Verification:
+
+- noauth initialize/list/call tests;
+- kill-switch negative tests with zero mutation;
+- rate/in-flight capacity tests;
+- negative direct-backend service-auth tests;
+- body/deadline/rate-limit/Host/Origin regressions remain green.
+
+### T18 — Simplify handoff/approval contracts
+
+**Outcome:** active MCP contract no longer exposes auth/delegation concepts or falsely claims authenticated human review.
+
+Required changes:
+
+- `approve_video_project` input contains only project/revision/hash fields needed for approval;
+- caller cannot choose approval mode or actor;
+- caller cannot provide `delegationGrant` or `delegatedContext`;
+- MCP adapter records external review acknowledgment with bounded actor/origin `chatgpt_mcp_noauth` or equivalent;
+- if backend storage still requires `mode=user_reviewed`, treat it as a compatibility mapping only;
+- API/tool responses, tests, docs, and logs must not describe that legacy value as authenticated human proof.
+
+Keep existing revision/hash/schema/source legality checks authoritative.
+
+### T19 — Retain existing durable ChatGPT handoff migration
+
+**Outcome:** keep already-added durable integration/idempotency/origin/approval provenance storage where useful.
+
+Do not add a destructive migration merely to remove deferred OAuth/delegation behavior or rename the compatibility enum.
+
+Verify migration/reopen behavior and ensure no OAuth client/session/token persistence remains required.
+
+### T20 — Retain private backend EvidenceBundle import + durable capacity admission
+
+**Outcome:** existing import path remains authoritative/service-authenticated, supports the T28 draft handoff and the omitted-draft compatibility path, and a new ChatGPT-origin project cannot exceed the durable active-work cap.
+
+Requirements:
+
+- backend revalidates EvidenceBundle;
+- same idempotency key returns the same project before allocating a second capacity slot;
+- imported research does not call backend research provider;
+- when a complete draft is supplied, validate/remap its evidence references and persist directly at `review_required` without a generation job;
+- when draft is omitted, enter `research_ready` and queue generation as a compatibility path that may require the backend OpenAI provider;
+- state survives reopen;
+- for a genuinely new project, the backend checks current active ChatGPT-origin count and creates/enqueues the project in the **same SQLite transaction**;
+- if the cap is full, return `NOAUTH_CAPACITY_REACHED` and commit no new project/job;
+- two concurrent new creates at the last available slot cannot both commit.
+
+No external OAuth concern belongs in this task.
+
+### T21 — Convert MCP tool surface to noauth
+
+**Outcome:** all supported tools are callable without external bearer/OAuth linking, subject to the write gate for mutating tools.
+
+Required changes:
+
+- tool metadata = `noauth`;
+- remove OAuth scope checks and synthetic authenticated-user context;
+- retain bounded schemas/output normalization/backend client behavior;
+- retain correlation IDs across MCP -> backend;
+- apply write gate + in-flight capacity before write-side backend dispatch;
+- defer authoritative active-project admission to Bright Profile.
+
+Checkpoint A:
 
 ```text
-approved revision
-  -> durable fenced media_ingest stage
-  -> trusted local media artifacts
-  -> durable TTS stage
-  -> durable render stage
-  -> validated output.mp4
+no Authorization -> initialize succeeds
+no Authorization -> tools/list succeeds
+writes disabled -> mutating tool fails before backend mutation
+writes enabled -> legal mutating tool reaches private backend
+OAuth routes are not needed
+rate/body/deadline/Host protections still work
 ```
 
-**Checkpoint D:** run a controlled approved fixture through media ingest -> TTS -> render. For media ingest, demonstrate restart/reclaim and stale-owner fencing with exactly one authoritative ingested artifact set. For TTS/render, demonstrate lease renewal/recovery/fencing, prevent stale attempts from promoting/registering final artifacts, and remove default `disableWebSecurity` dependency.
+### T22 — Review/edit/external-review-acknowledgment path
 
-### Slice E — Operator experience and n8n removal
+**Outcome:** backend stops at review; the operator proceeds only after user confirmation; audit remains truthful about no-auth limitations.
 
-Tasks T14-T16.
+Required negative cases include premature backend approval, stale revision/hash, invalid draft/source refs, caller-selected actor/mode/delegation, and any response/log/test claiming authenticated human review.
 
-Deliver the full internal workflow without raw JSON or n8n:
+### T23 — Remove/defer delegated E2E authorization
+
+Remove/deactivate delegated mode/grants/routes/runtime inputs/positive-path tests. Keep DB approval columns only where removing them would create unnecessary migration churn.
+
+### T24 — Retain render/retry/cancel wrappers + capacity-aware retry
+
+Verify:
+
+- all write wrappers honor write kill switch and in-flight gate;
+- render-start remains idempotent;
+- retry only works for retryable durable failure;
+- when retry/requeue changes a failed/inactive ChatGPT-origin project back to active, Bright Profile performs capacity admission in the **same transaction** that creates replacement work;
+- if the cap is full, retry returns `NOAUTH_CAPACITY_REACHED` with zero replacement attempt/job/state mutation;
+- repeated retry for already queued/running replacement work remains idempotent and does not consume another slot;
+- cancel preserves stale/current owner fencing.
+
+### T25 — Retain signed authoritative MP4 delivery
+
+Verify exact project/revision/artifact binding, expiry/tamper rejection, authoritative file validation, streaming/backpressure, timeout/rate limit, and no arbitrary path/file selection.
+
+### T26 — Remove OAuth deployment/config/runtime state + define internal tunnel access
+
+Remove:
 
 ```text
-browser
-  -> creator/topic
-  -> research
-  -> review/edit/approve
-  -> render
-  -> download MP4
+MCP_AUTH_TOKEN
+MCP_OAUTH_SECRET
+BRIGHT_USER_AUTH_SECRET
+MCP_CLIENT_STORAGE_PATH
+OAuth client storage volume
+OAuth/DCR/session routes/metadata
+security/oauth.mjs
+OAuth-specific tests
 ```
 
-**Final checkpoint:** deterministic E2E with fake providers, real local render smoke, app restart persistence, durable research/generation/media-ingest/TTS/render stages, worker lease renewal/recovery/fencing, at least one explicit retry path and one cancellation path, standalone/root production dependency audit gate, n8n-free Compose, and project-wide Definition of Done.
-
-## Task summary
-
-| Task | Outcome | Depends on | Scope |
-|---|---|---|---|
-| T01 | Config/tooling/dependencies + standalone production-audit foundation | None | M |
-| T02 | Domain lifecycle and shared schemas | T01 | M |
-| T03 | SQLite migrations and repositories | T02 | M |
-| T04 | Durable jobs, lease renewal/fencing, retry/cancel/recovery | T03 | M |
-| T05 | Canonical SSRF-safe fetch boundary | T02 | M |
-| T06 | Research service, fakes, direct evidence-normalizer reuse | T02,T05 | M |
-| T07 | OpenAI Responses web-search adapter | T06 | M |
-| T08 | Create/research API + generic retry/cancel controls | T03,T04,T05,T07 | M |
-| T09 | Durable structured generation worker stage | T04,T06,T08 | M |
-| T10 | Draft review/edit/approval API + downstream-work edit race policy | T03,T09 | M |
-| T11 | Durable fenced approved-media ingest/artifact set | T04,T05,T10 | M |
-| T12 | Durable TTS/render worker with fenced artifact finalization | T04,T11 | M |
-| T13 | Trusted-local Remotion boundary | T11,T12 | M |
-| T14 | React/Vite create/status UI | T08 | M |
-| T15 | Review/approve/render/download UI | T10,T12,T14 | M |
-| T16 | n8n-free Compose + standalone audit/CI/E2E/restart gate | T03,T04,T12,T13,T15 | M |
-
-Detailed acceptance criteria and verification commands live in `tasks/todo.md`.
-
-## API direction
-
-Keep a small resource-oriented internal API:
+Keep/add:
 
 ```text
-POST   /api/projects
-GET    /api/projects
-GET    /api/projects/:id
-POST   /api/projects/:id/research
-POST   /api/projects/:id/generate
-PATCH  /api/projects/:id/draft
-POST   /api/projects/:id/approve
-POST   /api/projects/:id/render
-POST   /api/projects/:id/retry
-POST   /api/projects/:id/cancel
-GET    /api/projects/:id/sources
-GET    /api/projects/:id/artifacts/output
-GET    /health/live
-GET    /health/ready
+MCP_PUBLIC_URL
+MCP_ALLOWED_HOSTS
+MCP_MAX_BODY_BYTES
+MCP_REQUEST_TIMEOUT_MS
+BRIGHT_BACKEND_URL
+BRIGHT_INTEGRATION_TOKEN
+MCP_NOAUTH_WRITE_ENABLED=false
+MCP_RATE_LIMIT_PER_MINUTE=20
+MCP_MAX_INFLIGHT_WRITE_REQUESTS=2
+MCP_MAX_ACTIVE_PROJECTS=3
 ```
 
-Long-running state-changing actions such as research, generation, media ingest, TTS, and render enqueue/transition durable stages and return without owning the provider/download/render work in the HTTP request. State-changing endpoints validate JSON schemas and lifecycle transitions. Errors return stable sanitized JSON with a request ID. No endpoint accepts arbitrary local filesystem paths, shell commands, provider tool selection, or unvalidated remote URLs.
+Compose/CI must prove app/worker remain private, MCP has no Bright storage mounts, internal operator access uses an authenticated tunnel to the loopback endpoint, no OAuth persistence volume remains, and no no-auth limit defaults to unlimited.
 
-`POST /api/projects/:id/retry` is legal only when the project is in `failed`, the stored failed stage is explicitly retryable, and no runnable/running instance of that logical stage already exists. The operation atomically requeues the same logical durable stage for a new attempt, preserves already completed upstream state/artifacts, and is idempotent against repeated retry requests while the stage is already queued/running.
+T28 closure additionally requires proving that public `/mcp` remains withdrawn after acceptance; it must not be opened for this internal-client runbook.
 
-`POST /api/projects/:id/cancel` is legal while a durable stage is queued or running (`researching`, `generating`, `media_ingest`, `tts`, `render_queued`, or `rendering`). Cancellation atomically marks the project/logical stage cancelled, prevents new claims, and invalidates/rotates the current claim fence so any in-flight or stale worker is rejected from later progress/result/draft/artifact commits. Workers should best-effort abort cancellable provider/download/render activity when they observe cancellation, but correctness must not depend on immediate process-level interruption. Cancellation is terminal for the current project run; the MVP does not silently resume cancelled work.
+### T27 — Deterministic noauth full E2E + adversarial regression
 
-A repeated `POST /api/projects/:id/cancel` against an already-cancelled current run is an idempotent no-op that returns the existing cancelled state and does not create a new attempt or mutate ownership. Other non-active states where cancellation never applied return the stable illegal-transition error.
-
-Approval-relevant draft edits after approval follow the policy in Architecture Decision 7. The server transactionally checks for descendant durable-stage records tied to the current approved revision: if none exist, the edit may invalidate approval and return to `review_required`; if any media-ingest/TTS/render stage already exists, the edit returns a stable downstream-work-started transition error without mutating approval/project content.
-
-## Storage direction
-
-Expected SQLite concepts:
+Supported T28 contract regression:
 
 ```text
-schema_migrations
-projects
-sources
-project_sources
-revisions
-revision_claims
-revision_source_refs
-jobs
-job_attempts
-artifacts
+start app + MCP
+ -> initialize without Authorization
+ -> prove writes disabled by default
+ -> enable writes in test config
+ -> normalize_evidence
+ -> construct complete structured draft from normalized evidence IDs
+ -> create_video_project({ evidenceBundle, draft, ... })
+ -> review_required with no generation job
+ -> prove no backend auto-approval/render
 ```
 
-Key invariants:
-
-- project/source/job state survives reopen;
-- approved revision content/hash is immutable;
-- jobs refer to project and approved revision where required;
-- each runnable claim has a current owner/attempt fencing token and lease expiry;
-- lease renewal, progress, completion, draft creation, and artifact registration/promotion require the current fencing token; a reclaimed/stale/cancelled owner is rejected even if it later resumes;
-- a failed retryable logical stage can be requeued atomically without duplicating completed upstream work or an already-active replacement attempt;
-- cancellation prevents future claims for that project run and invalidates any current claim before later commits can become authoritative;
-- repeated cancellation of the already-cancelled current run is a read/no-op response, not a transition that revives or mutates work;
-- approval-relevant edit and first descendant-stage creation are mutually exclusive transactional outcomes for a given approved revision: an edit can invalidate approval only before any descendant stage exists; descendant creation succeeds only while that approved revision is still current;
-- source IDs are application-owned;
-- artifacts store safe relative paths and provenance;
-- secrets/provider tokens are never stored in project records.
-
-## Verification strategy
-
-Every behavioral implementation task follows RED -> GREEN -> REFACTOR.
-
-Normal PR verification should be deterministic and avoid paid/live provider calls.
-
-Expected final commands after the relevant tasks add them:
+Retained compatibility/lifecycle E2E:
 
 ```text
-npm ci
+start app + MCP
+ -> initialize without Authorization
+ -> prove writes disabled by default
+ -> enable writes in test config
+ -> normalize_evidence
+ -> create_video_project without draft
+ -> generation -> review_required
+ -> prove no backend auto-approval/render
+ -> invoke approve_video_project
+ -> external review acknowledgment
+ -> start_video_render
+ -> media/TTS/render
+ -> completed
+ -> signed MP4 download
+```
+
+Adversarial/recovery coverage must include:
+
+- write kill switch zero-mutation;
+- rate/in-flight enforcement;
+- active-cap rejection on new create;
+- active-cap rejection on retry/reactivation;
+- concurrent admission race at the last available slot (for example one new create + one retry) proving committed active count never exceeds the cap;
+- idempotent create/retry replay does not consume duplicate slots;
+- DB reopen/restart;
+- stale edit/approval;
+- direct backend no/wrong service token;
+- retry/cancel/stale-owner fencing;
+- signed-download tamper/expiry;
+- source prompt-injection-looking content as inert data.
+
+The compatibility E2E verifies the retained backend generation lifecycle; it is not the T28 client path. Automated verification does **not** prove a real human reviewed the draft; human/client confirmation timing belongs to T28.
+
+### T28 — Live internal MCP acceptance + docs/ship closure
+
+Before the run:
+
+- deploy exact implementation HEAD/image;
+- keep public `/mcp` withdrawn (HTTP 404) and establish an authenticated tunnel to the loopback MCP endpoint;
+- set `MCP_NOAUTH_WRITE_ENABLED=true` explicitly;
+- record rate/in-flight/active-project values and tunnel/write-window times.
+
+Path A:
+
+```text
+ChatGPT produces research material
+ -> operator calls normalize_evidence through internal MCP
+ -> construct complete structured draft from normalized evidence IDs
+ -> operator calls create_video_project({ evidenceBundle, draft, ... })
+ -> review_required
+ -> draft shown
+ -> operator does not call approval/render before user action
+```
+
+Path A is keyless: it must not omit `draft` or depend on the compatibility generation path/`OPENAI_API_KEY`. It is executed by an internal MCP client, not a ChatGPT custom app.
+
+Path B:
+
+```text
+user explicitly confirms/continues
+ -> approve_video_project
+ -> external review acknowledgment
+ -> start_video_render
+ -> completed
+ -> MP4 downloadable/playable
+```
+
+Mandatory teardown before T28 can close:
+
+1. set `MCP_NOAUTH_WRITE_ENABLED=false`;
+2. close the authenticated tunnel;
+3. verify public `/mcp` remains HTTP 404;
+4. record write-disable and tunnel-close evidence.
+
+There is no `and/or` shortcut here. If continued temporary testing is needed, open a new explicitly approved bounded window later.
+
+## Verification Checkpoints
+
+### Checkpoint A — External transport reset
+
+Require noauth initialize/discovery, write-disabled behavior, route cleanup, finite edge controls, and private backend service-auth rejection.
+
+### Checkpoint B — Approval reset
+
+Require backend stop at `review_required`, no caller-selected auth/delegation semantics, stale-hash rejection, truthful external acknowledgment, and no delegated runtime path.
+
+### Checkpoint C — Durable capacity/runtime/output
+
+Require:
+
+- transactional active-project admission at Bright Profile;
+- create and retry/reactivation share the invariant;
+- concurrent admission cannot exceed cap;
+- render/retry/cancel preserve durable semantics;
+- signed output cannot select arbitrary files;
+- Compose private boundary remains intact;
+- observability/correlation remains secret-safe.
+
+### Final Checkpoint
+
+Required evidence:
+
+```sh
+npm ci --ignore-scripts --no-audit --no-fund
+npm rebuild better-sqlite3 --no-audit --no-fund
 npm test
 npm run lint
 npm run audit:standalone
-npm run build
+npm run build:web
 npm run render:smoke
-npm run db:migrate -- --database <temp-db>
 docker compose config
+docker compose -f compose.mcp.yml config
 ```
 
-`npm run audit:standalone` is the intended aggregate name for the standalone/root production dependency gate. During T01 it may wrap `npm audit --omit=dev --audit-level=high --json` plus a fail-closed verifier and standalone-specific reviewed-finding document. It must not silently reuse MCP-only reachability acceptance.
+Plus:
 
-Final runtime/security evidence must additionally cover:
+- exact-head `Bright Profile Verification` success;
+- deterministic noauth E2E success;
+- live internal-MCP Path A and Path B evidence;
+- write-disabled, tunnel-closed, and public-404 teardown evidence;
+- project-wide Definition of Done;
+- docs/PR body synchronized to observed truth.
 
-- create -> research -> generate -> review -> approve -> media ingest -> TTS -> render -> download with deterministic fake providers;
-- one gated live OpenAI research smoke and one gated structured-generation smoke when credentials are available;
-- app restart without project-state loss;
-- simulated worker death and expired-lease recovery;
-- lease heartbeat/renewal for long-running work plus a stale-owner fencing regression where worker B reclaims a stage and worker A is then unable to commit progress/final state/artifacts;
-- generation restart/lease recovery from `generating` to exactly one `review_required` draft with persisted provider attempt/failure state and no duplicate draft/revision creation;
-- media-ingest restart/reclaim from `media_ingest` with per-attempt temporary files and exactly one authoritative artifact set; stale/cancelled owners cannot promote/register files;
-- explicit `/retry` regression proving only the failed retryable logical stage is requeued and completed upstream work is not duplicated;
-- explicit `/cancel` regression proving no new claim starts and an already-running/stale worker cannot commit after cancellation, plus repeated cancel returns the same cancelled state as a no-op;
-- approval-edit/downstream-start race regression proving there is no state where approval is invalidated while descendant artifact-producing work remains authorized;
-- standalone/root production dependency audit against the app/worker install graph, with fresh standalone reachability review for any accepted high and fail-closed handling of new high/critical findings;
-- SSRF rejection for direct private targets, redirect-to-private targets, DNS rebinding/check-to-connect changes, and credential-bearing URLs;
-- deterministic proof that a blocked address is never connected to after a different address was validated for the same attempt;
-- approved-media path traversal/type/size failures;
-- output MP4 existence/non-zero/ffprobe validation;
-- normal render path without arbitrary remote media or default `disableWebSecurity`;
-- Compose contains no n8n network dependency;
-- direct existing MCP tests remain green even though the standalone app does not depend on MCP transport.
+## Security Posture During Temporary Noauth Mode
 
-## Main risks and mitigations
+This milestone keeps the MCP listener loopback-only. During a bounded write-enabled window, only an operator with authenticated host access and the SSH tunnel can reach it.
 
-### Public social-source availability
+Therefore:
 
-Some public TikTok/Facebook/Instagram/Threads/X pages may not be reliably fetchable through generic HTTP access.
+- do not expose the MCP surface publicly or describe the tunnel as proof of end-user identity;
+- do not describe approval as authenticated human review;
+- writes default to disabled;
+- keep finite global rate/in-flight limits;
+- enforce active-project capacity durably, not as a process-local best effort;
+- keep private backend service authentication and durable idempotency/fencing;
+- use a bounded acceptance/test write window over the operator tunnel;
+- keep the public `/mcp` route withdrawn (HTTP 404) throughout T28;
+- plan any public authenticated access as a separate trust-boundary milestone.
 
-Mitigation: web-search discovery, operator URLs, explicit unavailable status, alternative public sources, no access-control bypass, and human review.
+## Rollback
 
-### Model/provider variability
+The reset should require no destructive database migration.
 
-Research/generation can vary or fail due to rate limits, incomplete responses, pricing/model changes, or malformed output.
+If a live internal-MCP write window is unacceptable:
 
-Mitigation: narrow provider interfaces, deterministic fakes, strict local schemas, explicit model config, bounded retries/timeouts/tokens, durable attempt state, lease renewal/fencing, and manual live smoke outside normal CI.
+1. set `MCP_NOAUTH_WRITE_ENABLED=false`;
+2. close the operator SSH tunnel;
+3. verify the public `/mcp` endpoint returns HTTP 404;
+4. leave the private Bright Profile backend unchanged;
+5. do **not** fall back to the partially implemented OAuth subsystem;
+6. plan a separate authenticated resource-server/IdP integration milestone.
 
-### SQLite contention/recovery
+## Plan Exit Condition
 
-App and worker share one DB.
+This plan is complete when implementation, tests, Compose/CI, deterministic E2E, live internal-MCP acceptance, and docs all describe one coherent truth:
 
-Mitigation: short transactions, WAL, busy timeout, indexed runnable-job queries, one render worker, lease-based claims with heartbeat renewal and fencing tokens on all state/artifact commits. Retry/cancel mutations and approval-edit/downstream-start checks are transactional. Do not introduce Redis/PostgreSQL unless measured evidence shows SQLite cannot meet this single-host internal use case.
-
-### Dependency reachability changes
-
-The standalone app executes more of the root dependency graph than the MCP container and adds database/provider dependencies.
-
-Mitigation: frozen install, standalone/root production audit at the real app/worker boundary, explicit standalone reachability review for accepted high findings, fail-closed handling for new high/critical advisories, and separate preservation of the MCP-specific gate where its narrower reachability argument remains valid.
-
-### Renderer/resource pressure
-
-Chromium/FFmpeg/media can consume CPU/RAM/disk.
-
-Mitigation: render concurrency 1, current duration/scene bounds, bounded media ingest, per-attempt partial-output isolation, fenced final artifact promotion, and explicit output validation. Broader production capacity planning is out of scope.
-
-### Scope creep back into plugin/deployment work
-
-Mitigation: Bright Evidence MCP is already accepted for current ChatGPT use. Do not make plugin/Codex/marketplace/public-launch work part of standalone completion.
-
-## Parallelization
-
-Safe after contracts stabilize:
-
-- after T02: T03 and T05 can proceed independently;
-- after T06: T07 can proceed while T03/T04 finish;
-- after T08: T14 UI create/status can proceed while T09/T10 are built;
-- after T10: T11 can proceed while T14 UI work continues.
-
-Must remain sequential:
-
-- migrations before repositories/jobs that require them;
-- durable generation completion before review/approval;
-- approval before durable media ingest/TTS/render;
-- once downstream work has been created for an approved revision, approval-relevant editing is locked for that revision in the MVP;
-- media ingest before TTS/render and before trusted-local renderer hardening can be considered complete;
-- T16 only after the full application path exists.
-
-## Final Definition of Done gate
-
-The standalone internal MVP is complete only when task acceptance criteria and the project-wide Definition of Done both pass:
-
-- requested internal workflow works at runtime;
-- new behavior has regression tests and existing MCP/render tests stay green;
-- no unrelated refactor or dead compatibility code remains;
-- app/worker/SQLite/artifact/provider/render paths integrate correctly;
-- docs describe current truth;
-- external input/model output/secrets/artifact/dependency boundaries are reviewed;
-- standalone/root production dependency audit evidence matches the actual app/worker runtime graph and does not rely on MCP-only reachability acceptance;
-- restart/retry behavior is demonstrated, including long-stage lease renewal and stale-owner fencing after reclaim;
-- research, generation, media ingest, TTS, and render are demonstrably durable worker stages across supported restart/reclaim scenarios;
-- retry and cancel semantics are demonstrated end-to-end, including cancellation fencing of in-flight/stale workers and idempotent repeated cancel;
-- approval-relevant edit/downstream-start races are transactionally resolved with no mixed invalidated-approval/running-descendant state;
-- generation is demonstrably durable across worker/process restart without duplicate drafts;
-- media ingest is demonstrably durable across worker/process restart without duplicate authoritative artifact sets;
-- no n8n dependency or manual project JSON is required for the normal operator flow.
-
-## Human gate
-
-This plan is ready for review. Do not start `/build` until the user approves this revised plan.
+```text
+ChatGPT Plus -> operator -> loopback MCP through an authenticated SSH tunnel
+writes disabled by default and edge-bounded when enabled
+active ChatGPT-origin work transactionally capped in Bright Profile
+private service-authenticated MCP -> Bright Profile
+operator-recorded external review acknowledgment, not authenticated human proof
+signed authoritative MP4 delivery
+OAuth + delegated_e2e deferred
+T28 teardown = writes disabled + tunnel closed + public `/mcp` HTTP 404
+```
