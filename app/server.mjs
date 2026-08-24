@@ -37,9 +37,9 @@ const hostnameFromAuthority = (value) => {
   }
 };
 
-const assertBrowserBoundary = (req) => {
+const assertBrowserBoundary = (req, allowedBrowserHosts) => {
   const host = hostnameFromAuthority(req.headers.host);
-  if (!host || !LOOPBACK_HOSTS.has(host)) {
+  if (!host || !allowedBrowserHosts.has(host)) {
     throw new AppError('HOST_NOT_ALLOWED', 'Request Host is not allowed', {status: 403});
   }
   const method = String(req.method ?? 'GET').toUpperCase();
@@ -51,7 +51,7 @@ const assertBrowserBoundary = (req) => {
   if (origin === undefined) return;
   try {
     const parsed = new URL(String(origin));
-    if (!['http:', 'https:'].includes(parsed.protocol) || !LOOPBACK_HOSTS.has(parsed.hostname.toLowerCase())) {
+    if (!['http:', 'https:'].includes(parsed.protocol) || !allowedBrowserHosts.has(parsed.hostname.toLowerCase())) {
       throw new Error('not loopback');
     }
   } catch {
@@ -198,6 +198,7 @@ export const createAppServer = ({
   integrationToken,
   downloadSigningSecret,
   allowedIntegrationHosts = ['127.0.0.1', 'localhost', 'app', '::1', '[::1]'],
+  allowedBrowserHosts = [],
   maxActiveProjects,
 } = {}) => {
   if (!db || typeof db.prepare !== 'function') throw new TypeError('database is required');
@@ -211,6 +212,10 @@ export const createAppServer = ({
   const integrationHostsSet = new Set([
     ...LOOPBACK_HOSTS,
     ...(allowedIntegrationHosts || []).map((h) => String(h).trim().toLowerCase()).filter(Boolean),
+  ]);
+  const browserHostsSet = new Set([
+    ...LOOPBACK_HOSTS,
+    ...(allowedBrowserHosts || []).map((h) => String(h).trim().toLowerCase()).filter(Boolean),
   ]);
   const projects = createProjectsApi({
     repos,
@@ -268,7 +273,7 @@ export const createAppServer = ({
           throw new AppError('HOST_NOT_ALLOWED', 'Request Host is not allowed', {status: 403});
         }
       } else {
-        assertBrowserBoundary(req);
+        assertBrowserBoundary(req, browserHostsSet);
       }
 
       if (!route) {

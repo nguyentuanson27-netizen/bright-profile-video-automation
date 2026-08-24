@@ -9,7 +9,7 @@ import {createAppServer} from '../../app/server.mjs';
 import {openDatabase, migrateDatabase, createRepositories} from '../../storage/db.mjs';
 import {createJobStore} from '../../storage/jobs.mjs';
 
-const createFixture = async () => {
+const createFixture = async ({allowedBrowserHosts} = {}) => {
   const dataDir = mkdtempSync(join(tmpdir(), 'bright-browser-boundary-'));
   const db = openDatabase(join(dataDir, 'app.sqlite'));
   migrateDatabase(db);
@@ -23,6 +23,7 @@ const createFixture = async () => {
     projectIdFactory: () => 'project-1',
     stageIdFactory: () => 'stage-1',
     sourceIdFactory: () => 'source-1',
+    allowedBrowserHosts,
   });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -32,14 +33,15 @@ const createFixture = async () => {
 };
 
 const close = (server) => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-const rawRequest = ({port, path, headers}) => new Promise((resolveRequest, rejectRequest) => {
-  const request = http.request({hostname: '127.0.0.1', port, path, method: 'GET', headers}, (response) => {
+const rawRequest = ({port, path, method = 'GET', headers, body}) => new Promise((resolveRequest, rejectRequest) => {
+  const request = http.request({hostname: '127.0.0.1', port, path, method, headers}, (response) => {
     let body = '';
     response.setEncoding('utf8');
     response.on('data', (chunk) => { body += chunk; });
     response.once('end', () => resolveRequest({status: response.statusCode, body: JSON.parse(body)}));
   });
   request.once('error', rejectRequest);
+  if (body) request.write(body);
   request.end();
 });
 
@@ -72,6 +74,42 @@ test('standalone browser boundary rejects cross-site mutation origins while allo
       body: JSON.stringify({creator: 'Creator', topic: 'Topic'}),
     });
     assert.equal(local.status, 201);
+  } finally {
+    await close(fixture.server);
+    fixture.db.close();
+  }
+});
+
+test('allowlisted public browser host serves same-origin UI requests while foreign origins remain blocked', async () => {
+  const fixture = await createFixture({allowedBrowserHosts: ['video.lanadesign.tech']});
+  try {
+    const body = JSON.stringify({creator: 'Creator', topic: 'Topic'});
+    const allowed = await rawRequest({
+      port: fixture.port,
+      path: '/api/projects',
+      method: 'POST',
+      headers: {
+        host: 'video.lanadesign.tech',
+        origin: 'https://video.lanadesign.tech',
+        'content-type': 'application/json',
+      },
+      body,
+    });
+    assert.equal(allowed.status, 201);
+
+    const foreignOrigin = await rawRequest({
+      port: fixture.port,
+      path: '/api/projects',
+      method: 'POST',
+      headers: {
+        host: 'video.lanadesign.tech',
+        origin: 'https://attacker.example',
+        'content-type': 'application/json',
+      },
+      body,
+    });
+    assert.equal(foreignOrigin.status, 403);
+    assert.equal(foreignOrigin.body.error.code, 'ORIGIN_NOT_ALLOWED');
   } finally {
     await close(fixture.server);
     fixture.db.close();

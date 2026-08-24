@@ -94,5 +94,8 @@ export const loadConfig = (env = process.env, {cwd = process.cwd()} = {}) => {
         {min: 1, max: MAXIMUMS.chatgptMaxActiveProjects},
       ),
     }),
+    browser: Object.freeze({
+      allowedHosts: env.BRIGHT_ALLOWED_BROWSER_HOSTS?.split(',').map((h) => h.trim().toLowerCase()).filter(Boolean) || [],
+    }),
   });
 };

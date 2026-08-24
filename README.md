@@ -78,7 +78,7 @@ node worker.mjs
 
 ## Security boundaries
 
-- The standalone Compose HTTP port is published on host loopback by default. Add an explicit trusted access boundary before exposing it remotely.
+- The standalone Compose HTTP port is published on host loopback by default. To expose the UI remotely, proxy only an explicit HTTPS hostname and set `BRIGHT_ALLOWED_BROWSER_HOSTS` to that hostname; unknown hosts remain rejected.
 - Public-source/media fetching uses the SSRF-safe fetch path with DNS/IP validation, redirect revalidation, MIME limits, byte limits, and bounded timeouts.
 - Remote filenames never choose local artifact paths. Media and output files live under application-owned attempt directories and are bound to the immutable approved revision with size/SHA-256 metadata.
 - The normal Remotion path accepts only application-controlled local media references; arbitrary HTTP(S), `file:` and absolute/traversal references are rejected and Chromium web security is not disabled.

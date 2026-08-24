@@ -43,6 +43,7 @@ const server = createAppServer({
   integrationToken: config.integration.serviceToken,
   downloadSigningSecret: config.integration.downloadSigningSecret,
   allowedIntegrationHosts: config.integration.allowedHosts,
+  allowedBrowserHosts: config.browser.allowedHosts,
   researchMaxAttempts: config.worker.maxRetries + 1,
   generationMaxAttempts: config.worker.maxRetries + 1,
   mediaIngestMaxAttempts: config.worker.maxRetries + 1,
