@@ -6,21 +6,27 @@
 **Target:** Internal Bright Profile workflow  
 **Baseline:** Standalone MVP on `main` remains the execution engine
 
+## 2026-08-24 Internal MCP acceptance amendment
+
+T28 uses an ordinary internal MCP client, not a ChatGPT Custom App. ChatGPT Plus remains the source of research and structured-draft material; an operator sends that material through an authenticated SSH tunnel to the loopback MCP endpoint. The canonical operational procedure is `tasks/t28-internal-mcp-acceptance.md` and the rationale is `docs/decisions/001-t28-internal-mcp-acceptance.md`.
+
+This amendment supersedes every earlier T28 requirement in this document for a ChatGPT Custom App, tool scan, remote ChatGPT ingress, or proof of ChatGPT tool-selection behavior. The public `/mcp` reverse-proxy route remains withdrawn for the whole acceptance run. The existing no-auth schemas, finite limits, private MCP-to-app authentication, and explicit human approval checkpoint remain required.
+
 ## Amendment Summary
 
 This amendment replaces the previous external OAuth/Bearer-auth and delegated-E2E contract for the current PR milestone.
 
 For the current milestone:
 
-- ChatGPT -> Bright Evidence MCP uses an explicit **no-auth (`noauth`) MCP surface**.
+- The internal operator MCP client -> Bright Evidence MCP uses an explicit **no-auth (`noauth`) MCP surface** over an authenticated tunnel.
 - MCP -> Bright Profile remains a **private authenticated service boundary** using `BRIGHT_INTEGRATION_TOKEN`.
 - OAuth, DCR, user-login/session handling, OAuth access-token issuance/verification, and `MCP_AUTH_TOKEN` are **deferred**.
 - `delegated_e2e` approval is **deferred** because the temporary no-auth boundary has no trusted authenticated user identity or user-authorization state.
-- The supported approval semantic is **external review acknowledgment** after the user-facing ChatGPT flow presents the review state and the user confirms/continues.
-- The external MCP boundary cannot prove who the human user is or cryptographically prove that a human reviewed the draft; therefore no durable audit field may be described as authenticated human-review evidence.
-- The existing standalone web UI remains available as a fallback/review surface but is not required for the normal ChatGPT-originated flow.
+- The supported approval semantic is **external review acknowledgment** after the operator presents the persisted review state and the user confirms/continues.
+- The internal MCP boundary does not cryptographically prove that a human reviewed the draft; therefore no durable audit field may be described as authenticated human-review evidence.
+- The existing standalone web UI remains available as a fallback/review surface but is not required for the ChatGPT-material handoff.
 
-This is a deliberate scope reset, not a claim that anonymous write-capable MCP is production-secure. Anyone who can reach the MCP endpoint can invoke its exposed tools while the acceptance ingress is open. Deployment exposure therefore follows the explicit temporary guardrails below until an authenticated external boundary is reintroduced in a later milestone.
+This is a deliberate scope reset, not a claim that no-auth MCP is production-secure. The loopback-only transport and authenticated SSH tunnel are the operator access boundary; the public MCP ingress is not used.
 
 ## Approval Terminology and Audit Truth
 
@@ -28,8 +34,8 @@ The product flow expects ChatGPT to call approval only after the draft/evidence 
 
 For the current milestone:
 
-- public MCP approval semantics are named **`external_review_acknowledged`** in docs/tests/logging language;
-- the public MCP input does not expose an approval mode or actor;
+- MCP approval semantics are named **`external_review_acknowledged`** in docs/tests/logging language;
+- the MCP input does not expose an approval mode or actor;
 - the MCP adapter uses a fixed audit origin such as `chatgpt_mcp_noauth`;
 - the backend remains authoritative only for project state, current revision/hash, draft/source legality, and downstream lifecycle legality;
 - the backend does **not** claim it authenticated the human reviewer;
@@ -40,17 +46,17 @@ A future authenticated milestone may rename/migrate the stored approval enum onc
 
 ## Objective
 
-Connect the existing ChatGPT + Bright Evidence MCP research workflow to the existing Bright Profile backend so a user can start from a natural-language request in ChatGPT and reach a generated creator-profile video without manually recreating research in the standalone app.
+Connect ChatGPT-produced research and scripts to the existing Bright Evidence MCP and Bright Profile backend so a user can reach a generated creator-profile video without manually recreating research in the standalone app or requiring ChatGPT to be an MCP client.
 
 Current target workflow:
 
 ```text
 User request in ChatGPT
   -> ChatGPT researches public sources
-  -> normalize_evidence
+  -> operator calls normalize_evidence through internal MCP
   -> normalized EvidenceBundle
   -> ChatGPT constructs a complete structured draft from normalized evidence IDs
-  -> create_video_project({ evidenceBundle, draft, ... })
+  -> operator calls create_video_project({ evidenceBundle, draft, ... })
   -> review_required
   -> show draft/evidence to user
   -> user confirms/continues in ChatGPT
@@ -63,7 +69,7 @@ User request in ChatGPT
   -> authoritative MP4
 ```
 
-The server guarantees a stop at `review_required` before any approval/render is initiated by the backend itself. The live client acceptance must prove that the tested ChatGPT flow also waits for user confirmation before invoking approval, while docs remain explicit that the no-auth backend cannot enforce that human-intent condition against an arbitrary caller.
+The server guarantees a stop at `review_required` before any approval/render is initiated by the backend itself. The live acceptance proves that the operator waits for a separately recorded user confirmation before invoking approval; the backend does not claim to independently authenticate that human intent.
 
 ## Product Rules
 
@@ -76,7 +82,7 @@ The server guarantees a stop at `review_required` before any approval/render is 
 7. Existing draft/schema/source-reference validation remains authoritative.
 8. Model-provided `verified`, override, actor, approval-mode, or approval-like fields are never treated as trusted identity/authorization.
 9. ChatGPT/MCP never writes SQLite directly and never owns renderer/job logic.
-10. Bright Profile remains authoritative for lifecycle legality, retry/cancel, artifact authority, downstream worker fencing, and anonymous active-work admission.
+10. Bright Profile remains authoritative for lifecycle legality, retry/cancel, artifact authority, downstream worker fencing, and MCP-origin active-work admission.
 
 ## Supported User Flow
 
@@ -84,23 +90,23 @@ The server guarantees a stop at `review_required` before any approval/render is 
 
 ```text
 ChatGPT research
-  -> normalize_evidence
+  -> operator calls normalize_evidence through internal MCP
   -> construct a complete structured draft using normalized evidence IDs
-  -> create_video_project({ evidenceBundle, draft, ... })
+  -> operator calls create_video_project({ evidenceBundle, draft, ... })
   -> review_required
   -> show draft + evidence summary
   -> STOP
 ```
 
-This is the required Path A contract for T28. It does not invoke the backend research or structured-generation provider and does not require `OPENAI_API_KEY`. Omitting `draft` is not an acceptable fallback during T28.
+This is the required Path A contract for T28. It does not invoke the backend research or structured-generation provider and does not require `OPENAI_API_KEY`. The operator uses an authenticated tunnel to the loopback MCP endpoint; no ChatGPT custom app or public `/mcp` route is involved. Omitting `draft` is not an acceptable fallback during T28.
 
-After the user requests edits or explicitly confirms/continues in the tested ChatGPT flow:
+After the operator presents the review and the user explicitly confirms/continues:
 
 ```text
 review_required
   -> optional edit_video_draft
-  -> user confirms/continues in ChatGPT
-  -> approve_video_project
+  -> operator records user confirmation
+  -> operator calls approve_video_project
   -> external review acknowledgment
   -> start_video_render
   -> media ingest
@@ -110,7 +116,7 @@ review_required
   -> short-lived MP4 download URL
 ```
 
-The backend cannot distinguish an honest ChatGPT confirmation flow from an arbitrary anonymous caller invoking `approve_video_project`; this limitation is accepted only for the temporary no-auth milestone and is mitigated by the deployment guardrails below.
+The backend cannot cryptographically distinguish an operator acting on genuine confirmation from another caller with tunnel access. The single-operator tunnel boundary, write gate, recorded confirmation, and durable revision/hash checks are the accepted mitigation for this milestone.
 
 ### Deferred explicit autonomous flow
 
@@ -139,9 +145,13 @@ Do not create a second job queue, second renderer, second evidence model, MCP-ow
 ## Target Architecture
 
 ```text
-ChatGPT
+ChatGPT Plus
   |
-  | no-auth MCP transport (temporary acceptance/test milestone)
+  | research + structured-draft material
+  v
+Operator
+  |
+  | authenticated SSH tunnel to loopback MCP
   v
 Bright Evidence MCP
   |-- normalize_evidence
@@ -160,7 +170,7 @@ Bright Profile integration API
   |
   |-- domain/services
   |-- SQLite repositories
-  |-- durable anonymous-capacity admission
+|-- durable MCP-origin capacity admission
   `-- durable worker stages
        -> generation       # compatibility path only when draft is omitted
        -> media ingest     # T28 resumes here after review acknowledgment
@@ -173,7 +183,7 @@ The MCP container must not mount the Bright Profile SQLite database or artifact 
 
 ## MCP Tool Surface
 
-All tools in the current ChatGPT-facing surface use MCP `noauth` security metadata. There is no OAuth linking flow in this milestone.
+All tools in the current internal MCP surface use MCP `noauth` security metadata. There is no OAuth linking flow in this milestone; the SSH tunnel, not an external bearer, limits operator access.
 
 ### `normalize_evidence`
 
@@ -192,7 +202,7 @@ Representative input:
   "instructions": "Create a concise factual creator profile.",
   "evidenceBundle": {},
   "draft": {},
-  "idempotencyKey": "chatgpt-run-..."
+  "idempotencyKey": "operator-chatgpt-run-..."
 }
 ```
 
@@ -202,7 +212,7 @@ Required behavior:
 - apply idempotency before allocating new active capacity when the same request already exists;
 - for a new project, perform active-capacity admission in the same authoritative database transaction that creates the project/enqueues its first active work;
 - persist normalized evidence and source provenance;
-- persist origin `chatgpt_mcp`;
+- persist origin `chatgpt_mcp` for compatibility with the existing handoff storage;
 - record imported research completion without calling the research provider;
 - when `draft` is omitted, transition to `research_ready` and enqueue the existing generation stage;
 - when `draft` is supplied, require the complete existing draft schema, require its `sourceIds` to reference normalized evidence IDs, replace those references with application-owned source IDs, force every claim to `verified=false`, and persist the revision directly at `review_required` with no generation stage;
@@ -211,7 +221,7 @@ Required behavior:
 
 Milestone routing contract:
 
-- **T28 supported path:** `draft` is operationally required even though it remains optional in the public schema for compatibility. ChatGPT must construct and submit the complete draft; this path is keyless and goes directly to `review_required`.
+- **T28 supported path:** `draft` is operationally required even though it remains optional in the public schema for compatibility. ChatGPT constructs the complete draft and the operator submits it through internal MCP; this path is keyless and goes directly to `review_required`.
 - **Compatibility path:** when `draft` is omitted, Bright Profile queues backend structured generation. That worker stage may require its configured OpenAI provider credentials, including `OPENAI_API_KEY`, and is not a T28 Path A/B acceptance path.
 
 ### `get_video_project`
@@ -226,7 +236,7 @@ Return bounded orchestration information only:
 - failure code and retryability;
 - completed output metadata/download URL when available.
 
-Because this data is callable without external authentication while MCP ingress is open, the external ingress itself is temporary and must be withdrawn after T28 acceptance.
+This data is available only over the operator's authenticated tunnel during T28; public MCP ingress remains withdrawn.
 
 ### `edit_video_draft`
 
@@ -234,7 +244,7 @@ Input must identify the project, current revision, expected payload hash, and re
 
 ### `approve_video_project`
 
-Current public MCP input must not allow the caller/model to choose an approval mode, approval actor, delegation grant, or delegated context.
+Current MCP input must not allow the caller/model to choose an approval mode, approval actor, delegation grant, or delegated context.
 
 The MCP adapter requests approval with:
 
@@ -267,9 +277,9 @@ Expose retry only for the current failed logical stage when durable backend stat
 
 Expose existing durable cancellation semantics only for legal active states. Cancellation must preserve stale-owner fencing.
 
-## External MCP No-Auth Boundary
+## Internal MCP No-Auth Boundary
 
-The current milestone intentionally exposes the MCP surface without OAuth or static bearer authentication.
+The current milestone intentionally keeps the MCP protocol no-auth, but exposes it only through a loopback endpoint reached by an authenticated operator tunnel.
 
 Required properties:
 
@@ -278,8 +288,8 @@ Required properties:
 3. OAuth/resource metadata, DCR, session-login, consent, token, and custom access-token routes are not part of the active runtime surface.
 4. `MCP_AUTH_TOKEN`, `MCP_OAUTH_SECRET`, `BRIGHT_USER_AUTH_SECRET`, and `MCP_CLIENT_STORAGE_PATH` are not active configuration for this milestone.
 5. Existing Host/Origin checks, request size/deadline, rate limiting, sanitized logging, and protocol validation remain enabled.
-6. The docs explicitly state that anyone who can reach the MCP endpoint can invoke exposed tools while the acceptance ingress is open.
-7. No-auth access is limited to an explicitly operator-enabled acceptance/test window; the remote ingress is not an always-on production posture.
+6. The public reverse-proxy route for `/mcp` is always withdrawn; only the authenticated tunnel can reach the loopback endpoint.
+7. Writes are limited to an explicitly operator-enabled acceptance/test window; the no-auth transport is not a public multi-user posture.
 
 ## Temporary No-Auth Deployment Guardrails
 
@@ -289,12 +299,12 @@ These controls are part of the current milestone contract, not optional operatio
 
 - Add `MCP_NOAUTH_WRITE_ENABLED` with a default of `false`.
 - When false, write/cost-bearing tools (`create_video_project`, `edit_video_draft`, `approve_video_project`, `start_video_render`, `retry_video_project`, `cancel_video_project`) fail before backend side effects with stable error `NOAUTH_WRITE_DISABLED`.
-- Read-only health/discovery/status/normalization behavior may remain available **only while the temporary external MCP ingress is intentionally open**.
+- Read-only health/discovery/status/normalization behavior is available only over the authenticated internal tunnel.
 - Live T28 acceptance may set `MCP_NOAUTH_WRITE_ENABLED=true` only for the explicit acceptance window.
-- T28 teardown requires **both** restoring `MCP_NOAUTH_WRITE_ENABLED=false` **and** withdrawing the external MCP ingress/reverse-proxy route. Disabling writes alone is not sufficient because no-auth status/draft/output metadata remains readable while ingress is open.
-- Continued temporary testing after T28 requires opening a new explicitly approved bounded window; it must not be achieved by leaving the acceptance ingress up after closure.
+- T28 teardown requires restoring `MCP_NOAUTH_WRITE_ENABLED=false`, closing the tunnel, and verifying that the external `/mcp` route remains HTTP 404.
+- Continued temporary testing requires a new explicitly approved internal write window; it must not be achieved by leaving writes enabled.
 
-### Bounded anonymous capacity
+### Bounded MCP capacity
 
 Default temporary limits:
 
@@ -316,17 +326,17 @@ Requirements:
 - a process-local precheck in MCP may be used only as an optimization and is never the authority;
 - concurrent callers/processes/replicas must serialize through the durable admission boundary so committed state never exceeds `MCP_MAX_ACTIVE_PROJECTS`;
 - when capacity is unavailable, return stable `NOAUTH_CAPACITY_REACHED` and commit no new project, replacement attempt/job, or reactivation state;
-- the in-flight write cap rejects/queues excess anonymous write requests without creating backend side effects;
+- the in-flight write cap rejects/queues excess MCP write requests without creating backend side effects;
 - existing per-project idempotency and render-start uniqueness remain mandatory;
 - CI must cover kill switch, rate limit, in-flight cap, active-cap create, active-cap retry/reactivation, and a concurrent admission race proving the committed active count never exceeds the configured cap.
 
-### Exposure window
+### Internal access window
 
 - The app/browser API remains private/loopback-oriented and is never exposed merely to support ChatGPT.
-- Remote ChatGPT access is provided only through the intended HTTPS MCP ingress/reverse-proxy boundary.
+- ChatGPT does not access MCP directly. The operator reaches loopback MCP only through an authenticated SSH tunnel.
 - The no-auth MCP surface is a single-operator/internal acceptance/test posture, not a public multi-user service.
-- T28 evidence records when the external MCP ingress and no-auth write window were enabled.
-- T28 closure requires the write flag restored to false **and** the external MCP ingress withdrawn, with both teardown times recorded.
+- T28 evidence records the tunnel setup and no-auth write-window timestamps.
+- T28 closure requires the write flag restored to false, tunnel closure, and verification that public `/mcp` remains HTTP 404.
 
 ## Private MCP-to-Bright-Profile Authentication
 
@@ -477,7 +487,7 @@ Required coverage includes:
 29. Source prompt-injection-looking text remains inert data.
 30. Existing standalone UI/manual flow remains green.
 31. Existing MCP `normalize_evidence` behavior remains green.
-32. T28 teardown evidence proves both writes disabled and external MCP ingress withdrawn.
+32. T28 teardown evidence proves writes are disabled, the operator tunnel is closed, and the public `/mcp` route remains withdrawn (HTTP 404).
 
 ## Deterministic End-to-End Regression
 
@@ -516,30 +526,30 @@ Together these regressions prove the supplied-draft handoff and the retained bac
 
 The regression also proves representative restart/idempotency/fencing, kill-switch, and transactional no-auth capacity invariants rather than only the happy path.
 
-## Live Acceptance
+## Live Internal MCP Acceptance
 
-CI is necessary but not sufficient. Before marking this milestone complete, record real ChatGPT runs against the deployed **no-auth MCP** path during a bounded write-enabled acceptance window.
+CI is necessary but not sufficient. Before marking this milestone complete, follow `tasks/t28-internal-mcp-acceptance.md`: use a real internal MCP client through an authenticated tunnel during a bounded write-enabled window. ChatGPT Plus produces research and structured-draft material but does not connect to MCP.
 
 ### Acceptance A: default stop-at-review
 
 ```text
-user asks for a creator video
+user asks ChatGPT for a creator video
   -> ChatGPT researches public sources
-  -> actual normalize_evidence call
+  -> operator actual normalize_evidence call through internal MCP
   -> ChatGPT constructs a complete structured draft using normalized evidence IDs
-  -> actual create_video_project call containing EvidenceBundle + draft
+  -> operator actual create_video_project call containing EvidenceBundle + draft
   -> backend reaches review_required
-  -> draft/evidence is shown in ChatGPT
-  -> ChatGPT does not invoke approval/render before user confirmation
+  -> operator presents persisted draft/evidence to user
+  -> operator does not invoke approval/render before user confirmation
 ```
 
-The acceptance record must prove that the `create_video_project` input contained a complete `draft`. If the client omits it and enters backend generation, stop and classify Path A as failed/blocked rather than relying on provider credentials. This proves the tested ChatGPT client behavior, not an enforceable server guarantee against arbitrary anonymous callers.
+The acceptance record must prove that the `create_video_project` input contained a complete `draft`. If the operator omits it and enters backend generation, stop and classify Path A as failed/blocked rather than relying on provider credentials. This proves the internal handoff and explicit approval checkpoint, not a server-verifiable human-identity claim.
 
 ### Acceptance B: review-acknowledged completion
 
 ```text
-user explicitly confirms/continues in ChatGPT
-  -> actual approve_video_project call
+user explicitly confirms/continues
+  -> operator actual approve_video_project call
   -> external review acknowledgment recorded
   -> actual start_video_render call
   -> completed
@@ -551,13 +561,13 @@ user explicitly confirms/continues in ChatGPT
 After Path B evidence is captured:
 
 1. restore `MCP_NOAUTH_WRITE_ENABLED=false`;
-2. withdraw/disable the external HTTPS MCP ingress/reverse-proxy route;
-3. record both teardown timestamps and verify the remote MCP endpoint is no longer externally reachable;
+2. close the authenticated SSH tunnel;
+3. verify the public `/mcp` route remains HTTP 404;
 4. only then may T28 be marked complete.
 
-Leaving the external no-auth ingress reachable with writes disabled is **not** an acceptable closed state because `get_video_project` and completed-output metadata remain anonymous while ingress is open.
+Opening an external no-auth ingress for this runbook is not acceptable. The public `/mcp` route must remain HTTP 404 because `get_video_project` and completed-output metadata are not public data.
 
-Acceptance evidence must record the deployed exact HEAD/image, actual MCP tool calls, project IDs/status transitions, bounded approval provenance, completed download/playback, configured capacity values, ingress/write-window enable time, and both teardown events without recording secrets or sensitive conversation content.
+Acceptance evidence must record the deployed exact HEAD/image, actual internal MCP tool calls, project IDs/status transitions, bounded approval provenance, completed download/playback, configured capacity values, tunnel/write-window timestamps, and teardown evidence without recording secrets or sensitive conversation content.
 
 ## Observability
 
@@ -590,7 +600,7 @@ Do not log provider API keys, integration service tokens, Google credentials, fu
 - treat model/web content as untrusted;
 - preserve the existing standalone UI/manual flow;
 - preserve SSRF, artifact, download, rate-limit, timeout, capacity, kill-switch, and worker-fencing controls;
-- withdraw external MCP ingress after T28 acceptance;
+- keep the public `/mcp` route withdrawn throughout T28 and close the operator tunnel after acceptance;
 - run focused regressions plus full relevant verification before completion.
 
 ### Ask First
@@ -603,7 +613,7 @@ Do not log provider API keys, integration service tokens, Google credentials, fu
 - reintroducing OAuth/authentication architecture;
 - reintroducing delegated autonomous approval;
 - opening a new no-auth acceptance/test window after T28;
-- raising/removing anonymous capacity limits;
+- raising/removing MCP capacity limits;
 - adding arbitrary editorial quality thresholds for approval.
 
 ### Never
@@ -618,19 +628,19 @@ Do not log provider API keys, integration service tokens, Google credentials, fu
 - approve a stale revision/hash;
 - allow caller-controlled filesystem paths;
 - commit/log secrets;
-- leave the external no-auth MCP ingress reachable after T28 closure;
+- open a public no-auth MCP ingress for T28;
 - disable existing SSRF, approval-state barrier, rate-limit, deadline, capacity, kill-switch, signed-download, or worker-fencing controls to simplify integration.
 
 ## Success Criteria
 
-- [ ] ChatGPT public research -> `normalize_evidence` works live without OAuth linking.
-- [ ] ChatGPT can persist that normalized EvidenceBundle into Bright Profile through no-auth MCP during an explicit write-enabled window.
+- [ ] ChatGPT Plus research is normalized through a real internal MCP client without exposing public `/mcp`.
+- [ ] The operator can persist that normalized EvidenceBundle into Bright Profile through internal MCP during an explicit write-enabled window.
 - [ ] Imported projects do not rerun the backend research provider.
 - [ ] ChatGPT constructs and submits a complete structured draft whose provenance uses normalized evidence IDs.
 - [ ] The T28 supplied-draft import reaches `review_required` without backend generation or `OPENAI_API_KEY`.
 - [ ] The retained draft-omitted compatibility path is documented separately and may require the backend OpenAI generation provider.
 - [ ] The supplied-draft flow stops at `review_required` and does not auto-approve/render.
-- [ ] Live ChatGPT acceptance shows the tested client waits for user confirmation before invoking approval.
+- [ ] Live internal acceptance records a separate user confirmation before the operator invokes approval.
 - [ ] Approval is represented as external review acknowledgment, not authenticated human proof.
 - [ ] Caller cannot select actor/mode/delegation fields.
 - [ ] Status/retry/cancel work through MCP using existing durable semantics.
@@ -643,8 +653,8 @@ Do not log provider API keys, integration service tokens, Google credentials, fu
 - [ ] Delegated E2E is explicitly deferred rather than represented as completed.
 - [ ] Deterministic no-auth review-acknowledged end-to-end regression is green.
 - [ ] Existing standalone and MCP regression gates remain green.
-- [ ] Live stop-at-review and review-acknowledged-completion ChatGPT acceptance is recorded.
-- [ ] After acceptance, writes are disabled **and** external MCP ingress is withdrawn; remote anonymous reads are not left reachable.
+- [ ] Live internal stop-at-review and review-acknowledged completion is recorded.
+- [ ] After acceptance, writes are disabled, the tunnel is closed, and public `/mcp` remains HTTP 404.
 - [ ] Documentation describes current implemented truth after rollout.
 - [ ] Project-wide Definition of Done passes before ship.
 

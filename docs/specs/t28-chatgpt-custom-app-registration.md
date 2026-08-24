@@ -1,9 +1,11 @@
-# T28 Amendment: ChatGPT Custom App Registration and Tool-Discovery Gate
+# Superseded: T28 ChatGPT Custom App Registration and Tool-Discovery Gate
 
-**Status:** Approved clarification for PR #18 live acceptance  
+**Status:** Superseded on 2026-08-24 by `docs/decisions/001-t28-internal-mcp-acceptance.md`
 **Date:** 2026-08-22  
 **Parent spec:** `docs/specs/chatgpt-mcp-e2e-video-handoff.md`  
-**Applies to:** T28 live ChatGPT acceptance only
+**Historical scope:** discarded external ChatGPT-custom-app approach
+
+> This document is retained as a record of the blocked external-Custom-App approach. It is not a current T28 gate and must not be used to open public `/mcp`. Use `tasks/t28-internal-mcp-acceptance.md` for the active acceptance procedure.
 
 ## Why this amendment exists
 

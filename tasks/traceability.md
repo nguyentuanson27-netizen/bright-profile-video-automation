@@ -10,7 +10,7 @@
 This file contains **two distinct traceability ledgers**:
 
 1. **Standalone T01-T16 ledger — frozen/complete.** It preserves the scope-freeze and closure evidence for the promoted standalone internal MVP and must not be reopened merely because the ChatGPT MCP milestone changes.
-2. **ChatGPT MCP T17-T28 ledger — open.** It tracks the temporary no-auth reset, including private MCP-to-app service authentication, truthful external-review-acknowledgment semantics, durable no-auth capacity guardrails, deterministic E2E, and bounded live ChatGPT acceptance with mandatory ingress teardown.
+2. **ChatGPT-material/internal-MCP T17-T28 ledger — open.** It tracks the internal no-auth reset, including private MCP-to-app service authentication, truthful external-review-acknowledgment semantics, durable no-auth capacity guardrails, deterministic E2E, and bounded live internal-MCP acceptance with public ingress kept closed.
 
 A requirement is a current completion gate only when it belongs to the relevant ledger or is explicitly required by `docs/project-status.md` / the active spec for that ledger. Historical requirements not retained by the applicable ledger are deferred, not silently inherited.
 
@@ -121,26 +121,26 @@ The historical production spec contains useful ideas that are **not required for
 
 ---
 
-# Ledger B — ChatGPT MCP Temporary No-Auth Reset (T17-T28, Open)
+# Ledger B — ChatGPT-material/Internal MCP Reset (T17-T28, Open)
 
 **Scope date:** 2026-08-21  
 **Closure state:** OPEN — implementation and live acceptance must be re-verified against this matrix
 
 | ID | Requirement / invariant | Owner task(s) | Implementation surface | Focused regression / verification | Final gate |
 |---|---|---|---|---|---|
-| M01 | External ChatGPT -> MCP is explicit `noauth`; initialize/list require no Authorization; write/cost-bearing tools are disabled by default with `MCP_NOAUTH_WRITE_ENABLED=false`; Host/body/deadline/rate-limit protections remain | T17, T21, T26 | `mcp/server.mjs`, tool metadata, Compose/env | noauth transport + kill-switch regressions | T27 noauth E2E + T28 bounded live connection without OAuth linking |
+| M01 | ChatGPT Plus supplies evidence/draft material while an operator reaches loopback MCP through an authenticated tunnel; initialize/list require no Authorization at the MCP protocol; write/cost-bearing tools are disabled by default with `MCP_NOAUTH_WRITE_ENABLED=false` | T17, T21, T26, T28 | `mcp/server.mjs`, tool metadata, Compose/env, tunnel runbook | noauth transport + kill-switch regressions | T27 noauth E2E + T28 bounded internal connection |
 | M02 | MCP -> Bright Profile remains private/service-authenticated with `BRIGHT_INTEGRATION_TOKEN`; missing/wrong service auth causes zero mutation | T17, T20, T26 | `mcp/server.mjs`, `app/http/integrations.mjs`, Compose | integration API negative auth tests | T27 direct-backend negative path + runtime topology check |
 | M03 | Public approval input exposes only project/revision/hash data; approval semantic is external review acknowledgment; any stored `user_reviewed` value is legacy compatibility data, not authenticated human proof | T18, T19, T22 | domain/MCP schemas, approval service/storage | schema + stale hash/revision + audit-semantics tests | T27 acknowledgment flow + T28 tested-client confirmation evidence |
 | M04 | Schema v3 migration retains origin/idempotency/approval provenance without adding OAuth/session persistence dependency or destructive enum cleanup | T19 | `storage/migrations/003_chatgpt_handoff.sql`, repositories | migration/reopen tests | exact-head CI migration smoke |
 | M05 | New ChatGPT-origin create admission is idempotent and transactionally serialized with active-project capacity; cap failure commits no new project/job | T19, T20 | integration API + project/job repositories/SQLite transaction | create/idempotency/cap/concurrent-last-slot tests | T27 durable admission gate |
 | M06 | Retry/requeue/reactivation that changes a failed/inactive ChatGPT-origin project back to active uses the same durable active-project admission transaction; cap failure creates no replacement work | T24 | retry service + jobs/project repositories | retry-cap + idempotent-retry + concurrent create-vs-retry tests | T27 durable admission gate |
 | M07 | MCP create/get/edit/approve/render/retry/cancel tools call backend over HTTP with no direct DB/artifact access and `noauth` metadata; mutating tools honor write-enable/in-flight gates, while Bright Profile remains capacity authority | T17, T21, T22, T24 | `mcp/server.mjs` + private backend | MCP tool unit/integration + edge-capacity tests | T27 full tool path |
-| M08 | T28 supplies a complete ChatGPT draft and reaches `review_required` without backend generation; omitted draft remains a compatibility path that may require provider credentials; no caller can select actor/mode/delegation state; live Path A demonstrates tested-client confirmation timing without claiming a universal noauth guarantee | T18, T20, T22, T23, T27, T28 | MCP schemas/handler + integration import + backend approval + live acceptance | supplied-draft direct-review/no-generation + compatibility-generation + approval-contract tests | T27 contract regressions + T28 client evidence |
+| M08 | T28 submits a complete ChatGPT-produced draft through internal MCP and reaches `review_required` without backend generation; omitted draft remains a compatibility path that may require provider credentials; no caller can select actor/mode/delegation state; Path A records an explicit human checkpoint before the operator calls approval | T18, T20, T22, T23, T27, T28 | MCP schemas/handler + integration import + backend approval + internal acceptance | supplied-draft direct-review/no-generation + compatibility-generation + approval-contract tests | T27 contract regressions + T28 operator evidence |
 | M09 | OAuth/DCR/session/static external bearer runtime/config/storage is removed; `delegated_e2e`/delegation grants are deferred and unreachable from active MCP contract | T23, T26 | `mcp/server.mjs`, `security/`, Compose/env/tests | dead-code/config search + route absence tests | exact-head CI + active-diff review |
-| M10 | Anonymous edge exposure has finite defaults: rate 20/min and max 2 in-flight writes; active-project cap 3 is a durable global Bright Profile invariant, not a process-local counter | T17, T19, T20, T21, T24, T26 | MCP edge guards + backend transactional admission | rate/in-flight/create/retry/concurrent-admission regressions | T27 adversarial gate + T28 recorded values |
+| M10 | Internal MCP request handling has finite defaults: rate 20/min and max 2 in-flight writes; active-project cap 3 is a durable global Bright Profile invariant, not a process-local counter | T17, T19, T20, T21, T24, T26 | MCP edge guards + backend transactional admission | rate/in-flight/create/retry/concurrent-admission regressions | T27 adversarial gate + T28 recorded values |
 | M11 | Signed MP4 capability remains bound to project/revision/artifact with expiry/tamper checks, authoritative file validation, streaming/backpressure/timeout controls | T25 | `security/download-token.mjs`, artifact/integration routes, MCP proxy | token + download integration tests | T27 completed MP4 download |
-| M12 | Runtime topology keeps app/worker private and MCP storage-isolated; T28 uses temporary HTTPS MCP ingress and closure requires both writes disabled and external MCP ingress withdrawn/verified unreachable | T26, T28 | Compose/reverse-proxy/runtime config | Compose checks + live setup/teardown record | exact-head CI + T28 mandatory teardown evidence |
-| M13 | Deterministic and live acceptance match the keyless EvidenceBundle + complete-draft handoff and truthful noauth/review-acknowledgment semantics; docs/PR claims are updated only from observed evidence | T27, T28 | E2E tests, status/todo/traceability/PR body | supplied-draft contract regression + compatibility lifecycle E2E + live evidence record | T28 Path A + Path B + project-wide DoD |
+| M12 | Runtime topology keeps app/worker private and MCP storage-isolated; T28 uses an authenticated tunnel to loopback MCP while public `/mcp` stays HTTP 404; closure requires writes disabled and tunnel closure | T26, T28 | Compose/reverse-proxy/runtime config + internal runbook | Compose checks + live setup/teardown record | exact-head CI + T28 mandatory teardown evidence |
+| M13 | Deterministic and live acceptance match the keyless EvidenceBundle + complete-draft handoff over internal MCP and truthful noauth/review-acknowledgment semantics; docs/PR claims are updated only from observed evidence | T27, T28 | E2E tests, status/todo/traceability/PR body | supplied-draft contract regression + compatibility lifecycle E2E + live evidence record | T28 Path A + Path B + project-wide DoD |
 
 ## ChatGPT MCP Closure Audit Checklist
 
@@ -163,12 +163,12 @@ Before delivery under the reset contract:
 - [x] Deterministic noauth E2E passes on exact implementation HEAD without claiming human-review proof.
 - [x] Supplied-draft import reaches `review_required` without backend generation; omitted-draft generation is tracked only as compatibility coverage.
 - [x] Full CI suite passes on pull request HEAD (verified via PR Checks/review evidence).
-- [ ] Live ChatGPT noauth Path A supplies a complete draft, reaches direct `review_required` without backend generation, and shows the tested client waits for user confirmation.
+- [ ] Live internal MCP Path A submits a complete draft, reaches direct `review_required` without backend generation, and records user confirmation before approval.
 - [ ] Live review-acknowledged completion Path B passes.
-- [ ] T28 records write/ingress enable values.
+- [ ] T28 records write-window and tunnel setup values.
 - [ ] T28 restores `MCP_NOAUTH_WRITE_ENABLED=false`.
-- [ ] T28 withdraws external MCP ingress and verifies the remote endpoint is no longer externally reachable.
+- [ ] T28 closes the tunnel and verifies public `/mcp` remains HTTP 404.
 - [x] Final docs and PR body match observed implementation and contract truth.
 - [ ] Project-wide Definition of Done is checked.
 
-Closure audit result: **OPEN — implementation and exact-head CI verification are complete; live ChatGPT acceptance and mandatory external-ingress teardown remain open for T28 live execution.**
+Closure audit result: **OPEN — implementation and exact-head CI verification are complete; live internal-MCP acceptance and write-disable/tunnel-close teardown remain open for T28 live execution.**

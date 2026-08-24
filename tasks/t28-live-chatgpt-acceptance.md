@@ -1,8 +1,11 @@
-# T28 Live ChatGPT Acceptance Runbook
+# Superseded: T28 Live ChatGPT Acceptance Runbook
 
-**Purpose:** operational checklist for PR #18 live acceptance after T17-T27 automated verification.  
+**Status:** Superseded on 2026-08-24 by `tasks/t28-internal-mcp-acceptance.md`
+**Purpose:** historical checklist for the discarded ChatGPT Custom App path.
 **Parent spec:** `docs/specs/chatgpt-mcp-e2e-video-handoff.md`  
 **Registration amendment:** `docs/specs/t28-chatgpt-custom-app-registration.md`
+
+> Do not use this runbook to open public MCP ingress or request a ChatGPT tool scan. The active T28 acceptance uses an internal MCP client through an authenticated SSH tunnel; see `tasks/t28-internal-mcp-acceptance.md`.
 
 ## Gate 0 — Previous window is closed
 

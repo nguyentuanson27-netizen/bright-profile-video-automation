@@ -1,8 +1,8 @@
 # Bright Profile — Current Project Status
 
-**Status date:** 2026-08-23
-**Authoritative scope:** completed standalone internal MVP baseline (T01-T16) plus an in-progress ChatGPT MCP video-handoff milestone (T17-T28) reset to temporary external `noauth`, private MCP-to-app service authentication, bounded anonymous writes, durable active-work admission, and external review acknowledgment semantics.  
-**Lifecycle:** standalone T01-T16 repository promotion complete; ChatGPT MCP implementation exists on PR #18 but the earlier OAuth/delegated-E2E contract is superseded. Implementation rework is complete; live ChatGPT acceptance and post-acceptance teardown remain open.
+**Status date:** 2026-08-24
+**Authoritative scope:** completed standalone internal MVP baseline (T01-T16) plus an in-progress ChatGPT-material/internal-MCP video-handoff milestone (T17-T28): loopback MCP reached through an authenticated operator tunnel, private MCP-to-app service authentication, bounded write windows, durable active-work admission, and external review acknowledgment semantics.
+**Lifecycle:** standalone T01-T16 repository promotion complete; ChatGPT MCP implementation exists on PR #18 but the earlier OAuth/delegated-E2E and external-Custom-App acceptance contracts are superseded. Implementation rework is complete; live internal MCP acceptance and write-disable teardown remain open.
 
 ## Current objective
 
@@ -11,17 +11,18 @@ The standalone internal MVP has been promoted to `main` and remains the executio
 The active PR #18 objective is now:
 
 ```text
-ChatGPT
-  -> temporary no-auth MCP ingress
+ChatGPT Plus
+  -> research + structured draft material
+  -> operator internal MCP client over authenticated tunnel
   -> normalize/import EvidenceBundle + structured draft
   -> review_required
-  -> draft/evidence shown in ChatGPT
-  -> user confirms/continues in the tested ChatGPT flow
+  -> operator presents persisted draft/evidence
+  -> user confirms/continues
   -> approve_video_project
   -> external review acknowledgment
   -> render pipeline
   -> authoritative MP4
-  -> writes disabled + external MCP ingress withdrawn after acceptance
+  -> writes disabled + tunnel closed; public `/mcp` remains HTTP 404
 ```
 
 OAuth, DCR, user login/session handling, static external bearer authentication, authenticated user identity propagation, server-verifiable human-review provenance, and `delegated_e2e` approval are deferred to a later trust-boundary milestone.
@@ -34,15 +35,15 @@ Current contract:
 
 - the backend guarantees it does not auto-approve at `review_required`;
 - revision/hash/state/draft/source legality remains server-enforced;
-- the live ChatGPT acceptance flow must demonstrate that the tested client waits for user confirmation before calling approval;
-- an arbitrary anonymous caller can still invoke approval while the temporary ingress and noauth writes are enabled, so the backend cannot prove a real human reviewed the draft;
+- the live internal-MCP acceptance flow must demonstrate that the operator waits for user confirmation before calling approval;
+- the backend cannot prove a real human reviewed the draft; the bounded operator tunnel and recorded confirmation are the acceptance controls;
 - docs/tests/logs use **external review acknowledgment** as the semantic description;
 - audit origin is a bounded integration value such as `chatgpt_mcp_noauth`, not a claimed human identity;
 - if the current database continues to store `approval_mode='user_reviewed'`, that value is legacy compatibility data for external review acknowledgment only and must not be presented as authenticated human proof.
 
 ## Temporary noauth deployment posture
 
-Anonymous access is intentionally available only during a bounded internal acceptance/test ingress window. Writes remain **default-off**.
+The MCP endpoint is loopback-only and reached only through an authenticated operator tunnel. Writes remain **default-off**.
 
 Target guardrails:
 
@@ -64,11 +65,11 @@ Required behavior:
 - concurrent admissions cannot commit more active ChatGPT-origin projects than the configured cap;
 - capacity failure returns `NOAUTH_CAPACITY_REACHED` with zero new project/job/attempt/reactivation mutation;
 - app/browser API stays private/loopback-oriented;
-- ChatGPT remote access uses the intended HTTPS MCP ingress only;
-- T28 may open ingress and enable writes only for the acceptance window and must record enable/config values;
-- T28 closure requires **both** `MCP_NOAUTH_WRITE_ENABLED=false` and external MCP ingress withdrawal, followed by verification that the remote MCP endpoint is no longer externally reachable.
+- ChatGPT does not call MCP directly; the operator uses an authenticated tunnel to the loopback endpoint;
+- T28 may enable writes only for the internal acceptance window and must record tunnel/config values;
+- T28 closure requires `MCP_NOAUTH_WRITE_ENABLED=false`, tunnel closure, and public `/mcp` HTTP-404 verification.
 
-Leaving the external noauth ingress reachable with writes disabled is not an acceptable closed state because `get_video_project` can expose draft/evidence/output metadata anonymously while ingress is open.
+Opening external noauth ingress is not an acceptable state for this runbook because `get_video_project` can expose draft/evidence/output metadata anonymously.
 
 This is a single-operator/internal acceptance posture, not a public multi-user service.
 
@@ -110,9 +111,13 @@ The active milestone is specified by `docs/specs/chatgpt-mcp-e2e-video-handoff.m
 ### Target architecture
 
 ```text
-ChatGPT
+ChatGPT Plus
   |
-  | temporary noauth MCP ingress
+  | research + draft material
+  v
+Operator
+  |
+  | authenticated SSH tunnel to loopback MCP
   v
 Bright Evidence MCP
   |
@@ -146,8 +151,8 @@ The noauth reset implementation (T17–T27) is complete and covered by automated
 - deterministic noauth full E2E: **verified across all unit and integration test suites**;
 - ChatGPT evidence + draft import: **does not require a server OpenAI key; worker defers standalone OpenAI-provider initialization until a standalone research/generation stage actually runs**;
 - automated CI verification: **unit, integration, and container checks are required; the current PR/merge candidate must retain a green `Bright Profile Verification` result, recorded in PR Checks/review evidence**;
-- live ChatGPT noauth acceptance: **open; the recorded pre-acceptance Gate 0 state has anonymous writes disabled and the external MCP ingress withdrawn. Mutable deployment evidence is retained in the PR/review record**;
-- T28 teardown: **pending after a bounded live acceptance window; it requires write-disable and external ingress withdrawal/verification**.
+- live internal MCP acceptance: **open; the recorded pre-acceptance Gate 0 state has writes disabled and public `/mcp` withdrawn. Mutable deployment evidence is retained in the PR/review record**;
+- T28 teardown: **pending after a bounded live acceptance window; it requires write-disable, tunnel closure, and public-route verification**.
 
 ## Required security/integrity boundaries after the reset
 
@@ -169,7 +174,7 @@ The following controls remain mandatory:
 - media/output files remain application-owned and integrity-checked;
 - completed MP4 delivery remains protected by a short-lived signed capability bound to exact project/revision/artifact;
 - download proxy remains streaming/backpressure-aware and allows browser navigation headers on signed download URLs while rejecting document navigation to `/mcp`;
-- T28 does not close until external MCP ingress is withdrawn and verified unreachable.
+- T28 does not close until writes are disabled, the operator tunnel is closed, and public `/mcp` is verified HTTP 404.
 
 External authentication is intentionally absent from the current milestone and must not be listed among retained protections.
 
@@ -218,10 +223,10 @@ Implementation gates are covered by automated checks. The current PR/merge-candi
 - [x] deterministic noauth full E2E reaches authoritative MP4 without claiming human-review proof.
 - [x] existing standalone/security/fencing/download regressions remain green.
 - [x] automated `Bright Profile Verification` gates succeed on the pull request HEAD (verified via PR Checks/review evidence).
-- [ ] live ChatGPT Path A reaches `review_required` and the tested client waits for user confirmation before approval/render.
+- [ ] live internal MCP Path A reaches `review_required` and the operator waits for user confirmation before approval/render.
 - [ ] live Path B records external review acknowledgment, renders, and retrieves a playable MP4.
-- [ ] T28 records ingress/write-window setup.
-- [ ] T28 restores write-disabled state **and** withdraws/verifies external MCP ingress unreachable.
+- [ ] T28 records tunnel/write-window setup.
+- [ ] T28 restores write-disabled state, closes the tunnel, and verifies public `/mcp` remains HTTP 404.
 - [ ] project-wide Definition of Done is checked.
 - [ ] final docs and PR body reflect final live-acceptance and teardown evidence.
 
